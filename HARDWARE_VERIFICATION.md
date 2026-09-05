@@ -14,9 +14,9 @@ the live Furbo cloud. Negative results are kept deliberately.
 | 2026-09-05 | FB0030 / 108 | Daily summary | `.../daily-summary/get` | Written summary | Verified |
 | 2026-09-05 | FB0030 / 108 | Activity report | `.../v2/calendar/activity-report/get` | Hourly counts per type | Verified (Barking, DogMoveAbove10Sec) |
 | 2026-09-05 | FB0030 / 108 | Cloud treat toss | `/v3/account/control_device` | Proof a treat tossed | **Negative:** returns `Success` for any action string; not a proof, so not exposed |
-| 2026-09-05 | FB0030 / 108 | Live video (P2P) | `furbo_p2p.py` in a sandbox | H.264 frames | **Blocked:** sandbox has no IPv6 and filters UDP; verified only up to the connect call. Needs a LAN host |
-| 2026-09-05 | FB0030 / 108 | LAN reachability | Earlier capture: UDP probe to the camera on port 32761 | TUTK LAN listener answers | Answered (recorded in the research branch notes); supports LAN-mode connect without the P2P masters |
-| n/a | n/a | Camera entity | Unit tests with a mocked stream URL | Stream source and snapshots via the stream | Tested; not yet run against a real bridge |
+| 2026-09-05 | FB0030 / 108 (lib 003.011) | Live video (P2P) | `furbo_p2p.py stream` on a LAN host (research branch) | H.264 frames | Verified: 1920x1080 at 25 fps for quality slot 0 after one 640x360 preview frame; slots 1 to 3 return 640x360 |
+| 2026-09-05 | FB0030 / 108 | P2P state and controls | `furbo_p2p.py p2p-status` / `p2p-set` (research branch) | State read, volume set, pan, treat toss | Verified: V3 opcode set; volume reads back, pan moves and returns, one treat dispensed |
+| n/a | n/a | Camera entity | Unit tests with a mocked stream URL | Stream source and snapshots via the stream | Tested; go2rtc feeding the entity not yet run end to end |
 
 ## Still to verify on real hardware or a live account
 
@@ -24,8 +24,8 @@ the live Furbo cloud. Negative results are kept deliberately.
 - Alert switch toggling actually changing camera behaviour (only echo verified).
 - Multiple cameras on one account (only single-camera verified).
 - A camera leaving the account (stale-device handling).
-- Live video, two-way audio and treat toss over P2P end to end, and the camera
-  entity playing a real go2rtc stream produced by the bridge.
+- The camera entity playing a real go2rtc stream produced by the bridge.
+- Two-way audio over P2P.
 
 
 ## Test lanes

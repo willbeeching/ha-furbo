@@ -10,8 +10,9 @@ over a proprietary P2P protocol that needs a bridge on the camera's LAN (see
 
 Everything the cloud side exposes is proven against the live Furbo API. The
 P2P bridge that produces the stream lives in a separate development branch,
-kept out of this integration package; its end-to-end run on real hardware is
-still outstanding.
+kept out of this integration package. The bridge itself is verified on real
+hardware (1920x1080 H.264 at 25 fps from a Furbo 360); the last hop, go2rtc
+into this camera entity, has not yet been run end to end.
 
 ## Supported devices
 
@@ -110,28 +111,39 @@ Furbo camera  --TUTK P2P (LAN, UDP)-->  furbo_p2p.py bridge  --H.264-->  go2rtc 
 
 1. Run the bridge on a Linux machine on the same LAN as the camera. It is
    `furbo_p2p.py` on the `claude/furbo-home-assistant-integration-m2ojey`
-   branch of this repository, with `HANDOFF.md` there as the runbook. It
-   needs the TUTK 4.x library (the copy that docker-wyze-bridge ships works)
-   and a Furbo login of its own.
+   branch of this repository; the README there explains the protocol and
+   how to run it (Docker with host networking, or bare Linux). It needs the
+   TUTK 4.2 library (the copy that docker-wyze-bridge ships works) and a
+   Furbo login of its own.
 2. Publish the bridge output through [go2rtc](https://github.com/AlexxIT/go2rtc),
    which is bundled with Home Assistant OS and available as an add-on:
 
    ```yaml
    streams:
      furbo:
-       - "exec:python3 /config/furbo_p2p.py stream --quality 720p#killsignal=2"
+       - "exec:python3 /config/furbo_p2p.py stream --quality 1080p#killsignal=2"
    ```
+
+   Ask for 1080p: on the shipping firmware the other quality slots return
+   the camera's 640x360 profile, and the first 1080p keyframe follows a
+   single low-resolution preview frame a few seconds in.
 
    go2rtc then serves `rtsp://<go2rtc host>:8554/furbo`.
 3. Enter that RTSP URL as the camera's stream URL in the Furbo options. The
    camera entity appears after the reload. With Home Assistant's own go2rtc
    integration enabled, the dashboard plays it over WebRTC with low latency.
 
-Status: the bridge implements the full protocol as the Furbo app speaks it
-(license key, `IOTC_Connect_ByUIDEx` with the device auth key, DTLS
-`PSK-AES128-CBC-SHA256`, Furbo's own control opcodes) but has not yet completed
-a live session on real hardware. The camera entity itself is tested and works
-with any stream URL Home Assistant can play.
+Status: the bridge speaks the protocol as the Furbo app does (license key,
+`IOTC_Connect_ByUIDEx` with the device auth key, DTLS `PSK-AES128-CBC-SHA256`,
+the V3 control opcodes) and is verified live on a Furbo 360: 1080p video,
+device state, pan and treat toss. The camera entity is tested against a
+mocked stream URL. What remains unproven is only the combination: the bridge
+under go2rtc feeding this entity on a running Home Assistant.
+
+The bridge also exposes controls the cloud does not (pan, treat toss, volume,
+night vision, camera power). Bringing those into Home Assistant needs the
+bridge to offer them over HTTP or MQTT, since the integration cannot load the
+TUTK library itself; that is the next design step and is not in this release.
 
 ## How data is updated
 
@@ -156,8 +168,7 @@ by the fixed 60-second interval floor and a bounded retry that waits out an
 ## Limitations
 
 - **Live video needs a bridge.** The stream is TUTK P2P/DTLS and cannot be
-  decoded by Home Assistant itself; see [Live video](#live-video). The bridge
-  is not yet verified end to end on real hardware.
+  decoded by Home Assistant itself; see [Live video](#live-video).
 - **No treat tossing.** The cloud `control_device` endpoint returns success
   for any action string, so it does not prove a treat was tossed; the app
   tosses over P2P. Treat control is therefore deliberately not exposed here.
@@ -208,7 +219,7 @@ They do **not** prove the live cloud contract; that was verified by hand on
 2026-09-05 against a real Furbo 360 and is recorded in
 [`HARDWARE_VERIFICATION.md`](HARDWARE_VERIFICATION.md). The camera entity is
 tested against a mocked stream URL; the P2P bridge that produces a real stream
-is outside this package and is not verified end to end yet.
+is outside this package and verified separately on the research branch.
 
 ## Quality self-assessment
 
