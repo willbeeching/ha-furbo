@@ -1,0 +1,117 @@
+name: CI
+
+# NOTE: third-party actions below are pinned to tags. Convert every third-party
+# action to a full commit SHA before enabling branch protection. SHAs could not
+# be resolved in the authoring environment (no GitHub API access to those repos).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_VERSION: "0.9.9"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv pip install --system -r requirements-lint.txt
+      - name: Ruff lint
+        run: ruff check custom_components/furbo tests scripts
+      - name: Ruff format
+        run: ruff format --check custom_components/furbo tests scripts
+
+  typing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv venv --python 3.14
+      - run: uv pip install -r requirements-lint.txt -r requirements-test-latest.txt
+      - name: mypy (strict, against real Home Assistant)
+        run: uv run mypy --strict custom_components/furbo
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: min
+            python: "3.13"
+            requirements: requirements-test-min.txt
+          - name: latest
+            python: "3.14"
+            requirements: requirements-test-latest.txt
+    name: test (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv venv --python ${{ matrix.python }}
+      - run: uv pip install --prerelease=allow -r ${{ matrix.requirements }}
+      - name: Import smoke test (no network at import)
+        run: uv run python -c "import custom_components.furbo, custom_components.furbo.api, custom_components.furbo.config_flow"
+      - name: Run tests with coverage
+        run: uv run pytest tests -p no:cacheprovider --cov=custom_components.furbo --cov-report=xml --cov-report=term
+      - name: Enforce per-module coverage (>=95%, config flow 100%)
+        run: uv run python scripts/check_coverage.py coverage.xml
+
+  quality-scale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv pip install --system pyyaml
+      - run: python scripts/check_quality_scale.py
+
+  release-archive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build and verify the reproducible archive
+        run: python scripts/build_release.py
+
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color

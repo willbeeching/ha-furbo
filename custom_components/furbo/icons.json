@@ -1,0 +1,173 @@
+{
+  "entity": {
+    "switch": {
+      "alert_barking": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_continuous_barking": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_crying": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_continuous_crying": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_howling": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_continuous_howling": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_person_detection": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_dog_move_above10_sec": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_run": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_selfie": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_eat_drink": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_chew": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_pee_poo": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_continuous_pee_poo": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_vomit": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_continuous_vomit": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_seizure": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_continuous_seizure": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_glass_breaking": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_home_emergency": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_furbo_on_off": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      }
+    },
+    "sensor": {
+      "last_event": {
+        "default": "mdi:motion-sensor"
+      },
+      "subscription_days_left": {
+        "default": "mdi:calendar-clock"
+      },
+      "subscription_status": {
+        "default": "mdi:card-account-details"
+      },
+      "barking_events_today": {
+        "default": "mdi:dog"
+      },
+      "activity_events_today": {
+        "default": "mdi:run"
+      },
+      "notable_events_today": {
+        "default": "mdi:paw"
+      }
+    }
+  }
+}

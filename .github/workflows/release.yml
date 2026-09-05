@@ -1,0 +1,50 @@
+name: Release
+
+# Publishes a release archive when a vX.Y.Z tag is pushed. The write-capable
+# job uses only first-party actions plus the GitHub CLI (no third-party code).
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Derive version from tag
+        id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version="${REF_NAME#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Malformed version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - name: Build, verify and checksum the archive
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: python scripts/build_release.py --expect-version "$VERSION" --output dist
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            dist/*.tar.gz dist/*.sha256 \
+            --title "$TAG" \
+            --generate-notes

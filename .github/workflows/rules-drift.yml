@@ -1,0 +1,59 @@
+name: Quality-scale rule drift
+
+# Compares the pinned rule inventory to Home Assistant's live hassfest rule set,
+# including tiers, and fails when upstream adds, removes or re-tiers a rule so
+# the pin and the self-assessment are reviewed deliberately. The `script/`
+# package is not published to PyPI, so this checks out home-assistant/core.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+      - uses: actions/checkout@v4
+        with:
+          repository: home-assistant/core
+          ref: dev
+          path: core
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Compare the pin to the live hassfest inventory (names and tiers)
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "core")
+          from script.hassfest.quality_scale import ALL_RULES  # type: ignore
+
+          def tier(rule: object) -> str:
+              for attr in ("tier", "level"):
+                  value = getattr(rule, attr, None)
+                  if value is not None:
+                      return getattr(value, "name", str(value)).lower()
+              return "?"
+
+          live = {r.name: tier(r) for r in ALL_RULES}
+          pinned = [
+              line.strip()
+              for line in Path("repo/scripts/quality_scale_rules.txt").read_text().splitlines()
+              if line.strip()
+          ]
+          added = set(live) - set(pinned)
+          removed = set(pinned) - set(live)
+          if added or removed:
+              raise SystemExit(f"rule drift: added={added} removed={removed}")
+          print(f"{len(pinned)} rules match the live hassfest inventory")
+          print("tiers:", {name: live[name] for name in pinned})
+          PY

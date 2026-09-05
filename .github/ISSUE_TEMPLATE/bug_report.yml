@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a problem with the Furbo integration
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Do not paste your Furbo password, tokens, or any values from the
+        `password`/`cognito_token` config-entry fields. Diagnostics from this
+        integration are already redacted and safe to attach.
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Camera model and firmware
+      placeholder: "FB0030, firmware 108"
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output (credentials removed)
+      render: text
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics (download from the integration; already redacted)

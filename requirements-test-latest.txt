@@ -1,0 +1,4 @@
+# Latest supported Home Assistant lane. This PHACC series requires Python 3.14
+# and pins the current Home Assistant release (2026.9.x at time of writing).
+-r requirements-test.txt
+pytest-homeassistant-custom-component==0.13.363

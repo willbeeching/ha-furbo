@@ -1,0 +1,14 @@
+{
+  "domain": "furbo",
+  "name": "Furbo",
+  "codeowners": ["@willbeeching"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/willbeeching/ha-furbo",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/willbeeching/ha-furbo/issues",
+  "loggers": ["custom_components.furbo"],
+  "requirements": [],
+  "version": "0.1.0"
+}

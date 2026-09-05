@@ -1,0 +1,3 @@
+# Minimum supported Home Assistant lane (HA 2025.2.0).
+-r requirements-test.txt
+pytest-homeassistant-custom-component==0.13.210

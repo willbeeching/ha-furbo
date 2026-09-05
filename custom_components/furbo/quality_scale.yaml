@@ -1,0 +1,189 @@
+# Self-assessment against the Home Assistant Integration Quality Scale rules.
+# This is a custom integration; Home Assistant has NOT formally graded it. The
+# manifest therefore claims no tier. Statuses: done | todo | exempt.
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: The integration registers no custom actions; alert control is via switch entities.
+  appropriate-polling:
+    status: done
+    comment: >-
+      Cloud polling at a default 300s interval (coordinator.py DEFAULT_SCAN_INTERVAL),
+      user-adjustable down to a 60s floor that respects the pet-gpt calendar rate limit.
+  brands:
+    status: todo
+    comment: >-
+      No brand images yet. custom_components/furbo/brand/ exists but ships no PNGs;
+      Furbo trademark artwork has not been cleared for redistribution.
+  common-modules:
+    status: done
+    comment: Shared client in api.py, coordinator in coordinator.py, base entities in entity.py.
+  config-flow-test-coverage:
+    status: done
+    comment: tests/test_config_flow.py covers every step and branch; enforced at 100% in CI.
+  config-flow:
+    status: done
+    comment: config_flow.py with UI setup, no YAML.
+  dependency-transparency:
+    status: done
+    comment: No external runtime requirements; uses only aiohttp and cryptography shipped with Home Assistant.
+  docs-actions:
+    status: exempt
+    comment: No custom actions are provided.
+  docs-triggers:
+    status: exempt
+    comment: No device triggers are provided; standard state/numeric triggers apply to the entities.
+  docs-conditions:
+    status: exempt
+    comment: No device conditions are provided; standard state conditions apply to the entities.
+  docs-high-level-description:
+    status: done
+    comment: README "Furbo for Home Assistant" section.
+  docs-installation-instructions:
+    status: done
+    comment: README HACS and manual installation sections.
+  docs-removal-instructions:
+    status: done
+    comment: README "Removing the integration" section.
+  entity-event-setup:
+    status: exempt
+    comment: Entities subscribe only to the coordinator via CoordinatorEntity; no external event streams.
+  entity-unique-id:
+    status: done
+    comment: Every entity sets _attr_unique_id from the stable device id or account id.
+  has-entity-name:
+    status: done
+    comment: All entities set _attr_has_entity_name and use translation keys.
+  runtime-data:
+    status: done
+    comment: Typed FurboConfigEntry.runtime_data in __init__.py.
+  test-before-configure:
+    status: done
+    comment: config_flow performs a real login before creating the entry.
+  test-before-setup:
+    status: done
+    comment: coordinator.async_config_entry_first_refresh raises ConfigEntryAuthFailed/UpdateFailed.
+  unique-config-entry:
+    status: done
+    comment: unique_id is the Furbo account id; duplicates aborted in _async_finish.
+  # Silver
+  action-exceptions:
+    status: done
+    comment: Switch writes raise translated HomeAssistantError (exceptions.set_alert_failed).
+  config-entry-unloading:
+    status: done
+    comment: async_unload_entry unloads platforms; session is HA-shared; no lingering tasks.
+  docs-configuration-parameters:
+    status: done
+    comment: README "Options" section documents update interval and calendar polling.
+  docs-installation-parameters:
+    status: done
+    comment: README "Setup" section documents email, password and MFA code.
+  entity-unavailable:
+    status: done
+    comment: CoordinatorEntity availability plus per-device presence check in entity.py.
+  integration-owner:
+    status: done
+    comment: codeowners in manifest.json and CODEOWNERS.
+  log-when-unavailable:
+    status: done
+    comment: DataUpdateCoordinator logs the first failure and recovery once.
+  parallel-updates:
+    status: done
+    comment: PARALLEL_UPDATES set in sensor.py (0) and switch.py (1).
+  reauthentication-flow:
+    status: done
+    comment: async_step_reauth/reauth_confirm updates and reloads the entry.
+  test-coverage:
+    status: done
+    comment: Per-module coverage enforced at >=95% in CI; config flow at 100%.
+  # Gold
+  devices:
+    status: done
+    comment: One HA device per camera plus an account hub, linked via_device.
+  diagnostics:
+    status: done
+    comment: diagnostics.py allowlists safe fields; tests assert content and redaction.
+  discovery-update-info:
+    status: exempt
+    comment: Furbo has no local discovery protocol; devices are cloud-listed, not network-discovered.
+  discovery:
+    status: exempt
+    comment: The camera exposes no mDNS/SSDP/DHCP identity to discover; setup is account-based.
+  docs-data-update:
+    status: done
+    comment: README "How data is updated" section.
+  docs-examples:
+    status: todo
+    comment: No blueprints published yet.
+  docs-known-limitations:
+    status: done
+    comment: README "Limitations" section, including no live video via this integration.
+  docs-supported-devices:
+    status: done
+    comment: README "Supported devices" section (verified on FB0030 firmware 108).
+  docs-supported-functions:
+    status: done
+    comment: README "What you get" section.
+  docs-troubleshooting:
+    status: done
+    comment: README "Troubleshooting" section.
+  docs-use-cases:
+    status: done
+    comment: README "Use cases" section.
+  dynamic-devices:
+    status: todo
+    comment: >-
+      New cameras added to the account appear after the next reload, not live; a
+      runtime add-listener is not yet implemented.
+  entity-category:
+    status: done
+    comment: Alert switches are CONFIG; subscription sensors are DIAGNOSTIC.
+  entity-device-class:
+    status: done
+    comment: Timestamp device class on last_event; measurement/total_increasing state classes on counts.
+  entity-disabled-by-default:
+    status: done
+    comment: >-
+      switch.py sets entity_registry_enabled_default from
+      const.DEFAULT_ENABLED_ALERTS; only the everyday alerts (barking, crying,
+      person, activity) are enabled, and the specialised or noisy ones
+      (continuous variants, seizure, vomit, glass-breaking, etc.) are created
+      disabled. Covered by tests/test_entities.py.
+  entity-translations:
+    status: done
+    comment: All entities use translation keys in strings.json/translations/en.json.
+  exception-translations:
+    status: done
+    comment: set_alert_failed uses a translated message with placeholders.
+  icon-translations:
+    status: done
+    comment: icons.json defines default and state-aware icons.
+  reconfiguration-flow:
+    status: done
+    comment: async_step_reconfigure re-enters credentials for an existing entry.
+  repair-issues:
+    status: exempt
+    comment: >-
+      No user-actionable repair conditions distinct from reauth (handled by the
+      reauth flow) have been identified; transient outages use coordinator retry.
+  stale-devices:
+    status: todo
+    comment: Devices removed from the account are not yet auto-removed from the device registry.
+  # Platinum
+  async-dependency:
+    status: done
+    comment: The client is fully async (aiohttp); no blocking dependency.
+  inject-websession:
+    status: done
+    comment: FurboClient uses async_get_clientsession(hass).
+  strict-typing:
+    status: todo
+    comment: >-
+      The integration passes `mypy --strict` in CI against the real Home
+      Assistant packages. The rule also expects the third-party dependency
+      library to ship a py.typed marker and be fully typed; this integration
+      has no external runtime dependency (the client lives in-tree), so that
+      half of the rule does not apply, but the rule is kept todo until it is
+      added to Home Assistant's own strict-typing allowlist.

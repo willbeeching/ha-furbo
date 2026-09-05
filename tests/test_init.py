@@ -1,0 +1,147 @@
+"""Setup, unload, reload and failure-classification tests."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.furbo.api import FurboAuthError, FurboConnectionError
+from custom_components.furbo.const import (
+    CONF_EVENTS_ENABLED,
+    CONF_SCAN_INTERVAL,
+    DOMAIN,
+)
+
+from .conftest import setup_integration
+
+
+async def test_setup_and_unload(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A healthy entry loads and unloads cleanly."""
+    await setup_integration(hass, mock_config_entry)
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
+
+
+async def test_repeated_unload_is_safe(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Unloading twice does not raise."""
+    await setup_integration(hass, mock_config_entry)
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+
+
+async def test_auth_failure_starts_reauth(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A rejected token puts the entry into reauth."""
+    mock_client.get_account_info.side_effect = FurboAuthError("expired")
+    await setup_integration(hass, mock_config_entry)
+    assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert any(f["context"]["source"] == SOURCE_REAUTH for f in flows)
+
+
+async def test_transient_failure_retries(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A connection error during first refresh triggers retry, not reauth."""
+    mock_client.get_devices.side_effect = FurboConnectionError("down")
+    await setup_integration(hass, mock_config_entry)
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+
+
+async def test_options_change_reloads(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Changing options reloads the entry and drops account sensors."""
+    await setup_integration(hass, mock_config_entry)
+    assert hass.states.get("sensor.furbo_account_notable_events_today") is not None
+
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        options={CONF_SCAN_INTERVAL: 300, CONF_EVENTS_ENABLED: False},
+    )
+    await hass.async_block_till_done()
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    # The account sensor is no longer produced; a device sensor still works.
+    account = hass.states.get("sensor.furbo_account_notable_events_today")
+    assert account is None or account.state == "unavailable"
+    assert hass.states.get("sensor.hallway_subscription_days_left").state == "24"
+
+
+async def test_multiple_entries(hass: HomeAssistant, mock_client: AsyncMock) -> None:
+    """Two accounts load side by side without clashing."""
+    entry_a = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="ACC-A",
+        data={
+            "email": "a@example.com",
+            "password": "x",
+            "account_id": "ACC-A",
+            "cognito_token": "t",
+            "mobile_id": "m",
+        },
+    )
+    entry_b = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="ACC-B",
+        data={
+            "email": "b@example.com",
+            "password": "x",
+            "account_id": "ACC-B",
+            "cognito_token": "t",
+            "mobile_id": "m",
+        },
+    )
+    await setup_integration(hass, entry_a)
+    await setup_integration(hass, entry_b)
+    assert entry_a.state is ConfigEntryState.LOADED
+    assert entry_b.state is ConfigEntryState.LOADED
+
+
+async def test_migration_strips_password(
+    hass: HomeAssistant, mock_client: AsyncMock
+) -> None:
+    """A version-1 entry that stored the password migrates to v2 without it."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=1,
+        unique_id="ACC-OLD",
+        data={
+            "email": "old@example.com",
+            "password": "should-be-removed",
+            "account_id": "ACC-OLD",
+            "cognito_token": "t",
+            "mobile_id": "m",
+        },
+    )
+    await setup_integration(hass, entry)
+    assert entry.version == 2
+    assert "password" not in entry.data
+    assert entry.data["cognito_token"] == "t"
+
+
+async def test_migration_downgrade_rejected(
+    hass: HomeAssistant, mock_client: AsyncMock
+) -> None:
+    """An entry from a newer schema than we understand is not migrated."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=99,
+        unique_id="ACC-NEW",
+        data={"account_id": "ACC-NEW", "cognito_token": "t", "mobile_id": "m"},
+    )
+    entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.MIGRATION_ERROR

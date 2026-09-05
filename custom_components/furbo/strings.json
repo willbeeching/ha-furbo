@@ -1,0 +1,153 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Sign in to Furbo",
+        "description": "Enter the email and password you use in the Furbo app.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "mfa": {
+        "title": "Verification code",
+        "description": "Furbo emailed a verification code to {email}. Enter it to finish signing in.",
+        "data": {
+          "mfa_code": "Verification code"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Furbo",
+        "description": "Your Furbo session expired. Enter your password to sign in again.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "reconfigure": {
+        "title": "Update Furbo credentials",
+        "description": "Enter the email and password for this Furbo account.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Wrong email or password.",
+      "invalid_mfa": "That code was rejected. Check the email again, or start over to get a new one.",
+      "cannot_connect": "Could not reach the Furbo cloud. Check your connection and try again.",
+      "unknown": "Unexpected error. Check the Home Assistant log."
+    },
+    "abort": {
+      "already_configured": "This Furbo account is already set up.",
+      "reauth_successful": "Signed in again successfully.",
+      "reconfigure_successful": "Credentials updated successfully.",
+      "wrong_account": "Those credentials are for a different Furbo account than this entry."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Furbo options",
+        "description": "How often to poll the Furbo cloud, and whether to poll the pet calendar for events and daily activity.",
+        "data": {
+          "scan_interval": "Update interval (seconds)",
+          "events_enabled": "Poll the pet calendar"
+        }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "alert_barking": {
+        "name": "Barking alert"
+      },
+      "alert_continuous_barking": {
+        "name": "Continuous barking alert"
+      },
+      "alert_crying": {
+        "name": "Crying alert"
+      },
+      "alert_continuous_crying": {
+        "name": "Continuous crying alert"
+      },
+      "alert_howling": {
+        "name": "Howling alert"
+      },
+      "alert_continuous_howling": {
+        "name": "Continuous howling alert"
+      },
+      "alert_person_detection": {
+        "name": "Person alert"
+      },
+      "alert_dog_move_above10_sec": {
+        "name": "Activity alert"
+      },
+      "alert_run": {
+        "name": "Running alert"
+      },
+      "alert_selfie": {
+        "name": "Selfie alert"
+      },
+      "alert_eat_drink": {
+        "name": "Eating or drinking alert"
+      },
+      "alert_chew": {
+        "name": "Chewing alert"
+      },
+      "alert_pee_poo": {
+        "name": "Pee or poo alert"
+      },
+      "alert_continuous_pee_poo": {
+        "name": "Continuous pee or poo alert"
+      },
+      "alert_vomit": {
+        "name": "Vomit alert"
+      },
+      "alert_continuous_vomit": {
+        "name": "Continuous vomit alert"
+      },
+      "alert_seizure": {
+        "name": "Seizure alert"
+      },
+      "alert_continuous_seizure": {
+        "name": "Continuous seizure alert"
+      },
+      "alert_glass_breaking": {
+        "name": "Glass breaking alert"
+      },
+      "alert_home_emergency": {
+        "name": "Home emergency alert"
+      },
+      "alert_furbo_on_off": {
+        "name": "Furbo on/off alert"
+      }
+    },
+    "sensor": {
+      "last_event": {
+        "name": "Last event"
+      },
+      "subscription_days_left": {
+        "name": "Subscription days left"
+      },
+      "subscription_status": {
+        "name": "Subscription status"
+      },
+      "barking_events_today": {
+        "name": "Barking events today"
+      },
+      "activity_events_today": {
+        "name": "Activity events today"
+      },
+      "notable_events_today": {
+        "name": "Notable events today"
+      }
+    }
+  },
+  "exceptions": {
+    "set_alert_failed": {
+      "message": "Could not update the {name} alert: {error}"
+    }
+  }
+}
