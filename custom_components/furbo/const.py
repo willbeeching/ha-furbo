@@ -18,9 +18,18 @@ CONF_MOBILE_ID: Final = "mobile_id"
 # Options keys.
 CONF_SCAN_INTERVAL: Final = "scan_interval"
 CONF_EVENTS_ENABLED: Final = "events_enabled"
+# Per-camera live-stream URLs, keyed by device id. The camera entity for a
+# device exists only while a URL is configured for it.
+CONF_STREAM_URLS: Final = "stream_urls"
 
 # Flow field key for the emailed code.
 CONF_MFA_CODE: Final = "mfa_code"
+# Options-flow field key for one camera's stream URL.
+CONF_STREAM_URL: Final = "stream_url"
+
+# Schemes accepted for a stream URL. These are what Home Assistant's stream
+# component and go2rtc can consume directly.
+STREAM_URL_SCHEMES: Final = ("rtsp://", "rtsps://", "http://", "https://")
 
 DEFAULT_SCAN_INTERVAL: Final = timedelta(minutes=5)
 MIN_SCAN_INTERVAL_SECONDS: Final = 60

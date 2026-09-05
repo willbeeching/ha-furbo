@@ -12,7 +12,8 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -35,11 +36,14 @@ from .const import (
     CONF_MFA_CODE,
     CONF_MOBILE_ID,
     CONF_SCAN_INTERVAL,
+    CONF_STREAM_URL,
+    CONF_STREAM_URLS,
     CONFIG_ENTRY_VERSION,
     DEFAULT_EVENTS_ENABLED,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MIN_SCAN_INTERVAL_SECONDS,
+    STREAM_URL_SCHEMES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,6 +52,7 @@ USER_SCHEMA = vol.Schema(
     {vol.Required(CONF_EMAIL): str, vol.Required(CONF_PASSWORD): str}
 )
 MFA_SCHEMA = vol.Schema({vol.Required(CONF_MFA_CODE): str})
+STREAM_SCHEMA = vol.Schema({vol.Optional(CONF_STREAM_URL): str})
 
 
 class FurboConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -233,15 +238,51 @@ class FurboConfigFlow(ConfigFlow, domain=DOMAIN):
         return FurboOptionsFlow()
 
 
+def _cameras_for_entry(
+    hass: HomeAssistant, entry: FurboConfigEntry
+) -> list[tuple[str, str]]:
+    """Return (device id, display name) for every camera device of an entry.
+
+    Read from the device registry rather than runtime data so the options
+    flow works whether or not the entry is currently loaded.
+    """
+    registry = dr.async_get(hass)
+    cameras: list[tuple[str, str]] = []
+    for device in dr.async_entries_for_config_entry(registry, entry.entry_id):
+        if device.entry_type is not None:
+            continue  # the account hub is a service device, not a camera
+        for domain, identifier in device.identifiers:
+            if domain == DOMAIN:
+                cameras.append(
+                    (identifier, device.name_by_user or device.name or identifier)
+                )
+    return sorted(cameras)
+
+
 class FurboOptionsFlow(OptionsFlow):
-    """Handle Furbo options: poll interval and calendar polling."""
+    """Handle Furbo options: poll interval, calendar polling, stream URLs."""
+
+    def __init__(self) -> None:
+        """Initialise the per-flow state."""
+        self._options: dict[str, Any] = {}
+        self._pending: list[tuple[str, str]] = []
+        self._stream_urls: dict[str, str] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage the options."""
+        """Manage polling options, then ask for each camera's stream URL."""
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
+            self._options = dict(user_input)
+            self._pending = _cameras_for_entry(self.hass, self.config_entry)
+            current = self.config_entry.options.get(CONF_STREAM_URLS, {})
+            # Keep URLs only for cameras that still exist.
+            self._stream_urls = {
+                device_id: current[device_id]
+                for device_id, _ in self._pending
+                if device_id in current
+            }
+            return await self.async_step_stream()
 
         options = self.config_entry.options
         schema = vol.Schema(
@@ -260,3 +301,35 @@ class FurboOptionsFlow(OptionsFlow):
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)
+
+    async def async_step_stream(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for the live-stream URL of one camera at a time."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            device_id, _ = self._pending[0]
+            url = user_input.get(CONF_STREAM_URL, "").strip()
+            if url and not url.lower().startswith(STREAM_URL_SCHEMES):
+                errors["base"] = "invalid_stream_url"
+            else:
+                if url:
+                    self._stream_urls[device_id] = url
+                else:
+                    self._stream_urls.pop(device_id, None)
+                self._pending.pop(0)
+
+        if not errors and not self._pending:
+            return self.async_create_entry(
+                data={**self._options, CONF_STREAM_URLS: self._stream_urls}
+            )
+
+        device_id, name = self._pending[0]
+        return self.async_show_form(
+            step_id="stream",
+            data_schema=self.add_suggested_values_to_schema(
+                STREAM_SCHEMA, {CONF_STREAM_URL: self._stream_urls.get(device_id, "")}
+            ),
+            errors=errors,
+            description_placeholders={"name": name},
+        )

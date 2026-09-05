@@ -91,7 +91,7 @@ rules:
     comment: DataUpdateCoordinator logs the first failure and recovery once.
   parallel-updates:
     status: done
-    comment: PARALLEL_UPDATES set in sensor.py (0) and switch.py (1).
+    comment: PARALLEL_UPDATES set in camera.py (0), sensor.py (0) and switch.py (1).
   reauthentication-flow:
     status: done
     comment: async_step_reauth/reauth_confirm updates and reloads the entry.

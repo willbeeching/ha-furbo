@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from . import FurboConfigEntry
+from .const import CONF_STREAM_URLS
 
 # Device metadata that is safe to share. Identifiers (Id, P2PUuid, P2PAccountId,
 # P2PAccountKey, AuthKey, DeviceHashData, MAC) are deliberately excluded.
@@ -38,6 +39,9 @@ async def async_get_config_entry_diagnostics(
     """Return diagnostics for a config entry with identifiers withheld."""
     coordinator = entry.runtime_data.coordinator
     data = coordinator.data
+    # Stream URLs can embed hostnames and credentials; report presence only.
+    stream_urls: dict[str, str] = entry.options.get(CONF_STREAM_URLS, {})
+    options = {k: v for k, v in entry.options.items() if k != CONF_STREAM_URLS}
 
     devices = []
     for index, device in enumerate(data.devices.values()):
@@ -53,6 +57,7 @@ async def async_get_config_entry_diagnostics(
                 if not key.startswith("Frequency:")
             },
             "has_recent_event": device.last_event_at is not None,
+            "has_stream_url": device.device_id in stream_urls,
         }
         if device.subscription is not None:
             entry_out["subscription"] = {
@@ -61,7 +66,7 @@ async def async_get_config_entry_diagnostics(
         devices.append(entry_out)
 
     return {
-        "options": dict(entry.options),
+        "options": options,
         "account_timezone": data.account_timezone,
         "events_enabled": coordinator.events_enabled,
         "activity_today": data.activity_today,

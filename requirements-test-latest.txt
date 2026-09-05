@@ -1,3 +1,8 @@
 # Latest supported Home Assistant lane (current release, Python 3.14).
 # PHACC pins Home Assistant and pulls compatible pytest, pytest-cov and aiohttp.
 pytest-homeassistant-custom-component==0.13.363
+
+# The camera component imports PyTurboJPEG at module level on newer Home
+# Assistant; the test image does not ship it. Pinned to the camera manifest of
+# the lane's Home Assistant.
+PyTurboJPEG==1.8.3

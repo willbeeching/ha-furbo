@@ -51,12 +51,25 @@
     "step": {
       "init": {
         "title": "Furbo options",
-        "description": "How often to poll the Furbo cloud, and whether to poll the pet calendar for events and daily activity.",
+        "description": "How often to poll the Furbo cloud, and whether to poll the pet calendar for events and daily activity. The next step asks for each camera's live-stream URL.",
         "data": {
           "scan_interval": "Update interval (seconds)",
           "events_enabled": "Poll the pet calendar"
         }
+      },
+      "stream": {
+        "title": "Live video for {name}",
+        "description": "Furbo streams over a proprietary P2P protocol that Home Assistant cannot speak directly. Run the Furbo P2P bridge on a machine on the camera's LAN, publish it through go2rtc, and enter the resulting RTSP URL here. Leave empty for no camera entity.",
+        "data": {
+          "stream_url": "Stream URL"
+        },
+        "data_description": {
+          "stream_url": "For example rtsp://192.168.1.10:8554/furbo. Accepted schemes: rtsp, rtsps, http, https."
+        }
       }
+    },
+    "error": {
+      "invalid_stream_url": "Enter an rtsp://, rtsps://, http:// or https:// URL, or leave the field empty."
     }
   },
   "entity": {

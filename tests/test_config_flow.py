@@ -23,6 +23,8 @@ from custom_components.furbo.const import (
     CONF_EVENTS_ENABLED,
     CONF_MFA_CODE,
     CONF_SCAN_INTERVAL,
+    CONF_STREAM_URL,
+    CONF_STREAM_URLS,
     DOMAIN,
 )
 
@@ -248,7 +250,7 @@ async def test_reconfigure_without_mfa(
 async def test_options_flow(
     hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
 ) -> None:
-    """The options flow stores the interval and calendar toggle."""
+    """The options flow stores the polling options and each camera's URL."""
     await setup_integration(hass, mock_config_entry)
     result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     assert result["step_id"] == "init"
@@ -256,11 +258,97 @@ async def test_options_flow(
         result["flow_id"],
         {CONF_SCAN_INTERVAL: 120, CONF_EVENTS_ENABLED: False},
     )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "stream"
+    assert result["description_placeholders"] == {"name": "Test Camera"}
+
+    # A URL with an unsupported scheme is rejected and the step is shown again.
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_STREAM_URL: "exec:python3 bridge.py"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "stream"
+    assert result["errors"] == {"base": "invalid_stream_url"}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_STREAM_URL: "  RTSP://go2rtc.local:8554/furbo  "}
+    )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert mock_config_entry.options == {
         CONF_SCAN_INTERVAL: 120,
         CONF_EVENTS_ENABLED: False,
+        CONF_STREAM_URLS: {c.DEVICE_ID: "RTSP://go2rtc.local:8554/furbo"},
     }
+
+
+async def test_options_flow_clears_stream_url(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Leaving the field empty removes the camera's URL; stale ids are dropped."""
+    await setup_integration(
+        hass,
+        mock_config_entry,
+        {CONF_STREAM_URLS: {c.DEVICE_ID: "rtsp://old/furbo", "GONE": "rtsp://x"}},
+    )
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SCAN_INTERVAL: 300, CONF_EVENTS_ENABLED: True}
+    )
+    assert result["step_id"] == "stream"
+    # The current URL is offered back as the suggested value.
+    schema_key = next(iter(result["data_schema"].schema))
+    assert schema_key.description == {"suggested_value": "rtsp://old/furbo"}
+
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert mock_config_entry.options == {
+        CONF_SCAN_INTERVAL: 300,
+        CONF_EVENTS_ENABLED: True,
+        CONF_STREAM_URLS: {},
+    }
+
+
+async def test_options_flow_two_cameras(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Each camera gets its own stream step, in a stable order."""
+    mock_client.get_devices.return_value = [
+        dict(c.DEVICE),
+        {**c.DEVICE, "Id": "ZZ99", "DeviceName": "Kitchen"},
+    ]
+    await setup_integration(hass, mock_config_entry)
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SCAN_INTERVAL: 300, CONF_EVENTS_ENABLED: True}
+    )
+    assert result["description_placeholders"] == {"name": "Test Camera"}
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_STREAM_URL: "rtsp://h/a"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["description_placeholders"] == {"name": "Kitchen"}
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_STREAM_URL: "https://h/b.m3u8"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert mock_config_entry.options[CONF_STREAM_URLS] == {
+        c.DEVICE_ID: "rtsp://h/a",
+        "ZZ99": "https://h/b.m3u8",
+    }
+
+
+async def test_options_flow_without_cameras(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """With no camera devices the flow finishes after the polling step."""
+    mock_client.get_devices.return_value = []
+    await setup_integration(hass, mock_config_entry)
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SCAN_INTERVAL: 300, CONF_EVENTS_ENABLED: True}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert mock_config_entry.options[CONF_STREAM_URLS] == {}
 
 
 async def test_login_12002_shows_invalid_auth(

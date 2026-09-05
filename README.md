@@ -1,16 +1,17 @@
 # Furbo for Home Assistant
 
-A custom integration that brings a Furbo dog camera into Home Assistant over
-Furbo's cloud API. It exposes the camera's smart-alert settings as switches
-and the pet activity the cloud reports (subscription state, the day's detected
-events, and hourly activity counts) as sensors.
+A custom integration that brings a Furbo dog camera into Home Assistant. Over
+Furbo's cloud API it exposes the camera's smart-alert settings as switches and
+the pet activity the cloud reports (subscription state, the day's detected
+events, and hourly activity counts) as sensors. Live video is shown through a
+camera entity fed by a stream URL you configure, because Furbo's video runs
+over a proprietary P2P protocol that needs a bridge on the camera's LAN (see
+[Live video](#live-video)).
 
-It is a cloud-polling integration. It does **not** provide the live video
-stream: that runs over Furbo's proprietary TUTK P2P protocol, which needs the
-ThroughTek SDK on a machine on the camera's LAN and is out of scope here.
-Everything this integration exposes is proven against the live cloud API. The
-protocol reverse-engineering and the in-progress P2P streaming tool live in a
-separate development branch, kept out of this integration package.
+Everything the cloud side exposes is proven against the live Furbo API. The
+P2P bridge that produces the stream lives in a separate development branch,
+kept out of this integration package; its end-to-end run on real hardware is
+still outstanding.
 
 ## Supported devices
 
@@ -27,6 +28,9 @@ contain data.
 
 Per camera (one Home Assistant device, linked under a "Furbo account" hub):
 
+- **Camera** entity with live streaming, created when a stream URL is set for
+  that camera in the options (see [Live video](#live-video)). Snapshots are
+  taken from the stream.
 - **Smart-alert switches** (configuration category): barking, crying, person,
   activity and the other alerts your camera reports. Toggling one writes the
   new value to the Furbo cloud.
@@ -80,7 +84,8 @@ credential-related is logged or included in diagnostics.
 
 ## Options
 
-Settings, Devices & services, Furbo, Configure:
+Settings, Devices & services, Furbo, Configure. The first page covers polling;
+one further page per camera asks for its stream URL.
 
 - **Update interval (seconds)**: how often the cloud is polled. Default 300,
   minimum 60. The event calendar rejects repeat calls to the same endpoint
@@ -88,6 +93,45 @@ Settings, Devices & services, Furbo, Configure:
 - **Poll the pet calendar**: when off, the account-level event and activity
   sensors are not created and only the camera settings and subscription are
   polled. Default on.
+- **Stream URL** (per camera): an `rtsp://`, `rtsps://`, `http://` or
+  `https://` URL that Home Assistant can play. Leave empty for no camera
+  entity. Changing it reloads the integration.
+
+## Live video
+
+Furbo does not offer RTSP or any other open stream. The app receives video over
+ThroughTek's TUTK P2P protocol with a DTLS-protected channel, which needs the
+vendor's native SDK, UDP access and a presence on the camera's LAN. None of
+that can run inside a Home Assistant integration, so the video path is:
+
+```
+Furbo camera  --TUTK P2P (LAN, UDP)-->  furbo_p2p.py bridge  --H.264-->  go2rtc  --RTSP/WebRTC-->  Home Assistant
+```
+
+1. Run the bridge on a Linux machine on the same LAN as the camera. It is
+   `furbo_p2p.py` on the `claude/furbo-home-assistant-integration-m2ojey`
+   branch of this repository, with `HANDOFF.md` there as the runbook. It
+   needs the TUTK 4.x library (the copy that docker-wyze-bridge ships works)
+   and a Furbo login of its own.
+2. Publish the bridge output through [go2rtc](https://github.com/AlexxIT/go2rtc),
+   which is bundled with Home Assistant OS and available as an add-on:
+
+   ```yaml
+   streams:
+     furbo:
+       - "exec:python3 /config/furbo_p2p.py stream --quality 720p#killsignal=2"
+   ```
+
+   go2rtc then serves `rtsp://<go2rtc host>:8554/furbo`.
+3. Enter that RTSP URL as the camera's stream URL in the Furbo options. The
+   camera entity appears after the reload. With Home Assistant's own go2rtc
+   integration enabled, the dashboard plays it over WebRTC with low latency.
+
+Status: the bridge implements the full protocol as the Furbo app speaks it
+(license key, `IOTC_Connect_ByUIDEx` with the device auth key, DTLS
+`PSK-AES128-CBC-SHA256`, Furbo's own control opcodes) but has not yet completed
+a live session on real hardware. The camera entity itself is tested and works
+with any stream URL Home Assistant can play.
 
 ## How data is updated
 
@@ -111,9 +155,9 @@ by the fixed 60-second interval floor and a bounded retry that waits out an
 
 ## Limitations
 
-- **No live video.** The stream is TUTK P2P/DTLS and is not part of this
-  integration. The separate reverse-engineering branch has an experimental
-  LAN streaming tool, unverified end to end.
+- **Live video needs a bridge.** The stream is TUTK P2P/DTLS and cannot be
+  decoded by Home Assistant itself; see [Live video](#live-video). The bridge
+  is not yet verified end to end on real hardware.
 - **No treat tossing.** The cloud `control_device` endpoint returns success
   for any action string, so it does not prove a treat was tossed; the app
   tosses over P2P. Treat control is therefore deliberately not exposed here.
@@ -157,12 +201,14 @@ app, which invalidates the stored session.
 
 Automated tests (`tests/`, run on Home Assistant 2025.2 and the latest stable)
 cover the config/options/reauth/reconfigure flows, setup and teardown, offline
-and recovery, multi-account, the entity states, diagnostics redaction, and the
+and recovery, multi-account, the entity states (camera included), diagnostics
+redaction, and the
 API client against a mocked socket. They mock the network at the HTTP boundary.
 They do **not** prove the live cloud contract; that was verified by hand on
 2026-09-05 against a real Furbo 360 and is recorded in
-[`HARDWARE_VERIFICATION.md`](HARDWARE_VERIFICATION.md). Live video over P2P is
-handled outside this integration and is not verified end to end yet.
+[`HARDWARE_VERIFICATION.md`](HARDWARE_VERIFICATION.md). The camera entity is
+tested against a mocked stream URL; the P2P bridge that produces a real stream
+is outside this package and is not verified end to end yet.
 
 ## Quality self-assessment
 

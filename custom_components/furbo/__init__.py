@@ -20,7 +20,7 @@ from .const import (
 )
 from .coordinator import FurboCoordinator
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH]
+PLATFORMS: list[Platform] = [Platform.CAMERA, Platform.SENSOR, Platform.SWITCH]
 
 
 @dataclass
