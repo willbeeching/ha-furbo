@@ -37,9 +37,9 @@ def _make_client() -> AsyncMock:
     client.send_mfa_code.return_value = "CANDIDATE2"
     client.get_account_info.return_value = c.ACCOUNT_INFO
     client.get_devices.return_value = [dict(c.DEVICE)]
-    client.get_license.return_value = c.LICENSE_RESPONSE
+    client.get_license.return_value = c.LICENSE_RESPONSE["DevicesLicense"]
     client.get_alert_settings.return_value = dict(c.ALERTS)
-    client.get_activity_report.return_value = c.ACTIVITY_RESPONSE
+    client.get_activity_report.return_value = c.ACTIVITY_TOTALS
     client.get_daily_summary.return_value = c.DAILY_SUMMARY
     client.get_notable_events.return_value = list(c.NOTABLE_EVENTS)
     return client

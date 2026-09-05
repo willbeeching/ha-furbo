@@ -127,12 +127,12 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         """Fetch devices, alerts, subscription and (optionally) the calendar."""
         try:
             device_list = await self.client.get_devices()
-            licenses = (await self.client.get_license()).get("DevicesLicense", {})
+            licenses = await self.client.get_license()
             devices: dict[str, FurboDeviceData] = {}
             for info in device_list:
                 device = FurboDeviceData(info=info)
                 device.alerts = await self.client.get_alert_settings(device.device_id)
-                subs = licenses.get(device.device_id) or []
+                subs = licenses.get(device.device_id, [])
                 device.subscription = subs[0] if subs else None
                 devices[device.device_id] = device
 
@@ -142,8 +142,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
             if self.events_enabled:
                 today = self._today().isoformat()
                 report = await self.client.get_activity_report([today])
-                data = (report.get(today) or {}).get("Data") or {}
-                activity = {key: sum(values) for key, values in data.items()}
+                activity = report.get(today, {})
                 summary = await self.client.get_daily_summary(today)
                 events = await self.client.get_notable_events(today)
                 event_count = len(events)

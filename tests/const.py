@@ -28,7 +28,7 @@ ACCOUNT_INFO: dict[str, Any] = {
 
 DEVICE: dict[str, Any] = {
     "Id": DEVICE_ID,
-    "DeviceName": "Hallway",
+    "DeviceName": "Test Camera",
     "ProductId": "FB0030",
     "FirmwareVersion": "108",
     "LibraryVersion": "002.063",
@@ -94,6 +94,11 @@ ACTIVITY_RESPONSE: dict[str, Any] = {
         ],
         "Error": None,
     }
+}
+
+# What FurboClient.get_activity_report returns for ACTIVITY_RESPONSE.
+ACTIVITY_TOTALS: dict[str, dict[str, int]] = {
+    "2026-09-05": {"Barking": 6, "DogMoveAbove10Sec": 55}
 }
 
 NOTABLE_EVENTS: list[dict[str, Any]] = [

@@ -6,10 +6,10 @@ the live Furbo cloud. Negative results are kept deliberately.
 | Date | Model / firmware | Area | Method | Expected | Observed |
 | --- | --- | --- | --- | --- | --- |
 | 2026-09-05 | FB0030 / 108 | Cloud login + MFA | Live login with emailed code | Token issued | Verified; MFA emailed on every login |
-| 2026-09-05 | FB0030 / 108 | Device list | `/v2/account/{id}/device` | One camera returned | Verified (Hallway) |
+| 2026-09-05 | FB0030 / 108 | Device list | `/v2/account/{id}/device` | One camera returned | Verified |
 | 2026-09-05 | FB0030 / 108 | Alert settings read | `/v5/device/alert-setting` | 40 flags + cooldowns | Verified |
 | 2026-09-05 | FB0030 / 108 | Alert settings write | `/v5/device/alert-setting/update` (no-op to same value) | Value persists on re-read | Verified; unknown names rejected `12001` |
-| 2026-09-05 | FB0030 / 108 | Subscription | `/v3/service/license` | Plan + days left | Verified (NST Standard, 24 days) |
+| 2026-09-05 | FB0030 / 108 | Subscription | `/v3/service/license` | Plan + days left | Verified |
 | 2026-09-05 | FB0030 / 108 | Notable events | `pet-gpt.furbo.co/v1/calendar/notable-events/get` | Events with captions | Verified; host rate-limits repeat calls (~10s) with `80002` |
 | 2026-09-05 | FB0030 / 108 | Daily summary | `.../daily-summary/get` | Written summary | Verified |
 | 2026-09-05 | FB0030 / 108 | Activity report | `.../v2/calendar/activity-report/get` | Hourly counts per type | Verified (Barking, DogMoveAbove10Sec) |
@@ -25,18 +25,25 @@ the live Furbo cloud. Negative results are kept deliberately.
 - Live video, two-way audio and treat toss over P2P end to end.
 
 
-## CI test-lane status
+## Test lanes
 
-| Lane | Home Assistant | Python | Where run | Result |
-| --- | --- | --- | --- | --- |
-| min | 2025.2.0 | 3.13 | CI and locally | 60 passed, 100% per-module coverage |
-| latest | current release | 3.14 | CI | see note |
+Automated tests run in two lanes, defined by the two requirements files:
 
-The latest lane runs in CI on Python 3.14 against the current Home Assistant.
-The build environment for this change could not install Python 3.14.2 (only
-3.14.0rc2 was available) and so could not run HA 2026.9 locally; the latest
-lane was instead exercised locally against HA 2026.2.3 on Python 3.13, and the
-HA-2026.9-only `DeviceInfo` `via_device_id` path is covered by a unit test that
-forces that code branch. The network boundary is mocked with Home Assistant's
-own `aioclient_mock`, which tracks each lane's aiohttp version, so no
-aiohttp-version-specific mock library is involved.
+| Lane | Requirements file | Home Assistant | Python |
+| --- | --- | --- | --- |
+| min | `requirements-test-min.txt` | 2025.2.0 (oldest supported) | 3.13 |
+| latest | `requirements-test-latest.txt` | current release | 3.14 |
+
+Both run the same suite. Results are recorded by the CI workflow on each
+commit, not in this file. To run a lane locally:
+
+```sh
+uv venv --python 3.13 && uv pip install -r requirements-test-min.txt
+uv run pytest tests --cov=custom_components.furbo --cov-report=xml
+uv run python scripts/check_coverage.py coverage.xml
+```
+
+The network boundary in the tests is mocked with Home Assistant's own
+`aioclient_mock`, which follows each lane's aiohttp version. The
+`DeviceInfo.via_device_id` path introduced in Home Assistant 2026.9 is covered
+by a unit test that forces that branch, so it is exercised on both lanes.

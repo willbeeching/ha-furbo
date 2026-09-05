@@ -7,15 +7,17 @@ and unit-tested without a running Home Assistant. It talks to two hosts:
 * ``pet-gpt.furbo.co`` - the pet calendar: notable events, daily summary and
   the hourly activity report.
 
-Provenance: every endpoint, header and payload here was captured live against
-a real account (Furbo 360, product id FB0030, firmware 108) on 2026-09-05 and
-cross-checked against the decompiled Android app 7.82.1 (see
-``apk/decompiled/sources/j6/`` for the Retrofit interfaces and
-``com/tomofun/furbo/device/p2p/`` for the P2P layer, which this cloud client
-deliberately does not use). Values that could not be proven are not asserted
-here; in particular the ``/v3/account/control_device`` endpoint returns
-``{"Success": true}`` for any action string, so it is not exposed as a
-capability by this client.
+Every endpoint, header and payload here was captured live against a real
+account (Furbo 360, product id FB0030, firmware 108) on 2026-09-05 and
+cross-checked against the Android app's API definitions. Values that could
+not be proven are not asserted here; in particular the
+``/v3/account/control_device`` endpoint returns ``{"Success": true}`` for any
+action string, so it is not exposed as a capability by this client.
+
+Responses are validated at this boundary. Anything that does not have the
+shape the caller relies on raises :class:`FurboConnectionError`, so callers
+never see a ``KeyError`` or ``TypeError`` from a malformed body. Response
+bodies are never included in exception messages or log lines.
 """
 
 from __future__ import annotations
@@ -56,16 +58,22 @@ CODE_RATE_LIMITED = 80002  # body carries "TimeWait" in seconds
 # The calendar host rejects a repeat call to the same endpoint inside roughly
 # ten seconds; TimeWait understates it, so wait at least this long on 80002.
 _RATE_LIMIT_MIN_WAIT = 10.0
+# Upper bound on how long a single rate-limit back-off may sleep, whatever
+# TimeWait claims.
+_RATE_LIMIT_MAX_WAIT = 120.0
 
 
 class FurboError(Exception):
-    """Base error for the Furbo API."""
+    """Base error for the Furbo API.
 
-    def __init__(self, message: str, code: int | None = None, data: Any = None) -> None:
-        """Store the API result code and body alongside the message."""
+    The message names the endpoint, HTTP status and Furbo result code only.
+    It never carries the response body.
+    """
+
+    def __init__(self, message: str, code: int | None = None) -> None:
+        """Store the numeric API result code alongside the message."""
         super().__init__(message)
         self.code = code
-        self.data = data
 
 
 class FurboConnectionError(FurboError):
@@ -84,6 +92,16 @@ class FurboMfaError(FurboError):
     """The multi-factor code was wrong or expired."""
 
 
+class FurboMfaRequired(FurboError):
+    """Login needs an emailed code. Carries only the two validated ids."""
+
+    def __init__(self, account_id: str, candidate: str) -> None:
+        """Keep the account id and MFA candidate the next step needs."""
+        super().__init__("Furbo login requires an MFA code", CODE_MFA_REQUIRED)
+        self.account_id = account_id
+        self.candidate = candidate
+
+
 def encrypt_password(password: str) -> str:
     """RSA-encrypt a password the way the app does before login."""
     public_key = serialization.load_pem_public_key(RSA_PUBLIC_KEY)
@@ -94,6 +112,78 @@ def encrypt_password(password: str) -> str:
 def new_mobile_id() -> str:
     """Generate a stable client identifier for this config entry."""
     return str(uuid.uuid4()).upper()
+
+
+# --- response validation ---------------------------------------------------
+
+
+def _malformed(path: str, what: str) -> FurboConnectionError:
+    """Build the error raised for a response that does not fit the contract."""
+    return FurboConnectionError(f"Malformed response from {path}: {what}")
+
+
+def _as_dict(value: Any, path: str, what: str = "body") -> dict[str, Any]:
+    """Return ``value`` if it is a JSON object, else raise."""
+    if not isinstance(value, dict):
+        raise _malformed(path, f"{what} is not an object")
+    return cast("dict[str, Any]", value)
+
+
+def _as_dict_list(value: Any, path: str, what: str) -> list[dict[str, Any]]:
+    """Return ``value`` if it is a list of JSON objects, else raise."""
+    if not isinstance(value, list) or not all(isinstance(i, dict) for i in value):
+        raise _malformed(path, f"{what} is not a list of objects")
+    return cast("list[dict[str, Any]]", value)
+
+
+def _required_str(data: dict[str, Any], key: str, path: str) -> str:
+    """Return a non-empty string field or raise."""
+    value = data.get(key)
+    if not isinstance(value, str) or not value:
+        raise _malformed(path, f"missing {key}")
+    return value
+
+
+def _optional_str(data: dict[str, Any], key: str, path: str) -> str | None:
+    """Return a string field, None when absent, and raise on any other type."""
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise _malformed(path, f"{key} is not a string")
+    return value
+
+
+def _as_number(value: Any) -> float | None:
+    """Coerce an int, float or numeric string to float; None otherwise."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _result_code(data: Any) -> int | None:
+    """Extract the numeric Furbo result code from an error body, if any."""
+    if not isinstance(data, dict):
+        return None
+    code = data.get("Code")
+    if isinstance(code, bool) or not isinstance(code, int):
+        return None
+    return code
+
+
+def _rate_limit_wait(data: dict[str, Any]) -> float:
+    """Return how long to sleep after an 80002, bounded on both sides."""
+    wait = _as_number(data.get("TimeWait"))
+    if wait is None:
+        wait = _RATE_LIMIT_MIN_WAIT
+    return min(max(wait, _RATE_LIMIT_MIN_WAIT), _RATE_LIMIT_MAX_WAIT)
 
 
 class FurboClient:
@@ -125,8 +215,12 @@ class FurboClient:
         base: str = MAIN_URL,
         form: bool = False,
         retry: int = 3,
-    ) -> Any:
-        """POST JSON (or form) and return the decoded body, mapping errors."""
+    ) -> dict[str, Any]:
+        """POST JSON (or form) and return the decoded object, mapping errors.
+
+        Only the HTTP status, endpoint and numeric result code are surfaced
+        in exceptions; the body itself stays inside this method.
+        """
         headers = dict(self._headers)
         if form:
             kwargs: dict[str, Any] = {"data": payload}
@@ -138,24 +232,34 @@ class FurboClient:
                 f"{base}{path}", headers=headers, timeout=self._timeout, **kwargs
             ) as resp:
                 status = resp.status
-                data = await resp.json(content_type=None)
-        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
-            raise FurboConnectionError(f"Error talking to Furbo: {err}") from err
+                try:
+                    data = await resp.json(content_type=None)
+                except ValueError as err:
+                    raise _malformed(path, f"status {status} body is not JSON") from err
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise FurboConnectionError(
+                f"Error talking to Furbo on {path}: {type(err).__name__}"
+            ) from err
 
         if status == 200:
-            return data
+            return _as_dict(data, path)
 
-        code = data.get("Code") if isinstance(data, dict) else None
+        code = _result_code(data)
         if code == CODE_RATE_LIMITED and retry > 0:
-            await asyncio.sleep(
-                max(float(data.get("TimeWait", 1)), _RATE_LIMIT_MIN_WAIT)
-            )
+            await asyncio.sleep(_rate_limit_wait(data))
             return await self._post(
                 path, payload, base=base, form=form, retry=retry - 1
             )
+        if code == CODE_MFA_REQUIRED:
+            body = _as_dict(data, path)
+            raise FurboMfaRequired(
+                _required_str(body, "AccountId", path),
+                _required_str(body, "MfaAuthCodeCandidate", path),
+            )
+        message = f"Furbo API error {status} (code {code}) on {path}"
         if code == CODE_TOKEN_INVALID:
-            raise FurboAuthError("Token rejected", code, data)
-        raise FurboError(f"Furbo API error {status} on {path}: {data}", code, data)
+            raise FurboAuthError(message, code)
+        raise FurboError(message, code)
 
     def _base(self) -> dict[str, Any]:
         """Return the account id and token every authenticated call needs."""
@@ -169,81 +273,99 @@ class FurboClient:
         self, email: str, enc_password: str, mobile_id: str
     ) -> str | None:
         """Begin login. Returns None if no MFA is needed, else the candidate."""
+        path = "/v5/account/read/login"
         payload = {"Email": email, "EncPassword": enc_password, "MobileId": mobile_id}
         try:
-            data = await self._post("/v5/account/read/login", payload)
+            data = await self._post(path, payload)
+        except FurboMfaRequired as err:
+            self.account_id = err.account_id
+            return err.candidate
+        except FurboConnectionError:
+            raise
         except FurboError as err:
-            # 12101 asks for an MFA code. Every other rejection at the login
-            # endpoint - including 12002, which Furbo also returns for a wrong
-            # email or password here - is a login failure, not a stale token.
-            if err.code == CODE_MFA_REQUIRED and isinstance(err.data, dict):
-                self.account_id = err.data.get("AccountId")
-                return cast("str", err.data["MfaAuthCodeCandidate"])
-            raise FurboLoginError(str(err), err.code, err.data) from err
-        self._store_login(data)
+            # Every rejection at the login endpoint - including 12002, which
+            # Furbo also returns for a wrong email or password here - is a
+            # login failure, not a stale token.
+            raise FurboLoginError(str(err), err.code) from err
+        self._store_login(data, path)
         return None
 
     async def send_mfa_code(self, candidate: str) -> str:
         """Ask Furbo to email the MFA code. Returns the refreshed candidate."""
+        path = "/v4/account/mfa/login/send-code"
         data = await self._post(
-            "/v4/account/mfa/login/send-code",
-            {"MfaAuthCodeCandidate": candidate, "Model": "Android"},
+            path, {"MfaAuthCodeCandidate": candidate, "Model": "Android"}
         )
-        return cast("str", data.get("MfaAuthCodeCandidate", candidate))
+        return _optional_str(data, "MfaAuthCodeCandidate", path) or candidate
 
     async def complete_login(
         self, email: str, enc_password: str, mobile_id: str, candidate: str, code: str
     ) -> None:
         """Verify the emailed code and finish logging in."""
+        verify_path = "/v4/account/mfa/verify"
         try:
             verify = await self._post(
-                "/v4/account/mfa/verify",
-                {"MfaAuthCodeCandidate": candidate, "Code": code},
+                verify_path, {"MfaAuthCodeCandidate": candidate, "Code": code}
             )
+        except FurboConnectionError:
+            raise
         except FurboError as err:
             # Any rejection verifying the emailed code is an MFA failure.
-            raise FurboMfaError(str(err), err.code, err.data) from err
+            raise FurboMfaError(str(err), err.code) from err
+        login_path = "/v2/account/login"
         data = await self._post(
-            "/v2/account/login",
+            login_path,
             {
                 "Email": email,
                 "EncPassword": enc_password,
                 "MobileId": mobile_id,
-                "MfaAuthCode": verify["MfaAuthCode"],
+                "MfaAuthCode": _required_str(verify, "MfaAuthCode", verify_path),
             },
         )
-        self._store_login(data)
+        self._store_login(data, login_path)
 
-    def _store_login(self, data: dict[str, Any]) -> None:
+    def _store_login(self, data: dict[str, Any], path: str) -> None:
         """Persist the identifiers a successful login returns."""
-        self.account_id = data["AccountId"]
-        self.cognito_token = data["CognitoToken"]
+        account_id = _required_str(data, "AccountId", path)
+        cognito_token = _required_str(data, "CognitoToken", path)
+        self.account_id = account_id
+        self.cognito_token = cognito_token
 
     # --- account and devices ----------------------------------------------
 
     async def get_account_info(self) -> dict[str, Any]:
         """Return account profile including Timezone and ServiceRegion."""
-        return cast(
-            "dict[str, Any]", await self._post("/v2/account/info", self._base())
-        )
+        path = "/v2/account/info"
+        data = await self._post(path, self._base())
+        _optional_str(data, "Timezone", path)
+        return data
 
     async def get_devices(self) -> list[dict[str, Any]]:
-        """Return the bound devices with their metadata."""
+        """Return the bound devices with their metadata.
+
+        Each device is guaranteed to carry a non-empty string ``Id`` and, when
+        present, a string ``DeviceName``.
+        """
         base = self._base()
-        data = await self._post(
-            f"/v2/account/{base['AccountId']}/device",
-            {"CognitoToken": base["CognitoToken"]},
-        )
-        return cast("list[dict[str, Any]]", data.get("DeviceList", []))
+        path = f"/v2/account/{base['AccountId']}/device"
+        data = await self._post(path, {"CognitoToken": base["CognitoToken"]})
+        devices = _as_dict_list(data.get("DeviceList", []), path, "DeviceList")
+        for device in devices:
+            _required_str(device, "Id", path)
+            _optional_str(device, "DeviceName", path)
+        return devices
 
     async def get_alert_settings(self, device_id: str) -> dict[str, str]:
-        """Return the smart-alert flags and cooldowns for one device."""
-        return cast(
-            "dict[str, str]",
-            await self._post(
-                "/v5/device/alert-setting", {**self._base(), "DeviceId": device_id}
-            ),
-        )
+        """Return the smart-alert flags and cooldowns for one device.
+
+        The API returns every value as a string ("0"/"1" for flags, seconds
+        for the ``Frequency:*`` cooldowns); anything else is rejected.
+        """
+        path = "/v5/device/alert-setting"
+        data = await self._post(path, {**self._base(), "DeviceId": device_id})
+        if not all(isinstance(v, str) for v in data.values()):
+            raise _malformed(path, "alert values are not strings")
+        return cast("dict[str, str]", data)
 
     async def set_alert_setting(self, device_id: str, name: str, enabled: bool) -> None:
         """Enable or disable one named smart alert."""
@@ -257,41 +379,70 @@ class FurboClient:
             },
         )
 
-    async def get_license(self) -> dict[str, Any]:
-        """Return subscription (Furbo Nanny) state per device."""
-        return cast(
-            "dict[str, Any]", await self._post("/v3/service/license", self._base())
-        )
+    async def get_license(self) -> dict[str, list[dict[str, Any]]]:
+        """Return subscription (Furbo Nanny) entries keyed by device id.
+
+        ``TimeLeftDays`` is normalised to an int, or removed when it is not
+        numeric, so sensors can use it without further checks.
+        """
+        path = "/v3/service/license"
+        data = await self._post(path, self._base())
+        licenses = _as_dict(data.get("DevicesLicense", {}), path, "DevicesLicense")
+        result: dict[str, list[dict[str, Any]]] = {}
+        for device_id, entries in licenses.items():
+            validated = _as_dict_list(entries, path, f"DevicesLicense[{device_id}]")
+            for entry in validated:
+                days = _as_number(entry.get("TimeLeftDays"))
+                if days is None:
+                    entry.pop("TimeLeftDays", None)
+                else:
+                    entry["TimeLeftDays"] = int(days)
+                _optional_str(entry, "SubscriptionStatus", path)
+            result[str(device_id)] = validated
+        return result
 
     # --- calendar (pet-gpt host) ------------------------------------------
 
     async def get_notable_events(self, date: str) -> list[dict[str, Any]]:
         """Return detected events for one day (YYYY-MM-DD, account local)."""
+        path = "/v1/calendar/notable-events/get"
         data = await self._post(
-            "/v1/calendar/notable-events/get",
-            {**self._base(), "Date": date},
-            base=PETGPT_URL,
-            form=True,
+            path, {**self._base(), "Date": date}, base=PETGPT_URL, form=True
         )
-        return cast("list[dict[str, Any]]", data.get("Events", []))
+        events = _as_dict_list(data.get("Events", []), path, "Events")
+        for event in events:
+            _optional_str(event, "DeviceId", path)
+            _optional_str(event, "LocalTime", path)
+        return events
 
     async def get_daily_summary(self, date: str) -> str:
-        """Return the written summary of one day."""
+        """Return the written summary of one day, or "" when there is none."""
+        path = "/v1/calendar/daily-summary/get"
         data = await self._post(
-            "/v1/calendar/daily-summary/get",
-            {**self._base(), "Date": date},
-            base=PETGPT_URL,
-            form=True,
+            path, {**self._base(), "Date": date}, base=PETGPT_URL, form=True
         )
-        return cast("str", data.get("Summary", ""))
+        return _optional_str(data, "Summary", path) or ""
 
-    async def get_activity_report(self, dates: list[str]) -> dict[str, Any]:
-        """Return hourly counts per alert type for the given days."""
-        return cast(
-            "dict[str, Any]",
-            await self._post(
-                "/v2/calendar/activity-report/get",
-                {**self._base(), "Dates": dates},
-                base=PETGPT_URL,
-            ),
-        )
+    async def get_activity_report(self, dates: list[str]) -> dict[str, dict[str, int]]:
+        """Return the total count per alert type for each requested day.
+
+        The API answers with hourly buckets per type; they are summed here
+        after checking every bucket is a number.
+        """
+        path = "/v2/calendar/activity-report/get"
+        data = await self._post(path, {**self._base(), "Dates": dates}, base=PETGPT_URL)
+        report: dict[str, dict[str, int]] = {}
+        for day, day_data in data.items():
+            buckets = _as_dict(day_data, path, f"report for {day}").get("Data")
+            totals: dict[str, int] = {}
+            if buckets is None:
+                buckets = {}
+            for key, values in _as_dict(buckets, path, f"Data for {day}").items():
+                if not isinstance(values, list):
+                    raise _malformed(path, f"{key} counts are not a list")
+                numbers = [_as_number(v) for v in values]
+                if any(n is None for n in numbers):
+                    raise _malformed(path, f"{key} counts are not numeric")
+                totals[str(key)] = int(sum(n for n in numbers if n is not None))
+            report[str(day)] = totals
+        return report

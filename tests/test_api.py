@@ -6,6 +6,8 @@ tests stay compatible with the aiohttp version each Home Assistant lane ships.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import aiohttp
@@ -33,6 +35,21 @@ from custom_components.furbo.api import (
 
 from . import const as c
 
+LOGIN = f"{MAIN_URL}/v5/account/read/login"
+SEND_CODE = f"{MAIN_URL}/v4/account/mfa/login/send-code"
+VERIFY = f"{MAIN_URL}/v4/account/mfa/verify"
+MFA_LOGIN = f"{MAIN_URL}/v2/account/login"
+INFO = f"{MAIN_URL}/v2/account/info"
+DEVICES = f"{MAIN_URL}/v2/account/{c.ACCOUNT_ID}/device"
+ALERTS = f"{MAIN_URL}/v5/device/alert-setting"
+LICENSE = f"{MAIN_URL}/v3/service/license"
+EVENTS = f"{PETGPT_URL}/v1/calendar/notable-events/get"
+SUMMARY = f"{PETGPT_URL}/v1/calendar/daily-summary/get"
+ACTIVITY = f"{PETGPT_URL}/v2/calendar/activity-report/get"
+
+# A string that must never leak out of the client in an exception message.
+BODY_MARKER = "do-not-leak-this-body"
+
 
 def _client(hass: HomeAssistant, authed: bool = False) -> FurboClient:
     """Build a client bound to Home Assistant's mocked shared session."""
@@ -51,13 +68,15 @@ def test_helpers() -> None:
     assert mobile_id == mobile_id.upper()
 
 
+# --- login -------------------------------------------------------------------
+
+
 async def test_login_without_mfa(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
     """A direct login stores the account id and token."""
     aioclient_mock.post(
-        f"{MAIN_URL}/v5/account/read/login",
-        json={"AccountId": c.ACCOUNT_ID, "CognitoToken": c.COGNITO_TOKEN},
+        LOGIN, json={"AccountId": c.ACCOUNT_ID, "CognitoToken": c.COGNITO_TOKEN}
     )
     client = _client(hass)
     assert await client.start_login(c.EMAIL, "enc", "mob") is None
@@ -70,20 +89,14 @@ async def test_login_with_mfa(
 ) -> None:
     """The MFA path threads the candidate through to a final token."""
     aioclient_mock.post(
-        f"{MAIN_URL}/v5/account/read/login",
+        LOGIN,
         status=400,
         json={"Code": 12101, "AccountId": c.ACCOUNT_ID, "MfaAuthCodeCandidate": "C1"},
     )
+    aioclient_mock.post(SEND_CODE, json={"MfaAuthCodeCandidate": "C2"})
+    aioclient_mock.post(VERIFY, json={"MfaAuthCode": "AUTH"})
     aioclient_mock.post(
-        f"{MAIN_URL}/v4/account/mfa/login/send-code",
-        json={"MfaAuthCodeCandidate": "C2"},
-    )
-    aioclient_mock.post(
-        f"{MAIN_URL}/v4/account/mfa/verify", json={"MfaAuthCode": "AUTH"}
-    )
-    aioclient_mock.post(
-        f"{MAIN_URL}/v2/account/login",
-        json={"AccountId": c.ACCOUNT_ID, "CognitoToken": "tok2"},
+        MFA_LOGIN, json={"AccountId": c.ACCOUNT_ID, "CognitoToken": "tok2"}
     )
     client = _client(hass)
     assert await client.start_login(c.EMAIL, "enc", "mob") == "C1"
@@ -91,84 +104,208 @@ async def test_login_with_mfa(
     assert await client.send_mfa_code("C1") == "C2"
     await client.complete_login(c.EMAIL, "enc", "mob", "C2", "1234")
     assert client.cognito_token == "tok2"
+    assert aioclient_mock.mock_calls[3][2]["MfaAuthCode"] == "AUTH"
 
 
+@pytest.mark.parametrize("code", [12000, 12002, 80001])
 async def test_login_rejected(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, code: int
+) -> None:
+    """Any rejection at the login endpoint, 12002 included, is a login error."""
+    aioclient_mock.post(LOGIN, status=400, json={"Code": code, "Message": BODY_MARKER})
+    with pytest.raises(FurboLoginError) as err:
+        await _client(hass).start_login(c.EMAIL, "enc", "mob")
+    assert err.value.code == code
+    assert BODY_MARKER not in str(err.value)
+
+
+async def test_login_connection_error_is_not_a_login_error(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    """Wrong credentials raise FurboLoginError."""
-    aioclient_mock.post(
-        f"{MAIN_URL}/v5/account/read/login",
-        status=400,
-        json={"Code": 12000, "Message": "bad"},
-    )
-    with pytest.raises(FurboLoginError):
+    """A transport failure during login stays a connection error."""
+    aioclient_mock.post(LOGIN, exc=aiohttp.ClientError())
+    with pytest.raises(FurboConnectionError):
         await _client(hass).start_login(c.EMAIL, "enc", "mob")
 
 
-async def test_login_12002_is_login_error(
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"Code": 12101, "AccountId": c.ACCOUNT_ID},
+        {"Code": 12101, "MfaAuthCodeCandidate": "C1"},
+        {"Code": 12101, "AccountId": "", "MfaAuthCodeCandidate": "C1"},
+        {"Code": 12101, "AccountId": c.ACCOUNT_ID, "MfaAuthCodeCandidate": 5},
+    ],
+)
+async def test_login_mfa_required_incomplete(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, body: dict[str, Any]
+) -> None:
+    """A 12101 without both validated MFA fields is a malformed response."""
+    aioclient_mock.post(LOGIN, status=400, json=body)
+    client = _client(hass)
+    with pytest.raises(FurboConnectionError):
+        await client.start_login(c.EMAIL, "enc", "mob")
+    assert client.account_id is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"AccountId": c.ACCOUNT_ID},
+        {"CognitoToken": "tok"},
+        {"AccountId": c.ACCOUNT_ID, "CognitoToken": ""},
+        {"AccountId": 1, "CognitoToken": "tok"},
+        [],
+        "text",
+    ],
+)
+async def test_login_200_malformed(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, body: Any
+) -> None:
+    """A 200 without both login fields never stores a partial login."""
+    aioclient_mock.post(LOGIN, json=body)
+    client = _client(hass)
+    with pytest.raises(FurboConnectionError):
+        await client.start_login(c.EMAIL, "enc", "mob")
+    assert client.account_id is None
+    assert client.cognito_token is None
+
+
+async def test_login_non_json(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    """A 12002 at the login endpoint is a login failure, not a stale token."""
-    aioclient_mock.post(
-        f"{MAIN_URL}/v5/account/read/login",
-        status=400,
-        json={"Code": 12002, "Message": "wrong token or token expired"},
-    )
-    with pytest.raises(FurboLoginError):
+    """A non-JSON body is a connection error and is not echoed back."""
+    aioclient_mock.post(LOGIN, text=f"<html>{BODY_MARKER}</html>")
+    with pytest.raises(FurboConnectionError) as err:
         await _client(hass).start_login(c.EMAIL, "enc", "mob")
+    assert BODY_MARKER not in str(err.value)
 
 
+async def test_send_mfa_code_without_candidate(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """send_mfa_code returns the original candidate when none is echoed back."""
+    aioclient_mock.post(SEND_CODE, json={})
+    assert await _client(hass).send_mfa_code("ORIG") == "ORIG"
+
+
+async def test_send_mfa_code_bad_candidate(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A non-string candidate is rejected rather than passed on."""
+    aioclient_mock.post(SEND_CODE, json={"MfaAuthCodeCandidate": 42})
+    with pytest.raises(FurboConnectionError):
+        await _client(hass).send_mfa_code("ORIG")
+
+
+@pytest.mark.parametrize("code", [12102, 12103, 12002, 12101, 80001])
 async def test_mfa_rejected(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, code: int
+) -> None:
+    """Any rejection verifying the emailed code surfaces as FurboMfaError."""
+    body: dict[str, Any] = {"Code": code, "Message": BODY_MARKER}
+    if code == 12101:
+        body |= {"AccountId": c.ACCOUNT_ID, "MfaAuthCodeCandidate": "C"}
+    aioclient_mock.post(VERIFY, status=400, json=body)
+    with pytest.raises(FurboMfaError) as err:
+        await _client(hass).complete_login(c.EMAIL, "enc", "mob", "C", "0000")
+    assert err.value.code == code
+    assert BODY_MARKER not in str(err.value)
+
+
+async def test_mfa_verify_malformed(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    """A bad MFA code raises FurboMfaError."""
-    aioclient_mock.post(
-        f"{MAIN_URL}/v4/account/mfa/verify",
-        status=400,
-        json={"Code": 12102, "Message": "bad"},
-    )
-    with pytest.raises(FurboMfaError):
+    """A verify response without MfaAuthCode is a connection error."""
+    aioclient_mock.post(VERIFY, json={"Something": "else"})
+    with pytest.raises(FurboConnectionError):
+        await _client(hass).complete_login(c.EMAIL, "enc", "mob", "C", "0000")
+    assert aioclient_mock.call_count == 1
+
+
+async def test_mfa_connection_error(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A transport failure verifying the code is not reported as a bad code."""
+    aioclient_mock.post(VERIFY, exc=TimeoutError())
+    with pytest.raises(FurboConnectionError):
         await _client(hass).complete_login(c.EMAIL, "enc", "mob", "C", "0000")
 
 
-async def test_verify_error_is_mfa_error(
-    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
-) -> None:
-    """Any rejection verifying the emailed code surfaces as FurboMfaError."""
-    aioclient_mock.post(
-        f"{MAIN_URL}/v4/account/mfa/verify", status=400, json={"Code": 12002}
-    )
-    with pytest.raises(FurboMfaError):
-        await _client(hass).complete_login(c.EMAIL, "enc", "mob", "C", "1")
+# --- generic error mapping -----------------------------------------------------
 
 
 async def test_token_invalid_raises_auth(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
     """A 12002 on an authenticated call maps to FurboAuthError."""
-    aioclient_mock.post(
-        f"{MAIN_URL}/v2/account/info",
-        status=400,
-        json={"Code": 12002, "Message": "wrong token or token expired"},
-    )
-    with pytest.raises(FurboAuthError):
+    aioclient_mock.post(INFO, status=400, json={"Code": 12002, "Message": BODY_MARKER})
+    with pytest.raises(FurboAuthError) as err:
         await _client(hass, authed=True).get_account_info()
+    assert err.value.code == 12002
+    assert BODY_MARKER not in str(err.value)
+    assert "/v2/account/info" in str(err.value)
+    assert "400" in str(err.value)
+
+
+@pytest.mark.parametrize(
+    ("status", "response", "expected_code"),
+    [
+        (400, {"json": {"Code": 12001, "Message": BODY_MARKER}}, 12001),
+        (400, {"json": {"Message": BODY_MARKER}}, None),
+        (400, {"json": {"Code": "12001"}}, None),
+        (400, {"json": {"Code": True}}, None),
+        (400, {"json": [BODY_MARKER]}, None),
+        (500, {"json": BODY_MARKER}, None),
+        (502, {"text": "null"}, None),
+    ],
+)
+async def test_error_payloads(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    status: int,
+    response: dict[str, Any],
+    expected_code: int | None,
+) -> None:
+    """Incomplete or non-object error payloads still map to a clean error."""
+    aioclient_mock.post(INFO, status=status, **response)
+    with pytest.raises(FurboError) as err:
+        await _client(hass, authed=True).get_account_info()
+    assert type(err.value) is FurboError
+    assert err.value.code == expected_code
+    assert BODY_MARKER not in str(err.value)
+    assert str(status) in str(err.value)
+
+
+async def test_error_non_json(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A non-JSON error page is a connection error and is not echoed back."""
+    aioclient_mock.post(INFO, status=503, text=f"<html>{BODY_MARKER}</html>")
+    with pytest.raises(FurboConnectionError) as err:
+        await _client(hass, authed=True).get_account_info()
+    assert BODY_MARKER not in str(err.value)
+    assert "503" in str(err.value)
 
 
 async def test_connection_error(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
     """A transport failure raises FurboConnectionError."""
-    aioclient_mock.post(f"{MAIN_URL}/v2/account/info", exc=aiohttp.ClientError())
-    with pytest.raises(FurboConnectionError):
+    aioclient_mock.post(INFO, exc=aiohttp.ClientError(BODY_MARKER))
+    with pytest.raises(FurboConnectionError) as err:
         await _client(hass, authed=True).get_account_info()
+    assert "ClientError" in str(err.value)
+    assert BODY_MARKER not in str(err.value)
 
 
 async def test_not_logged_in(hass: HomeAssistant) -> None:
     """Authenticated calls without a token raise FurboAuthError."""
     with pytest.raises(FurboAuthError):
         await _client(hass).get_devices()
+
+
+# --- rate limiting ---------------------------------------------------------------
 
 
 async def test_rate_limit_retry(
@@ -187,72 +324,168 @@ async def test_rate_limit_retry(
             method, url, status=200, json={"Summary": "ok"}
         )
 
-    aioclient_mock.post(
-        f"{PETGPT_URL}/v1/calendar/daily-summary/get", side_effect=summary
-    )
+    aioclient_mock.post(SUMMARY, side_effect=summary)
     with patch(
         "custom_components.furbo.api.asyncio.sleep", new_callable=AsyncMock
     ) as sleep:
         assert await _client(hass, authed=True).get_daily_summary("2026-09-05") == "ok"
-    sleep.assert_awaited_once()
+    sleep.assert_awaited_once_with(10.0)
     assert calls["n"] == 2
 
 
-async def test_rate_limit_exhausted(
-    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+@pytest.mark.parametrize(
+    ("time_wait", "expected"),
+    [
+        (1, 10.0),
+        (30, 30.0),
+        ("45", 45.0),
+        (10_000, 120.0),
+        ("soon", 10.0),
+        (True, 10.0),
+        (None, 10.0),
+        ([5], 10.0),
+    ],
+)
+async def test_rate_limit_wait_is_bounded(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    time_wait: Any,
+    expected: float,
 ) -> None:
-    """Persistent 80002 responses eventually raise after the retries run out."""
-    aioclient_mock.post(
-        f"{PETGPT_URL}/v1/calendar/daily-summary/get",
-        status=400,
-        json={"Code": 80002, "TimeWait": 1},
-    )
+    """TimeWait is validated and clamped before it is slept on."""
+    body: dict[str, Any] = {"Code": 80002}
+    if time_wait is not None:
+        body["TimeWait"] = time_wait
+    aioclient_mock.post(SUMMARY, status=400, json=body)
     with (
-        patch("custom_components.furbo.api.asyncio.sleep", new_callable=AsyncMock),
+        patch(
+            "custom_components.furbo.api.asyncio.sleep", new_callable=AsyncMock
+        ) as sleep,
         pytest.raises(FurboError) as err,
     ):
         await _client(hass, authed=True).get_daily_summary("2026-09-05")
     assert err.value.code == 80002
+    assert sleep.await_count == 3
+    assert all(call.args == (expected,) for call in sleep.await_args_list)
+
+
+# --- reads ------------------------------------------------------------------------
 
 
 async def test_reads(hass: HomeAssistant, aioclient_mock: AiohttpClientMocker) -> None:
-    """The read endpoints decode their payloads."""
-    aioclient_mock.post(
-        f"{MAIN_URL}/v2/account/{c.ACCOUNT_ID}/device", json=c.DEVICE_LIST_RESPONSE
-    )
-    aioclient_mock.post(f"{MAIN_URL}/v5/device/alert-setting", json=dict(c.ALERTS))
-    aioclient_mock.post(f"{MAIN_URL}/v3/service/license", json=c.LICENSE_RESPONSE)
-    aioclient_mock.post(
-        f"{PETGPT_URL}/v1/calendar/notable-events/get",
-        json={"Events": c.NOTABLE_EVENTS},
-    )
-    aioclient_mock.post(
-        f"{PETGPT_URL}/v2/calendar/activity-report/get", json=c.ACTIVITY_RESPONSE
-    )
+    """The read endpoints decode and normalise their payloads."""
+    aioclient_mock.post(INFO, json=c.ACCOUNT_INFO)
+    aioclient_mock.post(DEVICES, json=c.DEVICE_LIST_RESPONSE)
+    aioclient_mock.post(ALERTS, json=dict(c.ALERTS))
+    aioclient_mock.post(LICENSE, json=c.LICENSE_RESPONSE)
+    aioclient_mock.post(EVENTS, json={"Events": c.NOTABLE_EVENTS})
+    aioclient_mock.post(SUMMARY, json={"Summary": c.DAILY_SUMMARY})
+    aioclient_mock.post(ACTIVITY, json=c.ACTIVITY_RESPONSE)
     client = _client(hass, authed=True)
+    assert (await client.get_account_info())["Timezone"] == "Europe/London"
     assert (await client.get_devices())[0]["Id"] == c.DEVICE_ID
     assert (await client.get_alert_settings(c.DEVICE_ID))["Barking"] == "1"
-    assert c.DEVICE_ID in (await client.get_license())["DevicesLicense"]
+    assert (await client.get_license())[c.DEVICE_ID][0]["TimeLeftDays"] == 24
     assert len(await client.get_notable_events("2026-09-05")) == 2
-    assert "2026-09-05" in await client.get_activity_report(["2026-09-05"])
+    assert await client.get_daily_summary("2026-09-05") == c.DAILY_SUMMARY
+    assert await client.get_activity_report(["2026-09-05"]) == c.ACTIVITY_TOTALS
+
+
+async def test_reads_optional_fields_absent(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Optional fields may be missing without breaking the read."""
+    aioclient_mock.post(INFO, json={})
+    aioclient_mock.post(DEVICES, json={})
+    aioclient_mock.post(LICENSE, json={})
+    aioclient_mock.post(EVENTS, json={})
+    aioclient_mock.post(SUMMARY, json={})
+    aioclient_mock.post(ACTIVITY, json={"2026-09-05": {"Data": None, "Error": None}})
+    client = _client(hass, authed=True)
+    assert await client.get_account_info() == {}
+    assert await client.get_devices() == []
+    assert await client.get_license() == {}
+    assert await client.get_notable_events("2026-09-05") == []
+    assert await client.get_daily_summary("2026-09-05") == ""
+    assert await client.get_activity_report(["2026-09-05"]) == {"2026-09-05": {}}
+
+
+async def test_license_normalises_days(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """TimeLeftDays becomes an int or is dropped when it is not numeric."""
+    aioclient_mock.post(
+        LICENSE,
+        json={
+            "DevicesLicense": {
+                "A": [{"TimeLeftDays": "12"}, {"TimeLeftDays": 3.9}],
+                "B": [{"TimeLeftDays": "soon"}, {}],
+            }
+        },
+    )
+    licenses = await _client(hass, authed=True).get_license()
+    assert licenses == {
+        "A": [{"TimeLeftDays": 12}, {"TimeLeftDays": 3}],
+        "B": [{}, {}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("url", "body"),
+    [
+        (INFO, {"Timezone": 1}),
+        (DEVICES, {"DeviceList": {}}),
+        (DEVICES, {"DeviceList": ["x"]}),
+        (DEVICES, {"DeviceList": [{"DeviceName": "No id"}]}),
+        (DEVICES, {"DeviceList": [{"Id": ""}]}),
+        (DEVICES, {"DeviceList": [{"Id": 123}]}),
+        (DEVICES, {"DeviceList": [{"Id": "A", "DeviceName": ["x"]}]}),
+        (ALERTS, {"Barking": 1}),
+        (ALERTS, []),
+        (LICENSE, {"DevicesLicense": []}),
+        (LICENSE, {"DevicesLicense": {"A": {}}}),
+        (LICENSE, {"DevicesLicense": {"A": [1]}}),
+        (LICENSE, {"DevicesLicense": {"A": [{"SubscriptionStatus": 1}]}}),
+        (EVENTS, {"Events": {}}),
+        (EVENTS, {"Events": [1]}),
+        (EVENTS, {"Events": [{"DeviceId": 1}]}),
+        (EVENTS, {"Events": [{"LocalTime": 1}]}),
+        (SUMMARY, {"Summary": ["x"]}),
+        (SUMMARY, "just text"),
+        (ACTIVITY, {"2026-09-05": []}),
+        (ACTIVITY, {"2026-09-05": {"Data": []}}),
+        (ACTIVITY, {"2026-09-05": {"Data": {"Barking": 3}}}),
+        (ACTIVITY, {"2026-09-05": {"Data": {"Barking": [1, "x"]}}}),
+        (ACTIVITY, {"2026-09-05": {"Data": {"Barking": [1, None]}}}),
+    ],
+)
+async def test_reads_malformed_200(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, url: str, body: Any
+) -> None:
+    """A 200 whose shape does not match the contract is a connection error."""
+    aioclient_mock.post(url, json=body)
+    client = _client(hass, authed=True)
+    calls: dict[str, Callable[[], Awaitable[Any]]] = {
+        INFO: client.get_account_info,
+        DEVICES: client.get_devices,
+        ALERTS: lambda: client.get_alert_settings(c.DEVICE_ID),
+        LICENSE: client.get_license,
+        EVENTS: lambda: client.get_notable_events("2026-09-05"),
+        SUMMARY: lambda: client.get_daily_summary("2026-09-05"),
+        ACTIVITY: lambda: client.get_activity_report(["2026-09-05"]),
+    }
+    with pytest.raises(FurboConnectionError) as err:
+        await calls[url]()
+    assert "Malformed response" in str(err.value)
 
 
 async def test_set_alert_setting(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
     """A write posts to the update endpoint."""
-    aioclient_mock.post(
-        f"{MAIN_URL}/v5/device/alert-setting/update", json={"PersonDetection": "1"}
-    )
+    aioclient_mock.post(f"{ALERTS}/update", json={"PersonDetection": "1"})
     await _client(hass, authed=True).set_alert_setting(
         c.DEVICE_ID, "PersonDetection", True
     )
     assert aioclient_mock.call_count == 1
-
-
-async def test_send_mfa_code_without_candidate(
-    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
-) -> None:
-    """send_mfa_code returns the original candidate when none is echoed back."""
-    aioclient_mock.post(f"{MAIN_URL}/v4/account/mfa/login/send-code", json={})
-    assert await _client(hass).send_mfa_code("ORIG") == "ORIG"
+    assert aioclient_mock.mock_calls[0][2]["Value"] == "1"

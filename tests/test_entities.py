@@ -22,11 +22,11 @@ async def test_sensor_states(
     """Sensors reflect the sampled cloud data."""
     await setup_integration(hass, mock_config_entry)
 
-    days = hass.states.get("sensor.hallway_subscription_days_left")
+    days = hass.states.get("sensor.test_camera_subscription_days_left")
     assert days.state == "24"
     assert days.attributes["unit_of_measurement"] == "d"
 
-    status = hass.states.get("sensor.hallway_subscription_status")
+    status = hass.states.get("sensor.test_camera_subscription_status")
     assert status.state == "Active"
 
     barking = hass.states.get("sensor.furbo_account_barking_events_today")
@@ -38,7 +38,7 @@ async def test_sensor_states(
     assert events.state == "2"
     assert events.attributes["summary"]
 
-    last = hass.states.get("sensor.hallway_last_event")
+    last = hass.states.get("sensor.test_camera_last_event")
     # Most recent of the two sampled events (11:31 local, Europe/London).
     assert last.state == "2026-09-05T10:31:14+00:00"
     assert last.attributes["action"] == "standing"
@@ -49,10 +49,11 @@ async def test_missing_subscription_is_unknown(
     hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
 ) -> None:
     """No subscription record yields unknown, not a crash."""
-    mock_client.get_license.return_value = {"DevicesLicense": {}}
+    mock_client.get_license.return_value = {}
     await setup_integration(hass, mock_config_entry)
-    assert hass.states.get("sensor.hallway_subscription_days_left").state == "unknown"
-    assert hass.states.get("sensor.hallway_subscription_status").state == "unknown"
+    days = hass.states.get("sensor.test_camera_subscription_days_left")
+    assert days.state == "unknown"
+    assert hass.states.get("sensor.test_camera_subscription_status").state == "unknown"
 
 
 async def test_switches_reflect_and_write(
@@ -61,29 +62,29 @@ async def test_switches_reflect_and_write(
     """Alert switches show state and write through to the client."""
     await setup_integration(hass, mock_config_entry)
 
-    assert hass.states.get("switch.hallway_barking_alert").state == "on"
-    assert hass.states.get("switch.hallway_person_alert").state == "off"
+    assert hass.states.get("switch.test_camera_barking_alert").state == "on"
+    assert hass.states.get("switch.test_camera_person_alert").state == "off"
     # Only known alert keys present in the payload become switches.
-    assert hass.states.get("switch.hallway_glass_breaking_alert") is None
+    assert hass.states.get("switch.test_camera_glass_breaking_alert") is None
 
     await hass.services.async_call(
         "switch",
         "turn_on",
-        {"entity_id": "switch.hallway_person_alert"},
+        {"entity_id": "switch.test_camera_person_alert"},
         blocking=True,
     )
     mock_client.set_alert_setting.assert_awaited_once_with(
         "AA11BB22CC33", "PersonDetection", True
     )
-    assert hass.states.get("switch.hallway_person_alert").state == "on"
+    assert hass.states.get("switch.test_camera_person_alert").state == "on"
 
     await hass.services.async_call(
         "switch",
         "turn_off",
-        {"entity_id": "switch.hallway_person_alert"},
+        {"entity_id": "switch.test_camera_person_alert"},
         blocking=True,
     )
-    assert hass.states.get("switch.hallway_person_alert").state == "off"
+    assert hass.states.get("switch.test_camera_person_alert").state == "off"
 
 
 async def test_switch_write_failure_raises(
@@ -96,7 +97,7 @@ async def test_switch_write_failure_raises(
         await hass.services.async_call(
             "switch",
             "turn_on",
-            {"entity_id": "switch.hallway_barking_alert"},
+            {"entity_id": "switch.test_camera_barking_alert"},
             blocking=True,
         )
 
@@ -108,7 +109,7 @@ async def test_unknown_timezone_falls_back(
     mock_client.get_account_info.return_value = {"Timezone": "Not/AZone"}
     await setup_integration(hass, mock_config_entry)
     # Sensor still exists and either has a value or is unknown, never errors.
-    assert hass.states.get("sensor.hallway_last_event") is not None
+    assert hass.states.get("sensor.test_camera_last_event") is not None
 
 
 async def test_specialised_alerts_disabled_by_default(
@@ -118,7 +119,7 @@ async def test_specialised_alerts_disabled_by_default(
     await setup_integration(hass, mock_config_entry)
     registry = er.async_get(hass)
 
-    barking = registry.async_get("switch.hallway_barking_alert")
+    barking = registry.async_get("switch.test_camera_barking_alert")
     assert barking is not None and barking.disabled_by is None
 
     # ContinuousBarking is in the sampled payload but not enabled by default.

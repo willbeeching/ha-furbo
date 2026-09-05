@@ -76,7 +76,7 @@ async def test_options_change_reloads(
     # The account sensor is no longer produced; a device sensor still works.
     account = hass.states.get("sensor.furbo_account_notable_events_today")
     assert account is None or account.state == "unavailable"
-    assert hass.states.get("sensor.hallway_subscription_days_left").state == "24"
+    assert hass.states.get("sensor.test_camera_subscription_days_left").state == "24"
 
 
 async def test_multiple_entries(hass: HomeAssistant, mock_client: AsyncMock) -> None:

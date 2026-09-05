@@ -8,3 +8,8 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      # The minimum lane deliberately pins the oldest supported Home Assistant
+      # (requirements-test-min.txt); Dependabot must not move it. The latest
+      # lane is bumped by hand when a new Home Assistant release is verified.
+      - dependency-name: pytest-homeassistant-custom-component
