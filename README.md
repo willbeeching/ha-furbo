@@ -32,6 +32,11 @@ Per camera (one Home Assistant device, linked under a "Furbo account" hub):
 - **Camera** entity with live streaming, created when a stream URL is set for
   that camera in the options (see [Live video](#live-video)). Snapshots are
   taken from the stream.
+- **Camera controls**, created when a bridge URL is set for that camera (see
+  [Controls via the bridge](#controls-via-the-bridge)): a camera power switch,
+  speaker volume, night vision and barking sensitivity selects, auto pet
+  tracking and auto zoom switches, and pan left, pan right, toss treat and
+  play treat sound buttons.
 - **Smart-alert switches** (configuration category): barking, crying, person,
   activity and the other alerts your camera reports. Toggling one writes the
   new value to the Furbo cloud.
@@ -86,7 +91,7 @@ credential-related is logged or included in diagnostics.
 ## Options
 
 Settings, Devices & services, Furbo, Configure. The first page covers polling;
-one further page per camera asks for its stream URL.
+one further page per camera asks for its stream URL and its bridge.
 
 - **Update interval (seconds)**: how often the cloud is polled. Default 300,
   minimum 60. The event calendar rejects repeat calls to the same endpoint
@@ -96,7 +101,12 @@ one further page per camera asks for its stream URL.
   polled. Default on.
 - **Stream URL** (per camera): an `rtsp://`, `rtsps://`, `http://` or
   `https://` URL that Home Assistant can play. Leave empty for no camera
-  entity. Changing it reloads the integration.
+  entity.
+- **Bridge URL** and **Bridge token** (per camera): where the bridge's HTTP
+  API listens, and the token it was started with. Leave empty for no control
+  entities.
+
+Changing any option reloads the integration.
 
 ## Live video
 
@@ -140,10 +150,42 @@ device state, pan and treat toss. The camera entity is tested against a
 mocked stream URL. What remains unproven is only the combination: the bridge
 under go2rtc feeding this entity on a running Home Assistant.
 
-The bridge also exposes controls the cloud does not (pan, treat toss, volume,
-night vision, camera power). Bringing those into Home Assistant needs the
-bridge to offer them over HTTP or MQTT, since the integration cannot load the
-TUTK library itself; that is the next design step and is not in this release.
+## Controls via the bridge
+
+The same bridge process also holds a control session to the camera and
+exposes it as a small HTTP API:
+
+```sh
+furbo_p2p.py serve --port 8791 --token <secret>
+```
+
+Enter `http://<bridge host>:8791` and the token as the camera's bridge URL and
+token in the options. The integration polls `GET /api/status` every 30
+seconds (the bridge answers from its own cache, refreshed from the camera at
+the same rate) and writes through `POST /api/settings`, `/api/pan`,
+`/api/toss` and `/api/treat-sound`. Every response is validated at the
+boundary and bodies never reach the log. The entities are unavailable while
+the bridge is unreachable or reports no P2P session, and a bridge that is
+down at startup does not stop the cloud entities from loading.
+
+Entities per camera with a bridge:
+
+| Entity | Type | Notes |
+| --- | --- | --- |
+| Camera | switch | camera power |
+| Speaker volume | number, 0 to 100 | |
+| Night vision | select: auto, on, off | |
+| Barking sensitivity | select: off, low, medium, high | the camera-side detector, distinct from the cloud alert switches |
+| Auto pet tracking, Auto zoom | switch | |
+| Pan left, Pan right | button | 60 degrees per press, the app's step |
+| Toss treat | button | dispenses a real treat |
+| Play treat sound | button | |
+
+Status: the bridge's HTTP layer is tested against a fake camera session, and
+the P2P commands behind it are the ones verified live on the research branch.
+The bridge process itself has not yet run against the camera for a long
+session, and whether the camera accepts the bridge's control session and
+go2rtc's video session at the same time is the first thing to confirm.
 
 ## How data is updated
 
@@ -169,9 +211,10 @@ by the fixed 60-second interval floor and a bounded retry that waits out an
 
 - **Live video needs a bridge.** The stream is TUTK P2P/DTLS and cannot be
   decoded by Home Assistant itself; see [Live video](#live-video).
-- **No treat tossing.** The cloud `control_device` endpoint returns success
-  for any action string, so it does not prove a treat was tossed; the app
-  tosses over P2P. Treat control is therefore deliberately not exposed here.
+- **Treat tossing needs the bridge.** The cloud `control_device` endpoint
+  returns success for any action string, so it does not prove a treat was
+  tossed; the app tosses over P2P. The toss button therefore exists only when
+  a bridge is configured.
 - Newly added cameras appear after the next reload, not instantly.
 - Cameras removed from the account are not auto-removed from the registry.
 - Only Furbo models on the `product.furbo.co` account API are supported.
@@ -212,8 +255,8 @@ app, which invalidates the stored session.
 
 Automated tests (`tests/`, run on Home Assistant 2025.2 and the latest stable)
 cover the config/options/reauth/reconfigure flows, setup and teardown, offline
-and recovery, multi-account, the entity states (camera included), diagnostics
-redaction, and the
+and recovery, multi-account, the entity states (camera and bridge controls
+included), diagnostics redaction, the bridge client, and the
 API client against a mocked socket. They mock the network at the HTTP boundary.
 They do **not** prove the live cloud contract; that was verified by hand on
 2026-09-05 against a real Furbo 360 and is recorded in

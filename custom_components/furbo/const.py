@@ -21,15 +21,26 @@ CONF_EVENTS_ENABLED: Final = "events_enabled"
 # Per-camera live-stream URLs, keyed by device id. The camera entity for a
 # device exists only while a URL is configured for it.
 CONF_STREAM_URLS: Final = "stream_urls"
+# Per-camera HTTP bridge, keyed by device id: {"url": str, "token": str}.
+# The bridge (furbo_p2p.py serve) holds the P2P session on the camera's LAN.
+CONF_BRIDGES: Final = "bridges"
 
 # Flow field key for the emailed code.
 CONF_MFA_CODE: Final = "mfa_code"
-# Options-flow field key for one camera's stream URL.
+# Options-flow field keys on the per-camera page.
 CONF_STREAM_URL: Final = "stream_url"
+CONF_BRIDGE_URL: Final = "bridge_url"
+CONF_BRIDGE_TOKEN: Final = "bridge_token"
 
 # Schemes accepted for a stream URL. These are what Home Assistant's stream
 # component and go2rtc can consume directly.
 STREAM_URL_SCHEMES: Final = ("rtsp://", "rtsps://", "http://", "https://")
+BRIDGE_URL_SCHEMES: Final = ("http://", "https://")
+
+# The bridge answers from a local cache, so polling it often is cheap.
+BRIDGE_SCAN_INTERVAL: Final = timedelta(seconds=30)
+# Relative rotation per pan button press, matching one press in the app.
+PAN_DEGREES: Final = 60
 
 DEFAULT_SCAN_INTERVAL: Final = timedelta(minutes=5)
 MIN_SCAN_INTERVAL_SECONDS: Final = 60

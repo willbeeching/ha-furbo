@@ -14,7 +14,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import FurboAuthError, FurboClient, FurboError
+from .bridge import BridgeState, FurboBridgeClient, FurboBridgeError
 from .const import (
+    BRIDGE_SCAN_INTERVAL,
     CONF_EVENTS_ENABLED,
     CONF_SCAN_INTERVAL,
     DEFAULT_EVENTS_ENABLED,
@@ -178,3 +180,37 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
             if found is not None:
                 device.last_event = {k: v for k, v in found.items() if k != "_when"}
                 device.last_event_at = found["_when"]
+
+
+class FurboBridgeCoordinator(DataUpdateCoordinator[BridgeState]):
+    """Polls one camera's HTTP bridge for P2P state."""
+
+    config_entry: FurboConfigEntry
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: FurboConfigEntry,
+        device_id: str,
+        client: FurboBridgeClient,
+        cloud: FurboCoordinator,
+    ) -> None:
+        """Set up polling of the bridge that fronts one camera."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            config_entry=entry,
+            name=f"{DOMAIN} bridge {device_id}",
+            update_interval=BRIDGE_SCAN_INTERVAL,
+        )
+        self.device_id = device_id
+        self.client = client
+        # The cloud coordinator owns the device metadata (name, model, firmware).
+        self.cloud = cloud
+
+    async def _async_update_data(self) -> BridgeState:
+        """Fetch the bridge's cached camera state."""
+        try:
+            return await self.client.async_get_status()
+        except FurboBridgeError as err:
+            raise UpdateFailed(str(err)) from err

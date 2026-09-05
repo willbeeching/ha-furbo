@@ -1,8 +1,11 @@
-"""Switch platform for Furbo smart-alert settings."""
+"""Switch platform for Furbo: cloud smart alerts and bridge-backed controls."""
 
 from __future__ import annotations
 
-from homeassistant.components.switch import SwitchEntity
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -10,12 +13,45 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import FurboConfigEntry
 from .api import FurboError
+from .bridge import BridgeState
 from .const import ALERT_KEYS, DEFAULT_ENABLED_ALERTS, DOMAIN
-from .coordinator import FurboCoordinator
-from .entity import FurboDeviceEntity
+from .coordinator import FurboBridgeCoordinator, FurboCoordinator
+from .entity import FurboBridgeEntity, FurboDeviceEntity
 
 # Writes go to the cloud; serialize them to avoid racing settings updates.
 PARALLEL_UPDATES = 1
+
+
+@dataclass(frozen=True, kw_only=True)
+class FurboBridgeSwitchDescription(SwitchEntityDescription):
+    """Describes an on/off camera setting served by the bridge."""
+
+    value_fn: Callable[[BridgeState], bool | None]
+    setting: str
+
+
+BRIDGE_SWITCHES: tuple[FurboBridgeSwitchDescription, ...] = (
+    FurboBridgeSwitchDescription(
+        key="camera_power",
+        translation_key="camera_power",
+        value_fn=lambda state: state.camera_on,
+        setting="camera_on",
+    ),
+    FurboBridgeSwitchDescription(
+        key="auto_tracking",
+        translation_key="auto_tracking",
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: state.auto_tracking,
+        setting="auto_tracking",
+    ),
+    FurboBridgeSwitchDescription(
+        key="auto_zoom",
+        translation_key="auto_zoom",
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: state.auto_zoom,
+        setting="auto_zoom",
+    ),
+)
 
 
 async def async_setup_entry(
@@ -23,14 +59,19 @@ async def async_setup_entry(
     entry: FurboConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up one switch per known smart alert present on each device."""
+    """Set up alert switches per device and control switches per bridge."""
     coordinator = entry.runtime_data.coordinator
-    entities = [
+    entities: list[SwitchEntity] = [
         FurboAlertSwitch(coordinator, device_id, key)
         for device_id, device in coordinator.data.devices.items()
         for key in ALERT_KEYS
         if key in device.alerts
     ]
+    entities.extend(
+        FurboBridgeSwitch(bridge, description)
+        for bridge in entry.runtime_data.bridges.values()
+        for description in BRIDGE_SWITCHES
+    )
     async_add_entities(entities)
 
 
@@ -85,3 +126,32 @@ def _snake(key: str) -> str:
             out.append("_")
         out.append(char.lower())
     return "".join(out)
+
+
+class FurboBridgeSwitch(FurboBridgeEntity, SwitchEntity):
+    """An on/off camera setting written through the bridge."""
+
+    entity_description: FurboBridgeSwitchDescription
+
+    def __init__(
+        self,
+        coordinator: FurboBridgeCoordinator,
+        description: FurboBridgeSwitchDescription,
+    ) -> None:
+        """Initialise the switch for one bridge setting."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_unique_id = f"{coordinator.device_id}_{description.key}"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return the setting, or None while the camera has not reported it."""
+        return self.entity_description.value_fn(self.coordinator.data)
+
+    async def async_turn_on(self, **kwargs: object) -> None:
+        """Enable the setting."""
+        await self._async_apply(**{self.entity_description.setting: True})
+
+    async def async_turn_off(self, **kwargs: object) -> None:
+        """Disable the setting."""
+        await self._async_apply(**{self.entity_description.setting: False})

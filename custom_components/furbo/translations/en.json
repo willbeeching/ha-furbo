@@ -51,25 +51,30 @@
     "step": {
       "init": {
         "title": "Furbo options",
-        "description": "How often to poll the Furbo cloud, and whether to poll the pet calendar for events and daily activity. The next step asks for each camera's live-stream URL.",
+        "description": "How often to poll the Furbo cloud, and whether to poll the pet calendar for events and daily activity. The next pages cover each camera's live video and local bridge.",
         "data": {
           "scan_interval": "Update interval (seconds)",
           "events_enabled": "Poll the pet calendar"
         }
       },
-      "stream": {
-        "title": "Live video for {name}",
-        "description": "Furbo streams over a proprietary P2P protocol that Home Assistant cannot speak directly. Run the Furbo P2P bridge on a machine on the camera's LAN, publish it through go2rtc, and enter the resulting RTSP URL here. Leave empty for no camera entity.",
+      "camera": {
+        "title": "Live video and controls for {name}",
+        "description": "Furbo streams and takes commands over a proprietary P2P protocol that Home Assistant cannot speak directly. Run the Furbo P2P bridge on a machine on the camera's LAN: publish its video through go2rtc and enter the RTSP URL, and run its HTTP API (furbo_p2p.py serve) and enter that URL for camera controls. Leave a field empty to skip it.",
         "data": {
-          "stream_url": "Stream URL"
+          "stream_url": "Stream URL",
+          "bridge_url": "Bridge URL",
+          "bridge_token": "Bridge token"
         },
         "data_description": {
-          "stream_url": "For example rtsp://192.168.1.10:8554/furbo. Accepted schemes: rtsp, rtsps, http, https."
+          "stream_url": "For example rtsp://192.168.1.10:8554/furbo. Accepted schemes: rtsp, rtsps, http, https. Creates the camera entity.",
+          "bridge_url": "For example http://192.168.1.10:8791. Enables camera power, volume, night vision, bark sensitivity, tracking, pan and treat toss.",
+          "bridge_token": "The value given to furbo_p2p.py serve --token, if any."
         }
       }
     },
     "error": {
-      "invalid_stream_url": "Enter an rtsp://, rtsps://, http:// or https:// URL, or leave the field empty."
+      "invalid_stream_url": "Enter an rtsp://, rtsps://, http:// or https:// URL, or leave the field empty.",
+      "invalid_bridge_url": "Enter an http:// or https:// URL, or leave the field empty."
     }
   },
   "entity": {
@@ -136,6 +141,15 @@
       },
       "alert_furbo_on_off": {
         "name": "Furbo on/off alert"
+      },
+      "camera_power": {
+        "name": "Camera"
+      },
+      "auto_tracking": {
+        "name": "Auto pet tracking"
+      },
+      "auto_zoom": {
+        "name": "Auto zoom"
       }
     },
     "sensor": {
@@ -157,11 +171,52 @@
       "notable_events_today": {
         "name": "Notable events today"
       }
+    },
+    "number": {
+      "volume": {
+        "name": "Speaker volume"
+      }
+    },
+    "select": {
+      "night_mode": {
+        "name": "Night vision",
+        "state": {
+          "auto": "Auto",
+          "on": "On",
+          "off": "Off"
+        }
+      },
+      "bark_sensitivity": {
+        "name": "Barking sensitivity",
+        "state": {
+          "off": "Off",
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High"
+        }
+      }
+    },
+    "button": {
+      "pan_left": {
+        "name": "Pan left"
+      },
+      "pan_right": {
+        "name": "Pan right"
+      },
+      "toss_treat": {
+        "name": "Toss treat"
+      },
+      "treat_sound": {
+        "name": "Play treat sound"
+      }
     }
   },
   "exceptions": {
     "set_alert_failed": {
       "message": "Could not update the {name} alert: {error}"
+    },
+    "bridge_command_failed": {
+      "message": "The Furbo bridge did not accept the command: {error}"
     }
   }
 }

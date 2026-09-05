@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.furbo.bridge import BridgeState
 from custom_components.furbo.const import (
     CONF_ACCOUNT_ID,
     CONF_COGNITO_TOKEN,
@@ -55,6 +56,35 @@ def mock_client() -> Generator[AsyncMock]:
         patch("custom_components.furbo.config_flow.FurboClient", return_value=client),
     ):
         yield client
+
+
+BRIDGE_STATE = BridgeState(
+    connected=True,
+    camera_on=True,
+    volume=40,
+    muted=False,
+    night_mode="auto",
+    bark_sensitivity="medium",
+    auto_tracking=False,
+    auto_zoom=True,
+    firmware="108",
+)
+
+
+def _make_bridge() -> AsyncMock:
+    """Return an AsyncMock shaped like FurboBridgeClient."""
+    bridge = AsyncMock()
+    bridge.async_get_status.return_value = BRIDGE_STATE
+    bridge.async_set.return_value = BRIDGE_STATE
+    return bridge
+
+
+@pytest.fixture
+def mock_bridge() -> Generator[AsyncMock]:
+    """Patch FurboBridgeClient where the integration constructs it."""
+    bridge = _make_bridge()
+    with patch("custom_components.furbo.FurboBridgeClient", return_value=bridge):
+        yield bridge
 
 
 @pytest.fixture

@@ -20,6 +20,9 @@ from custom_components.furbo.api import (
 )
 from custom_components.furbo.const import (
     CONF_ACCOUNT_ID,
+    CONF_BRIDGE_TOKEN,
+    CONF_BRIDGE_URL,
+    CONF_BRIDGES,
     CONF_EVENTS_ENABLED,
     CONF_MFA_CODE,
     CONF_SCAN_INTERVAL,
@@ -259,7 +262,7 @@ async def test_options_flow(
         {CONF_SCAN_INTERVAL: 120, CONF_EVENTS_ENABLED: False},
     )
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "stream"
+    assert result["step_id"] == "camera"
     assert result["description_placeholders"] == {"name": "Test Camera"}
 
     # A URL with an unsupported scheme is rejected and the step is shown again.
@@ -267,17 +270,36 @@ async def test_options_flow(
         result["flow_id"], {CONF_STREAM_URL: "exec:python3 bridge.py"}
     )
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "stream"
-    assert result["errors"] == {"base": "invalid_stream_url"}
+    assert result["step_id"] == "camera"
+    assert result["errors"] == {CONF_STREAM_URL: "invalid_stream_url"}
+
+    # A bridge URL with an unsupported scheme is rejected on its own field.
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_STREAM_URL: "rtsp://ok/furbo", CONF_BRIDGE_URL: "ftp://bridge"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_BRIDGE_URL: "invalid_bridge_url"}
 
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {CONF_STREAM_URL: "  RTSP://go2rtc.local:8554/furbo  "}
+        result["flow_id"],
+        {
+            CONF_STREAM_URL: "  RTSP://go2rtc.local:8554/furbo  ",
+            CONF_BRIDGE_URL: "http://bridge.local:8791/",
+            CONF_BRIDGE_TOKEN: "s3cret",
+        },
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert mock_config_entry.options == {
         CONF_SCAN_INTERVAL: 120,
         CONF_EVENTS_ENABLED: False,
         CONF_STREAM_URLS: {c.DEVICE_ID: "RTSP://go2rtc.local:8554/furbo"},
+        CONF_BRIDGES: {
+            c.DEVICE_ID: {
+                CONF_BRIDGE_URL: "http://bridge.local:8791",
+                CONF_BRIDGE_TOKEN: "s3cret",
+            }
+        },
     }
 
 
@@ -288,16 +310,29 @@ async def test_options_flow_clears_stream_url(
     await setup_integration(
         hass,
         mock_config_entry,
-        {CONF_STREAM_URLS: {c.DEVICE_ID: "rtsp://old/furbo", "GONE": "rtsp://x"}},
+        {
+            CONF_STREAM_URLS: {c.DEVICE_ID: "rtsp://old/furbo", "GONE": "rtsp://x"},
+            CONF_BRIDGES: {
+                c.DEVICE_ID: {CONF_BRIDGE_URL: "http://old:8791"},
+                "GONE": {CONF_BRIDGE_URL: "http://x"},
+            },
+        },
     )
     result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_SCAN_INTERVAL: 300, CONF_EVENTS_ENABLED: True}
     )
-    assert result["step_id"] == "stream"
-    # The current URL is offered back as the suggested value.
-    schema_key = next(iter(result["data_schema"].schema))
-    assert schema_key.description == {"suggested_value": "rtsp://old/furbo"}
+    assert result["step_id"] == "camera"
+    # The current values are offered back as suggested values.
+    suggested = {
+        key.schema: key.description["suggested_value"]
+        for key in result["data_schema"].schema
+    }
+    assert suggested == {
+        CONF_STREAM_URL: "rtsp://old/furbo",
+        CONF_BRIDGE_URL: "http://old:8791",
+        CONF_BRIDGE_TOKEN: "",
+    }
 
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -305,6 +340,7 @@ async def test_options_flow_clears_stream_url(
         CONF_SCAN_INTERVAL: 300,
         CONF_EVENTS_ENABLED: True,
         CONF_STREAM_URLS: {},
+        CONF_BRIDGES: {},
     }
 
 
@@ -328,12 +364,17 @@ async def test_options_flow_two_cameras(
     assert result["type"] is FlowResultType.FORM
     assert result["description_placeholders"] == {"name": "Kitchen"}
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {CONF_STREAM_URL: "https://h/b.m3u8"}
+        result["flow_id"],
+        {CONF_STREAM_URL: "https://h/b.m3u8", CONF_BRIDGE_URL: "https://h:8791"},
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert mock_config_entry.options[CONF_STREAM_URLS] == {
         c.DEVICE_ID: "rtsp://h/a",
         "ZZ99": "https://h/b.m3u8",
+    }
+    # A bridge without a token stores no token key at all.
+    assert mock_config_entry.options[CONF_BRIDGES] == {
+        "ZZ99": {CONF_BRIDGE_URL: "https://h:8791"}
     }
 
 
@@ -349,6 +390,7 @@ async def test_options_flow_without_cameras(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert mock_config_entry.options[CONF_STREAM_URLS] == {}
+    assert mock_config_entry.options[CONF_BRIDGES] == {}
 
 
 async def test_login_12002_shows_invalid_auth(

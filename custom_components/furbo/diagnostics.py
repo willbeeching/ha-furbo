@@ -7,7 +7,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from . import FurboConfigEntry
-from .const import CONF_STREAM_URLS
+from .const import CONF_BRIDGES, CONF_STREAM_URLS
 
 # Device metadata that is safe to share. Identifiers (Id, P2PUuid, P2PAccountId,
 # P2PAccountKey, AuthKey, DeviceHashData, MAC) are deliberately excluded.
@@ -38,10 +38,16 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry with identifiers withheld."""
     coordinator = entry.runtime_data.coordinator
+    coordinator_bridges = entry.runtime_data.bridges
     data = coordinator.data
-    # Stream URLs can embed hostnames and credentials; report presence only.
+    # Stream and bridge URLs can embed hostnames and credentials; report
+    # presence only.
     stream_urls: dict[str, str] = entry.options.get(CONF_STREAM_URLS, {})
-    options = {k: v for k, v in entry.options.items() if k != CONF_STREAM_URLS}
+    options = {
+        k: v
+        for k, v in entry.options.items()
+        if k not in (CONF_STREAM_URLS, CONF_BRIDGES)
+    }
 
     devices = []
     for index, device in enumerate(data.devices.values()):
@@ -59,6 +65,12 @@ async def async_get_config_entry_diagnostics(
             "has_recent_event": device.last_event_at is not None,
             "has_stream_url": device.device_id in stream_urls,
         }
+        if (bridge := coordinator_bridges.get(device.device_id)) is not None:
+            entry_out["bridge"] = {
+                "last_update_success": bridge.last_update_success,
+                "connected": bridge.data.connected if bridge.data else None,
+                "firmware": bridge.data.firmware if bridge.data else None,
+            }
         if device.subscription is not None:
             entry_out["subscription"] = {
                 key: device.subscription.get(key) for key in _SAFE_SUBSCRIPTION_FIELDS

@@ -147,6 +147,18 @@
           "on": "mdi:bell-ring",
           "off": "mdi:bell-off"
         }
+      },
+      "camera_power": {
+        "default": "mdi:cctv",
+        "state": {
+          "off": "mdi:cctv-off"
+        }
+      },
+      "auto_tracking": {
+        "default": "mdi:target"
+      },
+      "auto_zoom": {
+        "default": "mdi:magnify-scan"
       }
     },
     "sensor": {
@@ -167,6 +179,33 @@
       },
       "notable_events_today": {
         "default": "mdi:paw"
+      }
+    },
+    "number": {
+      "volume": {
+        "default": "mdi:volume-high"
+      }
+    },
+    "select": {
+      "night_mode": {
+        "default": "mdi:weather-night"
+      },
+      "bark_sensitivity": {
+        "default": "mdi:dog-side"
+      }
+    },
+    "button": {
+      "pan_left": {
+        "default": "mdi:rotate-left"
+      },
+      "pan_right": {
+        "default": "mdi:rotate-right"
+      },
+      "toss_treat": {
+        "default": "mdi:bone"
+      },
+      "treat_sound": {
+        "default": "mdi:music-note"
       }
     }
   }

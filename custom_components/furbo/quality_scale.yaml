@@ -91,7 +91,7 @@ rules:
     comment: DataUpdateCoordinator logs the first failure and recovery once.
   parallel-updates:
     status: done
-    comment: PARALLEL_UPDATES set in camera.py (0), sensor.py (0) and switch.py (1).
+    comment: PARALLEL_UPDATES set in camera.py (0), sensor.py (0) and in switch.py, number.py, select.py and button.py (1).
   reauthentication-flow:
     status: done
     comment: async_step_reauth/reauth_confirm updates and reloads the entry.
@@ -139,7 +139,7 @@ rules:
       runtime add-listener is not yet implemented.
   entity-category:
     status: done
-    comment: Alert switches are CONFIG; subscription sensors are DIAGNOSTIC.
+    comment: Alert switches and the bridge settings (volume, night vision, sensitivity, tracking, zoom) are CONFIG; subscription sensors are DIAGNOSTIC.
   entity-device-class:
     status: done
     comment: Timestamp device class on last_event; measurement/total_increasing state classes on counts.

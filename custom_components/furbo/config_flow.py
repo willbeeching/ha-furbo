@@ -16,6 +16,11 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.selector import (
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 import voluptuous as vol
 
 from . import FurboConfigEntry
@@ -30,7 +35,11 @@ from .api import (
     new_mobile_id,
 )
 from .const import (
+    BRIDGE_URL_SCHEMES,
     CONF_ACCOUNT_ID,
+    CONF_BRIDGE_TOKEN,
+    CONF_BRIDGE_URL,
+    CONF_BRIDGES,
     CONF_COGNITO_TOKEN,
     CONF_EVENTS_ENABLED,
     CONF_MFA_CODE,
@@ -52,7 +61,15 @@ USER_SCHEMA = vol.Schema(
     {vol.Required(CONF_EMAIL): str, vol.Required(CONF_PASSWORD): str}
 )
 MFA_SCHEMA = vol.Schema({vol.Required(CONF_MFA_CODE): str})
-STREAM_SCHEMA = vol.Schema({vol.Optional(CONF_STREAM_URL): str})
+CAMERA_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_STREAM_URL): str,
+        vol.Optional(CONF_BRIDGE_URL): str,
+        vol.Optional(CONF_BRIDGE_TOKEN): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        ),
+    }
+)
 
 
 class FurboConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -260,29 +277,29 @@ def _cameras_for_entry(
 
 
 class FurboOptionsFlow(OptionsFlow):
-    """Handle Furbo options: poll interval, calendar polling, stream URLs."""
+    """Handle Furbo options: polling, then stream and bridge per camera."""
 
     def __init__(self) -> None:
         """Initialise the per-flow state."""
         self._options: dict[str, Any] = {}
         self._pending: list[tuple[str, str]] = []
         self._stream_urls: dict[str, str] = {}
+        self._bridges: dict[str, dict[str, str]] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage polling options, then ask for each camera's stream URL."""
+        """Manage polling options, then visit each camera's page."""
         if user_input is not None:
             self._options = dict(user_input)
             self._pending = _cameras_for_entry(self.hass, self.config_entry)
-            current = self.config_entry.options.get(CONF_STREAM_URLS, {})
-            # Keep URLs only for cameras that still exist.
-            self._stream_urls = {
-                device_id: current[device_id]
-                for device_id, _ in self._pending
-                if device_id in current
-            }
-            return await self.async_step_stream()
+            ids = {device_id for device_id, _ in self._pending}
+            # Keep per-camera settings only for cameras that still exist.
+            streams = self.config_entry.options.get(CONF_STREAM_URLS, {})
+            bridges = self.config_entry.options.get(CONF_BRIDGES, {})
+            self._stream_urls = {k: v for k, v in streams.items() if k in ids}
+            self._bridges = {k: dict(v) for k, v in bridges.items() if k in ids}
+            return await self.async_step_camera()
 
         options = self.config_entry.options
         schema = vol.Schema(
@@ -302,33 +319,54 @@ class FurboOptionsFlow(OptionsFlow):
         )
         return self.async_show_form(step_id="init", data_schema=schema)
 
-    async def async_step_stream(
+    async def async_step_camera(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Ask for the live-stream URL of one camera at a time."""
+        """Ask for one camera's stream URL and bridge, one camera at a time."""
         errors: dict[str, str] = {}
         if user_input is not None:
             device_id, _ = self._pending[0]
-            url = user_input.get(CONF_STREAM_URL, "").strip()
-            if url and not url.lower().startswith(STREAM_URL_SCHEMES):
-                errors["base"] = "invalid_stream_url"
-            else:
-                if url:
-                    self._stream_urls[device_id] = url
+            stream = user_input.get(CONF_STREAM_URL, "").strip()
+            bridge = user_input.get(CONF_BRIDGE_URL, "").strip().rstrip("/")
+            token = user_input.get(CONF_BRIDGE_TOKEN, "").strip()
+            if stream and not stream.lower().startswith(STREAM_URL_SCHEMES):
+                errors[CONF_STREAM_URL] = "invalid_stream_url"
+            if bridge and not bridge.lower().startswith(BRIDGE_URL_SCHEMES):
+                errors[CONF_BRIDGE_URL] = "invalid_bridge_url"
+            if not errors:
+                if stream:
+                    self._stream_urls[device_id] = stream
                 else:
                     self._stream_urls.pop(device_id, None)
+                if bridge:
+                    conf = {CONF_BRIDGE_URL: bridge}
+                    if token:
+                        conf[CONF_BRIDGE_TOKEN] = token
+                    self._bridges[device_id] = conf
+                else:
+                    self._bridges.pop(device_id, None)
                 self._pending.pop(0)
 
         if not errors and not self._pending:
             return self.async_create_entry(
-                data={**self._options, CONF_STREAM_URLS: self._stream_urls}
+                data={
+                    **self._options,
+                    CONF_STREAM_URLS: self._stream_urls,
+                    CONF_BRIDGES: self._bridges,
+                }
             )
 
         device_id, name = self._pending[0]
+        bridge_conf = self._bridges.get(device_id, {})
         return self.async_show_form(
-            step_id="stream",
+            step_id="camera",
             data_schema=self.add_suggested_values_to_schema(
-                STREAM_SCHEMA, {CONF_STREAM_URL: self._stream_urls.get(device_id, "")}
+                CAMERA_SCHEMA,
+                {
+                    CONF_STREAM_URL: self._stream_urls.get(device_id, ""),
+                    CONF_BRIDGE_URL: bridge_conf.get(CONF_BRIDGE_URL, ""),
+                    CONF_BRIDGE_TOKEN: bridge_conf.get(CONF_BRIDGE_TOKEN, ""),
+                },
             ),
             errors=errors,
             description_placeholders={"name": name},
