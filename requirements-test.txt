@@ -1,4 +1,0 @@
-# Shared test tooling. Home Assistant itself is pinned per lane via the
-# pytest-homeassistant-custom-component files below.
-aioresponses==0.7.9
-pytest-cov==7.0.0

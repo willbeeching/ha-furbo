@@ -83,6 +83,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
             update_interval=interval,
         )
         self.client = client
+        self.hub_device_id: str | None = None
         self._tzinfo: ZoneInfo | None = None
         self._timezone_name: str | None = None
 

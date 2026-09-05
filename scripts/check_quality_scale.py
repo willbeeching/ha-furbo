@@ -22,7 +22,11 @@ VALID = {"done", "todo", "exempt"}
 
 def main() -> int:
     """Return non-zero on any inconsistency."""
-    expected = [line.strip() for line in PIN.read_text().splitlines() if line.strip()]
+    expected = [
+        line.split(":", 1)[0].strip()
+        for line in PIN.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
     doc = yaml.safe_load(QS.read_text())
     rules = doc.get("rules", {})
     errors: list[str] = []

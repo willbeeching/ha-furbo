@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -10,6 +10,7 @@ from homeassistant.helpers import entity_registry as er
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.furbo import entity as entity_module
 from custom_components.furbo.api import FurboError
 
 from .conftest import setup_integration
@@ -126,3 +127,18 @@ async def test_specialised_alerts_disabled_by_default(
         e for e in entries if e.unique_id.endswith("_alert_ContinuousBarking")
     )
     assert continuous.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+
+
+async def test_link_to_hub_uses_via_device_id_when_supported(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """On Home Assistant builds with via_device_id, the new key is used."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    coordinator.hub_device_id = "HUBID"
+
+    with patch.object(entity_module, "_SUPPORTS_VIA_DEVICE_ID", True):
+        ent = entity_module.FurboDeviceEntity(coordinator, "AA11BB22CC33")
+    info = dict(ent.device_info)
+    assert info.get("via_device_id") == "HUBID"
+    assert "via_device" not in info

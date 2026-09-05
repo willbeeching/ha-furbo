@@ -23,3 +23,20 @@ the live Furbo cloud. Negative results are kept deliberately.
 - Multiple cameras on one account (only single-camera verified).
 - A camera leaving the account (stale-device handling).
 - Live video, two-way audio and treat toss over P2P end to end.
+
+
+## CI test-lane status
+
+| Lane | Home Assistant | Python | Where run | Result |
+| --- | --- | --- | --- | --- |
+| min | 2025.2.0 | 3.13 | CI and locally | 60 passed, 100% per-module coverage |
+| latest | current release | 3.14 | CI | see note |
+
+The latest lane runs in CI on Python 3.14 against the current Home Assistant.
+The build environment for this change could not install Python 3.14.2 (only
+3.14.0rc2 was available) and so could not run HA 2026.9 locally; the latest
+lane was instead exercised locally against HA 2026.2.3 on Python 3.13, and the
+HA-2026.9-only `DeviceInfo` `via_device_id` path is covered by a unit test that
+forces that code branch. The network boundary is mocked with Home Assistant's
+own `aioclient_mock`, which tracks each lane's aiohttp version, so no
+aiohttp-version-specific mock library is involved.

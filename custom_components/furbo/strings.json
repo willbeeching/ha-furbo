@@ -36,6 +36,7 @@
     "error": {
       "invalid_auth": "Wrong email or password.",
       "invalid_mfa": "That code was rejected. Check the email again, or start over to get a new one.",
+      "too_many_attempts": "Too many attempts. Wait a few minutes, then try again.",
       "cannot_connect": "Could not reach the Furbo cloud. Check your connection and try again.",
       "unknown": "Unexpected error. Check the Home Assistant log."
     },

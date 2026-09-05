@@ -19,6 +19,7 @@ import voluptuous as vol
 
 from . import FurboConfigEntry
 from .api import (
+    CODE_TOO_MANY_ATTEMPTS,
     FurboClient,
     FurboConnectionError,
     FurboError,
@@ -99,8 +100,12 @@ class FurboConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._mfa_candidate,
                     user_input[CONF_MFA_CODE].strip(),
                 )
-            except FurboMfaError:
-                errors["base"] = "invalid_mfa"
+            except FurboMfaError as err:
+                errors["base"] = (
+                    "too_many_attempts"
+                    if err.code == CODE_TOO_MANY_ATTEMPTS
+                    else "invalid_mfa"
+                )
             except FurboConnectionError:
                 errors["base"] = "cannot_connect"
             except FurboError:
@@ -130,11 +135,15 @@ class FurboConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._mfa_candidate = await self._client.send_mfa_code(
                     self._mfa_candidate
                 )
-        except FurboLoginError:
+        except FurboLoginError as err:
+            if err.code == CODE_TOO_MANY_ATTEMPTS:
+                return {"base": "too_many_attempts"}
             return {"base": "invalid_auth"}
         except FurboConnectionError:
             return {"base": "cannot_connect"}
-        except FurboError:
+        except FurboError as err:
+            if err.code == CODE_TOO_MANY_ATTEMPTS:
+                return {"base": "too_many_attempts"}
             _LOGGER.exception("Unexpected error during Furbo login")
             return {"base": "unknown"}
         return {}

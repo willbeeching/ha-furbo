@@ -62,7 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
     # via_device regardless of platform order or whether calendar sensors exist.
     account_id = entry.unique_id or entry.entry_id
     device_registry = dr.async_get(hass)
-    device_registry.async_get_or_create(
+    hub = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, f"account_{account_id}")},
         manufacturer=MANUFACTURER,
@@ -70,6 +70,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
         name="Furbo account",
         entry_type=dr.DeviceEntryType.SERVICE,
     )
+    coordinator.hub_device_id = hub.id
 
     entry.runtime_data = FurboRuntimeData(coordinator=coordinator)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))

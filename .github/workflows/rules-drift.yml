@@ -1,9 +1,8 @@
 name: Quality-scale rule drift
 
-# Compares the pinned rule inventory to Home Assistant's live hassfest rule set,
-# including tiers, and fails when upstream adds, removes or re-tiers a rule so
-# the pin and the self-assessment are reviewed deliberately. The `script/`
-# package is not published to PyPI, so this checks out home-assistant/core.
+# Compares the pinned rule:tier inventory to Home Assistant's live hassfest
+# ALL_RULES, by name and tier. It parses core's quality_scale.py with ast, so
+# it needs neither hassfest's dependencies nor a Home Assistant install.
 
 on:
   schedule:
@@ -24,36 +23,58 @@ jobs:
         with:
           repository: home-assistant/core
           ref: dev
+          sparse-checkout: script/hassfest/quality_scale.py
+          sparse-checkout-cone-mode: false
           path: core
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
-      - name: Compare the pin to the live hassfest inventory (names and tiers)
+          python-version: "3.13"
+      - name: Compare the pin to live ALL_RULES (names and tiers)
         run: |
           python - <<'PY'
-          import sys
+          import ast
           from pathlib import Path
 
-          sys.path.insert(0, "core")
-          from script.hassfest.quality_scale import ALL_RULES  # type: ignore
+          source = Path("core/script/hassfest/quality_scale.py").read_text()
+          tree = ast.parse(source)
 
-          def tier(rule: object) -> str:
-              for attr in ("tier", "level"):
-                  value = getattr(rule, attr, None)
-                  if value is not None:
-                      return getattr(value, "name", str(value)).lower()
-              return "?"
+          def tier_of(node: ast.expr) -> str:
+              # ScaledQualityScaleTiers.GOLD -> "gold"
+              if isinstance(node, ast.Attribute):
+                  return node.attr.lower()
+              raise SystemExit(f"unexpected tier expression: {ast.dump(node)}")
 
-          live = {r.name: tier(r) for r in ALL_RULES}
-          pinned = [
-              line.strip()
-              for line in Path("repo/scripts/quality_scale_rules.txt").read_text().splitlines()
-              if line.strip()
-          ]
-          added = set(live) - set(pinned)
-          removed = set(pinned) - set(live)
-          if added or removed:
-              raise SystemExit(f"rule drift: added={added} removed={removed}")
-          print(f"{len(pinned)} rules match the live hassfest inventory")
-          print("tiers:", {name: live[name] for name in pinned})
+          live: dict[str, str] = {}
+          for call in ast.walk(tree):
+              if (
+                  isinstance(call, ast.Call)
+                  and isinstance(call.func, ast.Name)
+                  and call.func.id == "Rule"
+                  and len(call.args) >= 2
+                  and isinstance(call.args[0], ast.Constant)
+              ):
+                  live[call.args[0].value] = tier_of(call.args[1])
+          if not live:
+              raise SystemExit("could not parse any Rule() entries from core")
+
+          pinned: dict[str, str] = {}
+          for line in Path("repo/scripts/quality_scale_rules.txt").read_text().splitlines():
+              line = line.strip()
+              if not line or line.startswith("#"):
+                  continue
+              name, _, tier = line.partition(":")
+              pinned[name] = tier
+
+          if pinned != live:
+              added = {k: live[k] for k in live.keys() - pinned.keys()}
+              removed = {k: pinned[k] for k in pinned.keys() - live.keys()}
+              retiered = {
+                  k: (pinned[k], live[k])
+                  for k in pinned.keys() & live.keys()
+                  if pinned[k] != live[k]
+              }
+              raise SystemExit(
+                  f"rule drift: added={added} removed={removed} retiered={retiered}"
+              )
+          print(f"{len(pinned)} rules match the live hassfest inventory (names and tiers)")
           PY

@@ -42,7 +42,7 @@ known-first-party = ["custom_components.furbo"]
 convention = "pep257"
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 warn_unused_ignores = true
 warn_return_any = true

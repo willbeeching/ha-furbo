@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-from aioresponses import aioresponses
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
 from custom_components.furbo.api import (
     MAIN_URL,
@@ -263,19 +263,19 @@ async def test_options_flow(
     }
 
 
-async def test_login_12002_shows_invalid_auth(hass: HomeAssistant) -> None:
+async def test_login_12002_shows_invalid_auth(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
     """A real 12002 from the login endpoint shows invalid_auth, not a crash."""
+    aioclient_mock.post(
+        f"{MAIN_URL}/v5/account/read/login",
+        status=400,
+        json={"Code": 12002, "Message": "wrong token or token expired"},
+    )
     result = await _start(hass)
-    with aioresponses() as mock:
-        mock.post(
-            f"{MAIN_URL}/v5/account/read/login",
-            status=400,
-            payload={"Code": 12002, "Message": "wrong token or token expired"},
-            repeat=True,
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], USER_INPUT
-        )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "invalid_auth"}
 
@@ -319,3 +319,38 @@ async def test_created_entry_has_no_password(
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert CONF_PASSWORD not in result["data"]
     assert result["data"][CONF_ACCOUNT_ID] == c.ACCOUNT_ID
+
+
+async def test_cooldown_on_login(hass: HomeAssistant, mock_client: AsyncMock) -> None:
+    """An 80001 cooldown at login shows the dedicated message."""
+    mock_client.start_login.side_effect = FurboLoginError("slow down", 80001)
+    result = await _start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+    assert result["errors"] == {"base": "too_many_attempts"}
+
+
+async def test_cooldown_on_mfa(hass: HomeAssistant, mock_client: AsyncMock) -> None:
+    """An 80001 cooldown while verifying the code shows the dedicated message."""
+    result = await _start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+    mock_client.complete_login.side_effect = FurboMfaError("slow down", 80001)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_MFA_CODE: "1234"}
+    )
+    assert result["errors"] == {"base": "too_many_attempts"}
+
+
+async def test_cooldown_on_send_code(
+    hass: HomeAssistant, mock_client: AsyncMock
+) -> None:
+    """An 80001 while sending the code (a plain FurboError) shows cooldown."""
+    mock_client.send_mfa_code.side_effect = FurboError("slow", 80001)
+    result = await _start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+    assert result["errors"] == {"base": "too_many_attempts"}

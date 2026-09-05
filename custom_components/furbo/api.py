@@ -263,27 +263,6 @@ class FurboClient:
             "dict[str, Any]", await self._post("/v3/service/license", self._base())
         )
 
-    async def get_pet_profiles(self) -> list[dict[str, Any]]:
-        """Return pet profiles for the account."""
-        data = await self._post(
-            "/v3/pet/profile/get", {**self._base(), "LastUpdatedTime": 0}
-        )
-        return cast("list[dict[str, Any]]", data.get("PetProfiles", []))
-
-    async def get_p2p_connection(self, device_id: str) -> dict[str, str]:
-        """Return the P2P auth key and a freshly issued account key.
-
-        Used by the out-of-band ``furbo_p2p.py`` streaming tool, not by the
-        Home Assistant entities. The P2PAccountKey rotates on every call.
-        """
-        return cast(
-            "dict[str, str]",
-            await self._post(
-                "/v5/device/p2p_connection/get",
-                {**self._base(), "DeviceId": device_id},
-            ),
-        )
-
     # --- calendar (pet-gpt host) ------------------------------------------
 
     async def get_notable_events(self, date: str) -> list[dict[str, Any]]:
