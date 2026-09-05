@@ -18,3 +18,74 @@ coverage.xml
 
 # Local environment
 .env
+
+# Reverse-engineering workspace files from the shared checkout. They are
+# tracked on the development branches (main, the m2ojey branch), not on
+# this integration-only branch. Ignored here so the working tree stays
+# clean and none of the captured device data can be committed by accident.
+/.gitattributes
+/CAPTURE_STREAM_PACKETS.md
+/Dockerfile
+/Dockerfile.furbo
+/Dockerfile.p2p
+/Dockerfile.tutk
+/HANDOFF.md
+/Include/
+/Lib/
+/Readme.htm
+/Readme_image001.png
+/Readme_image002.jpg
+/STATUS.md
+/STREAMING_SETUP.md
+/STREAM_STATUS.md
+/Sample/
+/TUTK_SDK.zip
+/UserManual/
+/apk/
+/devices_full.json
+/direct_tcp_tutk.py
+/find_tutk_servers.py
+/furbo-tutk-linux.tar.gz
+/furbo_api.py
+/furbo_cloudfront_config.json
+/furbo_connect_final.py
+/furbo_docker.tar.gz
+/furbo_docker_complete.tar.gz
+/furbo_handshake_88.bin
+/furbo_keepalive_52.bin
+/furbo_lan_discovery.py
+/furbo_local_stream.py
+/furbo_mqtt_config.json
+/furbo_p2p.py
+/furbo_simple_connect.py
+/furbo_stream.py
+/furbo_stream_docker.py
+/furbo_stream_linux.py
+/furbo_stream_linux_fixed.py
+/furbo_stream_simple.py
+/furbo_stream_working.py
+/furbo_tutk_connect.py
+/furbo_tutk_stream.py
+/furbo_udp_stream.py
+/libIOTCAPIs_ALL.dylib
+/p2p_auth.json
+/quick_test.py
+/redirect_tutk.c
+/redirect_tutk_multi.c
+/run_furbo_stream.sh
+/setup_linux_tutk.sh
+/test_all_tutk_servers.py
+/test_direct_tutk.py
+/test_fresh_p2p.py
+/test_furbo_stream.py
+/test_furbo_stream_docker.py
+/test_mqtt_control.py
+/test_regions.py
+/test_tutk_detailed.py
+/test_tutk_ids.py
+/test_tutk_listen.py
+/test_with_wyzecam.py
+/tfenc_implementation.py
+/tools/
+/wake_and_connect.py
+/wake_then_connect.py
