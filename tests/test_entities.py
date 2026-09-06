@@ -143,3 +143,13 @@ async def test_link_to_hub_uses_via_device_id_when_supported(
     info = dict(ent.device_info)
     assert info.get("via_device_id") == "HUBID"
     assert "via_device" not in info
+
+
+async def test_activity_counts_default_to_zero(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """With no events of a type today the count reads 0, not unknown."""
+    mock_client.get_activity_report.side_effect = lambda dates: {d: {} for d in dates}
+    await setup_integration(hass, mock_config_entry)
+    assert hass.states.get("sensor.furbo_account_barking_events_today").state == "0"
+    assert hass.states.get("sensor.furbo_account_activity_events_today").state == "0"

@@ -94,14 +94,16 @@ ACCOUNT_SENSORS: tuple[FurboAccountSensorDescription, ...] = (
         translation_key="barking_events_today",
         native_unit_of_measurement=EVENTS_UNIT,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda data: data.activity_today.get("Barking"),
+        # The activity report omits a type with no events today, so a missing
+        # key means zero, not "unknown".
+        value_fn=lambda data: data.activity_today.get("Barking", 0),
     ),
     FurboAccountSensorDescription(
         key="activity_events_today",
         translation_key="activity_events_today",
         native_unit_of_measurement=EVENTS_UNIT,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda data: data.activity_today.get("DogMoveAbove10Sec"),
+        value_fn=lambda data: data.activity_today.get("DogMoveAbove10Sec", 0),
     ),
     FurboAccountSensorDescription(
         key="notable_events_today",
