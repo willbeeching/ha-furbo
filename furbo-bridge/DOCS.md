@@ -48,9 +48,8 @@ When the integration discovers the add-on automatically it fills all three in
 for you, including the RTSP password — you normally never type it.
 
 The **RTSP password is not the `api_token`**: it is derived from it (so a leaked
-stream URL cannot drive the control API). The add-on prints the exact value in
-its log on start (`RTSP username 'furbo', password ...`). To compute it
-yourself:
+stream URL cannot drive the control API). Auto-discovery fills it in for you; for
+a manual setup, compute it yourself from your `api_token`:
 
 ```sh
 printf 'furbo-rtsp:%s' "<api_token>" | sha256sum | cut -c1-32

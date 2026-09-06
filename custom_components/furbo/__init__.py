@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 import logging
 from typing import Any
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, Platform
@@ -56,25 +57,41 @@ class FurboRuntimeData:
 type FurboConfigEntry = ConfigEntry[FurboRuntimeData]
 
 
-def _migrate_stream_urls(options: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Rewrite stream URLs that embed the raw token as the RTSP password.
+def _rewrite_stale_stream_url(url: str, token: str) -> str | None:
+    """Return the URL with the derived RTSP password, or None if it is not stale.
 
     Up to and including 0.1.2 the auto-filled stream URL carried the api_token
-    itself as the RTSP password (``rtsp://furbo:<token>@host:8554/furbo``). From
-    0.1.3 the add-on derives a distinct RTSP password, so a saved old URL would
-    no longer authenticate. Where a stored stream URL used the bridge token as
-    its password, swap in the derived password. Returns new options, or None if
-    nothing needed changing.
+    itself as the RTSP password (``rtsp://furbo:<token>@host:8554/furbo``,
+    percent-encoded). From 0.1.3 the add-on derives a distinct RTSP password, so
+    a saved old URL no longer authenticates. Only the userinfo is examined — the
+    URL is rebuilt from parts, never string-replaced — so a token that merely
+    appears in the path or query is left untouched, and reserved characters
+    (``/``, ``@``, ``:``) in the token are handled correctly.
+    """
+    parts = urlsplit(url)
+    if parts.username != RTSP_USERNAME or parts.password is None:
+        return None
+    if unquote(parts.password) != token:
+        return None
+    host = parts.hostname or ""
+    netloc = f"{RTSP_USERNAME}:{rtsp_password(token)}@{host}"
+    if parts.port is not None:
+        netloc = f"{netloc}:{parts.port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def _migrate_stream_urls(options: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Rewrite stream URLs whose RTSP password is the raw bridge token.
+
+    Returns new options, or None if nothing needed changing.
     """
     bridges: dict[str, dict[str, str]] = options.get(CONF_BRIDGES, {})
     streams: dict[str, str] = options.get(CONF_STREAM_URLS, {})
     updated: dict[str, str] = {}
     for device_id, url in streams.items():
         token = bridges.get(device_id, {}).get(CONF_BRIDGE_TOKEN)
-        old_auth = f"{RTSP_USERNAME}:{token}@"
-        if token and old_auth in url:
-            new_auth = f"{RTSP_USERNAME}:{rtsp_password(token)}@"
-            updated[device_id] = url.replace(old_auth, new_auth)
+        if token and (rewritten := _rewrite_stale_stream_url(url, token)):
+            updated[device_id] = rewritten
     if not updated:
         return None
     return {**options, CONF_STREAM_URLS: {**streams, **updated}}

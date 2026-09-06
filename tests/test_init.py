@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
+from urllib.parse import quote
 
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -188,6 +189,60 @@ async def test_migration_leaves_unrelated_stream_url(
     await setup_integration(hass, entry)
     assert entry.version == 3
     assert entry.options[CONF_STREAM_URLS][c.DEVICE_ID] == custom
+
+
+async def test_migration_rewrites_percent_encoded_token(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_bridge: AsyncMock
+) -> None:
+    """A token with reserved characters (stored percent-encoded) is migrated."""
+    token = "a/b@c:d+e"  # reserved chars that beta.8 URL-encoded in the URL
+    stale = f"rtsp://furbo:{quote(token, safe='')}@10.0.0.5:8554/furbo"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        unique_id=c.ACCOUNT_ID,
+        data={"account_id": c.ACCOUNT_ID, "cognito_token": "t", "mobile_id": "m"},
+        options={
+            CONF_BRIDGES: {
+                c.DEVICE_ID: {
+                    CONF_BRIDGE_URL: "http://10.0.0.5:8791",
+                    CONF_BRIDGE_TOKEN: token,
+                }
+            },
+            CONF_STREAM_URLS: {c.DEVICE_ID: stale},
+        },
+    )
+    await setup_integration(hass, entry)
+    migrated = entry.options[CONF_STREAM_URLS][c.DEVICE_ID]
+    assert migrated == f"rtsp://furbo:{rtsp_password(token)}@10.0.0.5:8554/furbo"
+    assert quote(token, safe="") not in migrated
+    assert token not in migrated
+
+
+async def test_migration_ignores_token_only_in_path(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_bridge: AsyncMock
+) -> None:
+    """A token that appears only in the path (not as the password) is untouched."""
+    token = "sekret"
+    # The password is something else; the token merely appears in the path.
+    url = f"rtsp://furbo:otherpw@10.0.0.5:8554/{token}/furbo"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        unique_id=c.ACCOUNT_ID,
+        data={"account_id": c.ACCOUNT_ID, "cognito_token": "t", "mobile_id": "m"},
+        options={
+            CONF_BRIDGES: {
+                c.DEVICE_ID: {
+                    CONF_BRIDGE_URL: "http://10.0.0.5:8791",
+                    CONF_BRIDGE_TOKEN: token,
+                }
+            },
+            CONF_STREAM_URLS: {c.DEVICE_ID: url},
+        },
+    )
+    await setup_integration(hass, entry)
+    assert entry.options[CONF_STREAM_URLS][c.DEVICE_ID] == url
 
 
 async def test_migration_downgrade_rejected(
