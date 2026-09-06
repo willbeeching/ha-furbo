@@ -24,7 +24,7 @@ from custom_components.furbo.const import (
     CONF_BRIDGE_URL,
     CONF_BRIDGES,
 )
-from custom_components.furbo.discovery import DiscoveredBridge
+from custom_components.furbo.discovery import DiscoveredBridge, rtsp_password
 
 from . import const as c
 from .conftest import BRIDGE_STATE, setup_integration
@@ -336,12 +336,11 @@ async def test_discovered_addon_auto_creates_entities(
     # No options at all — everything comes from the discovered add-on.
     await setup_integration(hass, mock_config_entry)
 
-    # The camera is created and streams from the add-on's RTSP URL.
+    # The camera is created and streams from the add-on's RTSP URL, with the
+    # derived RTSP password (not the raw token).
     assert hass.states.get("camera.test_camera") is not None
-    assert (
-        await async_get_stream_source(hass, "camera.test_camera")
-        == "rtsp://furbo:tok@abc-furbo-bridge:8554/furbo"
-    )
+    source = await async_get_stream_source(hass, "camera.test_camera")
+    assert source == f"rtsp://furbo:{rtsp_password('tok')}@abc-furbo-bridge:8554/furbo"
     # The bridge-backed controls are created too.
     assert hass.states.get("button.test_camera_toss_treat") is not None
     assert hass.states.get("switch.test_camera_camera").state == "on"

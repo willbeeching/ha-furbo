@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -10,7 +11,11 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMocker,
 )
 
-from custom_components.furbo.discovery import DiscoveredBridge, async_discover_bridge
+from custom_components.furbo.discovery import (
+    DiscoveredBridge,
+    async_discover_bridge,
+    rtsp_password,
+)
 
 ADDONS_URL = "http://supervisor/addons"
 INFO_URL = "http://supervisor/addons/abc123_furbo_bridge/info"
@@ -57,8 +62,11 @@ async def test_discovers_started_addon_with_token(
     assert found.host == "abc123-furbo-bridge"
     assert found.token == "s3cret"
     assert found.bridge_url == "http://abc123-furbo-bridge:8791"
-    # The token is carried as the RTSP password so the stream is authenticated.
-    assert found.stream_url == "rtsp://furbo:s3cret@abc123-furbo-bridge:8554/furbo"
+    # The RTSP password is derived from the token (not the token itself), so the
+    # raw token never appears in the stream URL.
+    expected = f"rtsp://furbo:{rtsp_password('s3cret')}@abc123-furbo-bridge:8554/furbo"
+    assert found.stream_url == expected
+    assert "s3cret" not in found.stream_url
 
 
 async def test_prefers_started_over_stopped(
@@ -85,10 +93,14 @@ async def test_prefers_started_over_stopped(
     assert found.stream_url == "rtsp://h:8554/furbo"
 
 
-def test_stream_url_encodes_token() -> None:
-    """A token with URL-reserved characters is percent-encoded in the RTSP URL."""
-    bridge = DiscoveredBridge(slug="s", host="h", token="a/b@c:d")
-    assert bridge.stream_url == "rtsp://furbo:a%2Fb%40c%3Ad@h:8554/furbo"
+def test_rtsp_password_is_derived_not_the_token() -> None:
+    """The RTSP password is a hash of the token, matching run.sh's algorithm."""
+    token = "a/b@c:d"  # a test value, not a real secret
+    expected = hashlib.sha256(f"furbo-rtsp:{token}".encode()).hexdigest()[:32]
+    assert rtsp_password(token) == expected
+    # 32 hex chars: safe to drop straight into a URL, and one-way from the token.
+    assert len(expected) == 32
+    assert token not in DiscoveredBridge(slug="s", host="h", token=token).stream_url
 
 
 async def test_no_matching_addon_returns_none(

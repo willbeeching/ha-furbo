@@ -20,13 +20,14 @@ api:
 
 # RTSP is reachable on the LAN so Home Assistant can pull the stream, so it is
 # password-protected: go2rtc requires these credentials for any non-loopback
-# client. The password is the same api_token the HTTP API uses; the integration
-# builds rtsp://furbo:<token>@host:8554/furbo. (go2rtc skips the check for
-# loopback, so local tools still work without credentials.)
+# client. The password is DERIVED from the api_token (a one-way hash, set in
+# run.sh), not the token itself, so a leaked stream URL grants only video and
+# never the control API. The integration derives the same value. (go2rtc skips
+# the check for loopback, so local tools still work without credentials.)
 rtsp:
   listen: ":8554"
   username: "furbo"
-  password: "${API_TOKEN}"
+  password: "${RTSP_PASSWORD}"
 
 webrtc:
   listen: ":8555"

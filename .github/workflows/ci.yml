@@ -158,14 +158,17 @@ jobs:
           context: furbo-bridge
           load: true
           tags: furbo-bridge:ci
-      - name: Vulnerability scan (report only)
+      - name: Vulnerability scan (fail on fixed HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:
           image-ref: furbo-bridge:ci
           format: table
           severity: CRITICAL,HIGH
+          # Only fail on vulnerabilities that have a fix available, so the build
+          # breaks when we ship something patchable (as aiohttp did) but not on
+          # unfixed upstream base-image advisories we cannot action.
           ignore-unfixed: "true"
-          exit-code: "0"
+          exit-code: "1"
       - name: Generate SBOM (CycloneDX)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:

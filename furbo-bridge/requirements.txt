@@ -1,4 +1,4 @@
 # Runtime dependencies for the Furbo Bridge add-on image. Pinned so the image
 # is reproducible; bump deliberately (and bump the add-on version when you do).
-aiohttp==3.13.2
+aiohttp==3.14.3
 cryptography==50.0.1

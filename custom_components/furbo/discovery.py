@@ -13,10 +13,10 @@ returns ``None`` and the flow falls back to manual entry.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import logging
 import os
 from typing import Any
-from urllib.parse import quote
 
 import aiohttp
 from homeassistant.core import HomeAssistant
@@ -30,10 +30,18 @@ SUPERVISOR_URL = "http://supervisor"
 ADDON_SLUG_SUFFIX = "furbo_bridge"
 BRIDGE_PORT = 8791
 RTSP_PORT = 8554
-# The add-on protects RTSP with these credentials (username fixed; password is
-# the api_token). Keep in step with furbo-bridge/go2rtc.yaml.
+# The add-on protects RTSP with a username and a password DERIVED from the
+# api_token (never the token itself), so a leaked stream URL cannot drive the
+# control API. Keep this derivation in step with furbo-bridge/run.sh.
 RTSP_USERNAME = "furbo"
+_RTSP_SECRET_PREFIX = "furbo-rtsp:"
 _TIMEOUT = aiohttp.ClientTimeout(total=10)
+
+
+def rtsp_password(token: str) -> str:
+    """Derive the RTSP password from the API token (must match run.sh)."""
+    digest = hashlib.sha256(f"{_RTSP_SECRET_PREFIX}{token}".encode()).hexdigest()
+    return digest[:32]
 
 
 @dataclass(slots=True, frozen=True)
@@ -53,10 +61,11 @@ class DiscoveredBridge:
     def stream_url(self) -> str:
         """The add-on's go2rtc RTSP URL, with credentials when a token is set.
 
-        The add-on requires RTSP authentication for non-loopback clients, so the
-        token is carried as the RTSP password (URL-encoded).
+        The add-on requires RTSP authentication for non-loopback clients, so a
+        credential derived from the token (not the token itself) is carried as
+        the RTSP password.
         """
-        auth = f"{RTSP_USERNAME}:{quote(self.token, safe='')}@" if self.token else ""
+        auth = f"{RTSP_USERNAME}:{rtsp_password(self.token)}@" if self.token else ""
         return f"rtsp://{auth}{self.host}:{RTSP_PORT}/furbo"
 
 
