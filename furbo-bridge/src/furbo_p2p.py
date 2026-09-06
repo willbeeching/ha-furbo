@@ -57,8 +57,8 @@ from ctypes import (
 )
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "custom_components" / "furbo"))
-from api import FurboClient, FurboError, encrypt_password, new_mobile_id  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from furbo_cloud import FurboClient, FurboError, encrypt_password, new_mobile_id  # noqa: E402
 
 SESSION_FILE = Path(os.environ.get("FURBO_SESSION_FILE", "furbo_session.json"))
 
