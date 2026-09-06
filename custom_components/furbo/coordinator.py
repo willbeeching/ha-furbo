@@ -137,11 +137,21 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
                 subs = licenses.get(device.device_id, [])
                 device.subscription = subs[0] if subs else None
                 devices[device.device_id] = device
+        except FurboAuthError as err:
+            raise ConfigEntryAuthFailed from err
+        except FurboError as err:
+            raise UpdateFailed(str(err)) from err
 
-            summary = ""
-            activity: dict[str, int] = {}
-            event_count = 0
-            if self.events_enabled:
+        summary = ""
+        activity: dict[str, int] = {}
+        event_count = 0
+        if self.events_enabled:
+            # The calendar host (pet-gpt) rate-limits repeat calls hard (code
+            # 80002) and is not needed for the camera, alert switches or device
+            # sensors. Treat it as best-effort: on a non-auth failure, keep the
+            # previous cycle's values and try again next time, rather than
+            # failing the whole config entry's setup.
+            try:
                 today = self._today().isoformat()
                 report = await self.client.get_activity_report([today])
                 activity = report.get(today, {})
@@ -149,10 +159,11 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
                 events = await self.client.get_notable_events(today)
                 event_count = len(events)
                 self._apply_events(devices, events)
-        except FurboAuthError as err:
-            raise ConfigEntryAuthFailed from err
-        except FurboError as err:
-            raise UpdateFailed(str(err)) from err
+            except FurboAuthError as err:
+                raise ConfigEntryAuthFailed from err
+            except FurboError as err:
+                _LOGGER.warning("Calendar data unavailable this cycle: %s", err)
+                summary, activity, event_count = self._carry_over_calendar(devices)
 
         return FurboData(
             devices=devices,
@@ -160,6 +171,25 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
             activity_today=activity,
             notable_events_today=event_count,
             account_timezone=self._timezone_name,
+        )
+
+    def _carry_over_calendar(
+        self, devices: dict[str, FurboDeviceData]
+    ) -> tuple[str, dict[str, int], int]:
+        """Reuse the previous cycle's calendar data when this one failed, so a
+        transient rate limit does not blank the event sensors."""
+        previous = self.data
+        if previous is None:
+            return "", {}, 0
+        for device_id, device in devices.items():
+            prior = previous.devices.get(device_id)
+            if prior is not None:
+                device.last_event = prior.last_event
+                device.last_event_at = prior.last_event_at
+        return (
+            previous.daily_summary,
+            previous.activity_today,
+            previous.notable_events_today,
         )
 
     def _apply_events(

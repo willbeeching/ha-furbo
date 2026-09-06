@@ -41,7 +41,12 @@ def _make_client() -> AsyncMock:
     client.get_devices.return_value = [dict(c.DEVICE)]
     client.get_license.return_value = c.LICENSE_RESPONSE["DevicesLicense"]
     client.get_alert_settings.return_value = dict(c.ALERTS)
-    client.get_activity_report.return_value = c.ACTIVITY_TOTALS
+    # Return the sampled totals for whatever date the coordinator asks about,
+    # so the tests do not depend on the real wall-clock date.
+    _totals = next(iter(c.ACTIVITY_TOTALS.values()))
+    client.get_activity_report.side_effect = lambda dates: {
+        day: dict(_totals) for day in dates
+    }
     client.get_daily_summary.return_value = c.DAILY_SUMMARY
     client.get_notable_events.return_value = list(c.NOTABLE_EVENTS)
     return client
