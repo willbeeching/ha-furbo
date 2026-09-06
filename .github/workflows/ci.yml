@@ -93,6 +93,33 @@ jobs:
       - run: uv pip install pyyaml
       - run: uv run python scripts/check_quality_scale.py
 
+  bridge:
+    # Lint and test the Furbo Bridge add-on's Python (its own ruff config and
+    # test suite, separate from the integration's quality gates).
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: furbo-bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        id: setup-python
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv venv --python "${{ steps.setup-python.outputs.python-path }}"
+      - run: uv pip install -r ../requirements-lint.txt -r requirements-test.txt
+      - name: Ruff lint (add-on)
+        run: uv run ruff check src tests
+      - name: Ruff format (add-on)
+        run: uv run ruff format --check src tests
+      - name: Tests with coverage (auth boundary + worker dispatch)
+        run: >-
+          uv run pytest
+          --cov=furbo_bridge --cov-report=term-missing --cov-fail-under=80
+
   release-archive:
     runs-on: ubuntu-latest
     steps:
@@ -102,6 +129,21 @@ jobs:
           python-version: "3.13"
       - name: Build and verify the reproducible archive
         run: python scripts/build_release.py
+
+  addon-version:
+    # On pull requests, require a version bump when shipped add-on files change,
+    # so Home Assistant actually offers the update to installed users.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Require add-on version bump on content change
+        run: python scripts/check_addon_version.py "origin/${{ github.base_ref }}"
 
   hassfest:
     runs-on: ubuntu-latest

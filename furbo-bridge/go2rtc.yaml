@@ -11,8 +11,11 @@ streams:
     # and talk.sh forwards it to the camera speaker.
     - "exec:/app/talk.sh#backchannel=1#killsignal=15#killtimeout=5"
 
+# The go2rtc API (config, stream list, snapshots) is for the bridge's own use;
+# it needs no network exposure, so bind it to loopback. RTSP/WebRTC below stay
+# reachable so Home Assistant can pull the stream.
 api:
-  listen: ":1984"
+  listen: "127.0.0.1:1984"
 
 rtsp:
   listen: ":8554"

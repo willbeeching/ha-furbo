@@ -27,6 +27,13 @@ FURBO_QUALITY="$(opt quality)"; FURBO_QUALITY="${FURBO_QUALITY:-1080p}"
 API_TOKEN="$(opt api_token)"
 LOG_LEVEL="$(opt log_level)"; export GO2RTC_LOG="${LOG_LEVEL:-info}"
 
+if [ -z "$API_TOKEN" ]; then
+  echo "[furbo] the 'api_token' option is required: set it to a long random" >&2
+  echo "[furbo] string (the Furbo integration uses the same value). Refusing to" >&2
+  echo "[furbo] start an unauthenticated API on the network." >&2
+  exit 1
+fi
+
 if [ -z "$FURBO_EMAIL" ] || [ -z "$FURBO_PASSWORD" ]; then
   echo "[furbo] set the 'email' and 'password' options, then restart." >&2
   exit 1
@@ -52,14 +59,16 @@ if [ ! -f "$FURBO_SESSION_FILE" ]; then
 fi
 
 # --- run go2rtc (video) and the HTTP bridge (state + control) -----------------
-echo "[furbo] starting go2rtc (RTSP :8554, WebRTC :8555, API :1984)" >&2
+# go2rtc's own API is bound to loopback (see go2rtc.yaml); only RTSP/WebRTC and
+# the token-protected HTTP API below are reachable off the host.
+echo "[furbo] starting go2rtc (RTSP :8554, WebRTC :8555, API on loopback)" >&2
 go2rtc -config /app/go2rtc.yaml &
 GO2RTC_PID=$!
 
 term() { echo "[furbo] stopping" >&2; kill "$GO2RTC_PID" 2>/dev/null || true; exit 0; }
 trap term SIGTERM SIGINT
 
-echo "[furbo] starting HTTP API on :8791 (auth $([ -n "$API_TOKEN" ] && echo on || echo off))" >&2
+echo "[furbo] starting HTTP API on :8791 (bearer auth required)" >&2
 exec python3 /app/furbo_p2p.py serve \
   --host 0.0.0.0 --port 8791 --interval 30 \
-  ${API_TOKEN:+--token "$API_TOKEN"}
+  --token "$API_TOKEN"

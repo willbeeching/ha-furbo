@@ -40,6 +40,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import contextlib
+import hmac
 import json
 import logging
 import os
@@ -164,10 +166,9 @@ class P2PWorker:
 
     def _drop(self) -> None:
         if self._p2p is not None:
-            try:
+            # Closing an already-dead session can raise from the SDK; ignore it.
+            with contextlib.suppress(Exception):
                 self._p2p.close()
-            except Exception:  # noqa: BLE001 - closing a dead session may fail
-                pass
             self._p2p = None
 
     @property
@@ -225,9 +226,7 @@ class P2PWorker:
             if p2p.proto == "v3" and "treat_size" in settings:
                 code = fp.TREAT_SIZE[settings["treat_size"]]
                 p2p.send(fp.CMD3["SET_TOSS_PROFILE"], bytes([code, 0, 0, 0]))
-            if p2p.proto == "v3" and (
-                "schedule_enabled" in settings or "calm_enabled" in settings
-            ):
+            if p2p.proto == "v3" and ("schedule_enabled" in settings or "calm_enabled" in settings):
                 self._apply_json_toggles(p2p, settings)
             p2p.drain(2.0)
             return self._readback(p2p, 1.5)
@@ -361,18 +360,22 @@ def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> 
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ValueError("body is not valid JSON") from exc
 
+    expected_header = f"Bearer {token}" if token else None
+
     @web.middleware
     async def auth_and_errors(request: web.Request, handler: Any) -> web.StreamResponse:
-        if token and request.headers.get("Authorization") != f"Bearer {token}":
-            return web.json_response({"error": "unauthorized"}, status=401)
+        if expected_header is not None:
+            # Constant-time compare so a wrong token cannot be recovered by
+            # timing. A missing header is rejected the same as a wrong one.
+            presented = request.headers.get("Authorization", "")
+            if not hmac.compare_digest(presented, expected_header):
+                return web.json_response({"error": "unauthorized"}, status=401)
         try:
             return await handler(request)
         except ValueError as exc:
             return _bad_request(str(exc))
         except BridgeUnavailable as exc:
-            return web.json_response(
-                {"error": "p2p_unavailable", "detail": str(exc)}, status=503
-            )
+            return web.json_response({"error": "p2p_unavailable", "detail": str(exc)}, status=503)
 
     async def get_status(request: web.Request) -> web.Response:
         return web.json_response(status_document())
@@ -423,7 +426,7 @@ async def _refresh_loop(worker: P2PWorker, executor: ThreadPoolExecutor, interva
             await loop.run_in_executor(executor, worker.refresh)
         except BridgeUnavailable as exc:
             _LOGGER.warning("P2P unavailable: %s", exc)
-        except Exception:  # noqa: BLE001 - keep the loop alive whatever the SDK does
+        except Exception:
             _LOGGER.exception("state refresh failed")
         await asyncio.sleep(interval)
 
@@ -431,6 +434,10 @@ async def _refresh_loop(worker: P2PWorker, executor: ThreadPoolExecutor, interva
 async def serve(args: argparse.Namespace) -> None:
     """Run the HTTP bridge until interrupted."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    if not args.token:
+        # The API exposes camera video and physical controls; never run it
+        # unauthenticated on the network.
+        raise SystemExit("a --token is required; refusing to serve without one")
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="p2p")
     worker = P2PWorker(args)
     app = create_app(worker, args.token, executor)
@@ -439,7 +446,7 @@ async def serve(args: argparse.Namespace) -> None:
     await runner.setup()
     site = web.TCPSite(runner, args.host, args.port)
     await site.start()
-    _LOGGER.info("listening on http://%s:%s (auth %s)", args.host, args.port, "on" if args.token else "off")
+    _LOGGER.info("listening on http://%s:%s (bearer auth required)", args.host, args.port)
     try:
         await asyncio.Event().wait()
     finally:
@@ -453,5 +460,10 @@ def add_arguments(sp: argparse.ArgumentParser) -> None:
     """Options for the serve subcommand (P2P options are added by the caller)."""
     sp.add_argument("--host", default="0.0.0.0", help="bind address, default all interfaces")
     sp.add_argument("--port", type=int, default=DEFAULT_PORT)
-    sp.add_argument("--token", default=None, help="bearer token clients must send; strongly recommended")
-    sp.add_argument("--interval", type=float, default=DEFAULT_INTERVAL, help="seconds between state refreshes")
+    sp.add_argument("--token", default=None, help="bearer token clients must send (required)")
+    sp.add_argument(
+        "--interval",
+        type=float,
+        default=DEFAULT_INTERVAL,
+        help="seconds between state refreshes",
+    )

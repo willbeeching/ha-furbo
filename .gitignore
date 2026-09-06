@@ -19,6 +19,23 @@ coverage.xml
 # Local environment
 .env
 
+# Session credentials and captured device data — never commit. These are
+# produced by running the bridge/RE tooling locally and contain live Furbo
+# account, P2P and device secrets.
+furbo_session*.json
+p2p_auth*.json
+*.h264
+# Vendor binaries and app packages are fetched/extracted locally, never stored
+# in git (the add-on Dockerfile pulls the TUTK library at build time).
+*.so
+*.dylib
+*.xapk
+*.apk
+/docker-wyze-bridge/
+/wyzecam_src/
+/ReleaseNote.txt
+/__pycache__/
+
 # Reverse-engineering workspace files from the shared checkout. They are
 # tracked on the development branches (main, the m2ojey branch), not on
 # this integration-only branch. Ignored here so the working tree stays

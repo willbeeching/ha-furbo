@@ -12,8 +12,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-import uuid
 from typing import Any
+import uuid
 
 import aiohttp
 from cryptography.hazmat.primitives import serialization
@@ -209,9 +209,7 @@ class FurboClient:
         return data.get("DeviceList", [])
 
     async def get_alert_settings(self, device_id: str) -> dict[str, str]:
-        return await self._post(
-            "/v5/device/alert-setting", {**self._base(), "DeviceId": device_id}
-        )
+        return await self._post("/v5/device/alert-setting", {**self._base(), "DeviceId": device_id})
 
     async def set_alert_setting(self, device_id: str, name: str, enabled: bool) -> None:
         await self._post(
@@ -285,4 +283,3 @@ class FurboClient:
 
     async def play_treat_sound(self, device_id: str) -> None:
         await self.control_device(device_id, ACTION_PLAY_TREAT_SOUND)
-

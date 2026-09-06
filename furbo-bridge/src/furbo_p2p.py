@@ -32,13 +32,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import datetime as dt
-import json
-import os
-import random
-import struct
-import sys
-import time
 from ctypes import (
     CDLL,
     CFUNCTYPE,
@@ -59,17 +52,22 @@ from ctypes import (
     create_string_buffer,
     sizeof,
 )
+import datetime as dt
+import json
+import os
 from pathlib import Path
+import random
+import struct
+import sys
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from furbo_cloud import FurboClient, FurboError, encrypt_password, new_mobile_id  # noqa: E402
+from furbo_cloud import FurboClient, FurboError, encrypt_password, new_mobile_id
 
 SESSION_FILE = Path(os.environ.get("FURBO_SESSION_FILE", "furbo_session.json"))
 
 # com.tomofun.furbo.device.p2p.a: TUTKGlobalAPIs.TUTK_SDK_Set_License_Key(...)
-FURBO_LICENSE_KEY = (
-    b"AQAAAImKg/eLaZN7zGTUrAl9TqgL27EnRkTZm6iu5GvTVNWh7OW4gmiNUfkGqX9ooTOoSogLX7Cnp+bovyklByEGrbr3QS9f+XeoMknVSXd3p1ZxNDQIqXfE4CtzDVEdrFWQ7akXnuUHcySIy2KGhXjQdITBl2y3hJITKVi30pPAbxGuaiYCI/o9KFwtfgQS+8lhtkJGY4MmO9CXoFsUwpZZifAb"
-)
+FURBO_LICENSE_KEY = b"AQAAAImKg/eLaZN7zGTUrAl9TqgL27EnRkTZm6iu5GvTVNWh7OW4gmiNUfkGqX9ooTOoSogLX7Cnp+bovyklByEGrbr3QS9f+XeoMknVSXd3p1ZxNDQIqXfE4CtzDVEdrFWQ7akXnuUHcySIy2KGhXjQdITBl2y3hJITKVi30pPAbxGuaiYCI/o9KFwtfgQS+8lhtkJGY4MmO9CXoFsUwpZZifAb"
 
 # Standard TUTK opcodes the app uses (com.tutk.IOTC.AVIOCTRLDEFs).
 IPCAM_START = 0x1FF  # payload: int32 LE quality number
@@ -119,22 +117,22 @@ CMD_NAME = {v: k for k, v in CMD.items()}
 # different opcode set in the 0x10000 (get/set), 0x20000 (actions) and 0x30000
 # (notify) ranges. Replies are req + 1. The Furbo 360 (FB0030) is a V3 device.
 CMD3 = {
-    "GET_DEVICE_INFO": 65537,      # reply is a status byte then a JSON blob
+    "GET_DEVICE_INFO": 65537,  # reply is a status byte then a JSON blob
     "SET_DEVICE_TOKEN": 65539,
     "GET_TIMEZONE": 65541,
     "SET_TIMEZONE": 65543,
-    "GET_CAMERA_ON": 65545,        # reply [status, on]
+    "GET_CAMERA_ON": 65545,  # reply [status, on]
     "SET_CAMERA_ON": 65547,
     "GET_CAMERA_SCHEDULE": 65549,
     "SET_CAMERA_SCHEDULE": 65551,
-    "GET_UPGRADE_INFO": 65553,     # firmware versions
-    "GET_NIGHT_VISION": 65555,     # reply [status, mode]
+    "GET_UPGRADE_INFO": 65553,  # firmware versions
+    "GET_NIGHT_VISION": 65555,  # reply [status, mode]
     "SET_NIGHT_VISION": 65557,
-    "GET_BARKING": 65559,          # audio detection sensitivity
+    "GET_BARKING": 65559,  # audio detection sensitivity
     "SET_BARKING": 65561,
-    "GET_VOLUME": 65563,           # reply [status, volume, muted]
+    "GET_VOLUME": 65563,  # reply [status, volume, muted]
     "SET_VOLUME": 65565,
-    "GET_SNACKCALL": 65567,        # treat tossing sound
+    "GET_SNACKCALL": 65567,  # treat tossing sound
     "SET_SNACKCALL": 65569,
     "GET_TOSS_PROFILE": 65571,
     "SET_TOSS_PROFILE": 65573,
@@ -167,9 +165,16 @@ CMD3_NAME = {v: k for k, v in CMD3.items()}
 # 1..6 (FB0030, FB0035, FBC0030, FBC0035, MC0020, MC0030) use V3; 7..10
 # (FB001, FB002, FB0025, MC0010) use V2 (com.tomofun.furbo...device.p2p.a).
 PROTO_BY_PRODUCT = {
-    "FB0030": "v3", "FB0035": "v3", "FBC0030": "v3", "FBC0035": "v3",
-    "MC0020": "v3", "MC0030": "v3",
-    "FB001": "v2", "FB002": "v2", "FB0025": "v2", "MC0010": "v2",
+    "FB0030": "v3",
+    "FB0035": "v3",
+    "FBC0030": "v3",
+    "FBC0035": "v3",
+    "MC0020": "v3",
+    "MC0030": "v3",
+    "FB001": "v2",
+    "FB002": "v2",
+    "FB0025": "v2",
+    "MC0010": "v2",
 }
 # The camera answers a request it will not serve with this opcode and a
 # payload of [status, opcode_lo, opcode_hi, 0, 0]. The app logs and ignores it.
@@ -180,12 +185,12 @@ SENSITIVITY_V3 = {0: "off", 1: "low", 2: "medium", 3: "high"}  # SoundSensitivit
 SNACK_CALL = {0: "default", 1: "custom", 2: "mute"}
 # IPCAM_START (0x1FF) payload is a little-endian quality number. The mapping
 # is getVideoResolutionNum in the app and differs by protocol.
-QUALITY = {"1080p": 1, "720p": 2, "360p": 3, "1440p": 0}       # V2
-BARK_V3 = {"off": 0, "low": 1, "medium": 2, "high": 3}        # SoundSensitivity
-TREAT_SIZE = {"large": 0, "small": 1}                         # TreatSizeType
+QUALITY = {"1080p": 1, "720p": 2, "360p": 3, "1440p": 0}  # V2
+BARK_V3 = {"off": 0, "low": 1, "medium": 2, "high": 3}  # SoundSensitivity
+TREAT_SIZE = {"large": 0, "small": 1}  # TreatSizeType
 TREAT_SIZE_NAME = {v: k for k, v in TREAT_SIZE.items()}
-PAN_DIR = {"left": 1, "right": 2}                             # setRotate direction
-QUALITY_V3 = {"1080p": 0, "720p": 1, "360p": 2, "1440p": 3}    # V3
+PAN_DIR = {"left": 1, "right": 2}  # setRotate direction
+QUALITY_V3 = {"1080p": 0, "720p": 1, "360p": 2, "1440p": 3}  # V3
 
 AV_ER_DATA_NOREADY = -20012
 AV_ER_INCOMPLETE_FRAME = -20013
@@ -411,8 +416,14 @@ async def cloud_login(code: str | None = None, send_only: bool = False) -> dict:
     import aiohttp
 
     env = _env_file()
-    email = os.environ.get("FURBO_EMAIL") or env.get("FURBO_EMAIL") or input("Furbo email: ").strip()
-    password = os.environ.get("FURBO_PASSWORD") or env.get("FURBO_PASSWORD") or input("Furbo password: ").strip()
+    email = (
+        os.environ.get("FURBO_EMAIL") or env.get("FURBO_EMAIL") or input("Furbo email: ").strip()
+    )
+    password = (
+        os.environ.get("FURBO_PASSWORD")
+        or env.get("FURBO_PASSWORD")
+        or input("Furbo password: ").strip()
+    )
     async with aiohttp.ClientSession() as http:
         client = FurboClient(http)
         if code and PENDING_FILE.exists():
@@ -425,8 +436,12 @@ async def cloud_login(code: str | None = None, send_only: bool = False) -> dict:
             if candidate:
                 candidate = await client.send_mfa_code(candidate)
                 if send_only:
-                    PENDING_FILE.write_text(json.dumps({"enc": enc, "mobile_id": mobile_id, "candidate": candidate}))
-                    log(f"verification code emailed to {email}; finish with: furbo_p2p.py login --code NNNN")
+                    PENDING_FILE.write_text(
+                        json.dumps({"enc": enc, "mobile_id": mobile_id, "candidate": candidate})
+                    )
+                    log(
+                        f"verification code emailed to {email}; finish with: furbo_p2p.py login --code NNNN"
+                    )
                     return {}
                 code = code or input(f"Verification code emailed to {email}: ").strip()
         if candidate:
@@ -465,7 +480,7 @@ async def cloud_status(days: int) -> None:
                     await asyncio.sleep(12)
                 events[d] = await client.get_notable_events(d)
         except FurboError as exc:
-            raise _cloud_fail(exc)
+            raise _cloud_fail(exc) from exc
     session["devices"] = devices
     SESSION_FILE.write_text(json.dumps(session, indent=2))
 
@@ -495,7 +510,9 @@ async def cloud_status(days: int) -> None:
     print("\nNotable events:")
     for date in dates:
         for e in events[date]:
-            print(f"  {e['LocalTime']}  {e.get('Caption') or e.get('ActionCaption')}  ({e['DeviceId']})")
+            print(
+                f"  {e['LocalTime']}  {e.get('Caption') or e.get('ActionCaption')}  ({e['DeviceId']})"
+            )
         if not events[date]:
             print(f"  {date}: none")
 
@@ -512,7 +529,7 @@ async def fetch_p2p_credentials(device_id: str | None) -> dict:
         try:
             p2p = await client.get_p2p_connection(device["Id"])
         except FurboError as exc:
-            raise _cloud_fail(exc)
+            raise _cloud_fail(exc) from exc
     return {
         "name": device["DeviceName"],
         "uid": device["P2PUuid"],
@@ -529,7 +546,9 @@ async def fetch_p2p_credentials(device_id: str | None) -> dict:
 
 
 class FurboP2P:
-    def __init__(self, lib_path: str, region: str | None, log_path: str | None, tcp_relay: bool = False) -> None:
+    def __init__(
+        self, lib_path: str, region: str | None, log_path: str | None, tcp_relay: bool = False
+    ) -> None:
         self.lib = CDLL(lib_path, mode=RTLD_GLOBAL)
         self.tcp_relay = tcp_relay
         self.lib.IOTC_Get_Version_String.restype = c_char_p
@@ -634,7 +653,9 @@ class FurboP2P:
     def poll(self, timeout_ms: int = 10) -> tuple[int, bytes] | None:
         opcode = c_uint()
         buf = create_string_buffer(4096)
-        ret = self.lib.avRecvIOCtrl(c_int(self.av_chan), byref(opcode), buf, c_int(4096), c_uint(timeout_ms))
+        ret = self.lib.avRecvIOCtrl(
+            c_int(self.av_chan), byref(opcode), buf, c_int(4096), c_uint(timeout_ms)
+        )
         if ret < 0:
             return None
         data = buf.raw[:ret]
@@ -730,7 +751,12 @@ class FurboP2P:
             s["schedule"] = _json(data)
         elif opcode == CMD["GET_NEW_IMAGE"] + 1 and len(data) >= 34:
             fields = [data[i : i + 8].decode(errors="ignore").strip("\0 ") for i in (2, 10, 18, 26)]
-            s["firmware"] = {"new": fields[0], "current": fields[1], "new_lib": fields[2], "lib": fields[3]}
+            s["firmware"] = {
+                "new": fields[0],
+                "current": fields[1],
+                "new_lib": fields[2],
+                "lib": fields[3],
+            }
         elif opcode == CMD["GET_AVINFO"] + 1 and ok and len(data) >= 14:
             s["av_info"] = {
                 "first_iframe_sent": data[1] == 1,
@@ -750,11 +776,19 @@ class FurboP2P:
             log("camera asked us to clear buffers")
         elif opcode == CMD_REJECTED and len(data) >= 3:
             req = data[1] | (data[2] << 8)
-            s.setdefault("rejected", []).append({"opcode": req, "name": CMD_NAME.get(req, hex(req)), "status": data[0]})
+            s.setdefault("rejected", []).append(
+                {"opcode": req, "name": CMD_NAME.get(req, hex(req)), "status": data[0]}
+            )
             log(f"camera rejected {CMD_NAME.get(req, hex(req))} with status {data[0]}")
             return
-        elif opcode in (CMD["TOSS"] + 1, CMD["PLAY_TREAT_SOUND"] + 1, CMD["SET_FURBO_POWER"] + 1,
-                        CMD["SET_VOLUME"] + 1, CMD["SET_NIGHT_VISION"] + 1, CMD["SET_BARKING"] + 1):
+        elif opcode in (
+            CMD["TOSS"] + 1,
+            CMD["PLAY_TREAT_SOUND"] + 1,
+            CMD["SET_FURBO_POWER"] + 1,
+            CMD["SET_VOLUME"] + 1,
+            CMD["SET_NIGHT_VISION"] + 1,
+            CMD["SET_BARKING"] + 1,
+        ):
             s.setdefault("results", {})[name] = "ok" if ok else f"error {data[0] if data else '?'}"
         log(f"recv {name} ({len(data)} bytes) {data[:32].hex()}")
 
@@ -769,12 +803,21 @@ class FurboP2P:
     def query_state(self, wait: float = 3.0) -> dict:
         if self.proto == "v3":
             z = b"\0\0\0\0"
-            for op in ("GET_DEVICE_INFO", "GET_CAMERA_ON", "GET_VOLUME",
-                       "GET_NIGHT_VISION", "GET_BARKING", "GET_SNACKCALL",
-                       "GET_CAMERA_SCHEDULE", "GET_UPGRADE_INFO",
-                       "GET_AUTO_TRACKING", "GET_AUTO_ZOOM",
-                       "GET_VOICE_CONTROL", "GET_TOSS_PROFILE",
-                       "GET_AUTO_CALM"):
+            for op in (
+                "GET_DEVICE_INFO",
+                "GET_CAMERA_ON",
+                "GET_VOLUME",
+                "GET_NIGHT_VISION",
+                "GET_BARKING",
+                "GET_SNACKCALL",
+                "GET_CAMERA_SCHEDULE",
+                "GET_UPGRADE_INFO",
+                "GET_AUTO_TRACKING",
+                "GET_AUTO_ZOOM",
+                "GET_VOICE_CONTROL",
+                "GET_TOSS_PROFILE",
+                "GET_AUTO_CALM",
+            ):
                 self.send(CMD3[op], z)
                 self.drain(0.4)
             self.drain(wait)
@@ -805,8 +848,15 @@ class FurboP2P:
         info_size = c_int32()
         frame_no = c_uint32()
         ret = self.lib.avRecvFrameData2(
-            c_int(self.av_chan), buf, c_int(len(buf)), byref(out_size), byref(expected),
-            byref(info), c_int(sizeof(info)), byref(info_size), byref(frame_no),
+            c_int(self.av_chan),
+            buf,
+            c_int(len(buf)),
+            byref(out_size),
+            byref(expected),
+            byref(info),
+            c_int(sizeof(info)),
+            byref(info_size),
+            byref(frame_no),
         )
         return ret, expected.value
 
@@ -944,7 +994,9 @@ def _decode_hex_ascii(data: bytes) -> str:
             raw = raw[:-1]
         try:
             once = bytes.fromhex(raw)
-            twice = bytes.fromhex(once.decode("ascii")) if all(48 <= b <= 102 for b in once) else once
+            twice = (
+                bytes.fromhex(once.decode("ascii")) if all(48 <= b <= 102 for b in once) else once
+            )
             cand = twice.decode("ascii", "ignore").strip("\x00 ")
         except (ValueError, UnicodeDecodeError):
             continue
@@ -1029,7 +1081,10 @@ def _set_v3(p2p, args) -> None:
     if args.volume is not None:
         p2p.send(CMD3["SET_VOLUME"], bytes([max(0, min(100, args.volume)), 0, 0, 0]))
     if args.night:
-        p2p.send(CMD3["SET_NIGHT_VISION"], bytes([{v: k for k, v in NIGHT_MODES.items()}[args.night], 0, 0, 0]))
+        p2p.send(
+            CMD3["SET_NIGHT_VISION"],
+            bytes([{v: k for k, v in NIGHT_MODES.items()}[args.night], 0, 0, 0]),
+        )
     if args.bark:
         p2p.send(CMD3["SET_BARKING"], bytes([BARK_V3[args.bark], 0, 0, 0]))
     if args.treat_size:
@@ -1045,7 +1100,10 @@ def _set_v3(p2p, args) -> None:
         p2p.send(CMD3["SET_AUTO_ZOOM"], bytes([on, on, 0, 0]))
     if args.schedule is not None:
         # On/Off scheduling master switch, without touching the day grid.
-        p2p.send(CMD3["SET_CAMERA_SCHEDULE"], (args.schedule and b'{"schedule_enable":1}\0') or b'{"schedule_enable":0}\0')
+        p2p.send(
+            CMD3["SET_CAMERA_SCHEDULE"],
+            (args.schedule and b'{"schedule_enable":1}\0') or b'{"schedule_enable":0}\0',
+        )
     if args.pan:
         # setRotate(direction, degrees, 0): a relative rotation, ~60 deg per
         # press in the app (1=left, 2=right). Payload [dir, deg, 0, 0, 0, 0].
@@ -1063,9 +1121,14 @@ def _set_v2(p2p, args) -> None:
     if args.volume is not None:
         p2p.send(CMD["SET_VOLUME"], bytes([args.volume % 256, 0, 0, 0]))
     if args.night:
-        p2p.send(CMD["SET_NIGHT_VISION"], bytes([{v: k for k, v in NIGHT_MODES.items()}[args.night], 0, 0, 0]))
+        p2p.send(
+            CMD["SET_NIGHT_VISION"],
+            bytes([{v: k for k, v in NIGHT_MODES.items()}[args.night], 0, 0, 0]),
+        )
     if args.bark:
-        p2p.send(CMD["SET_BARKING"], bytes([{v: k for k, v in SENSITIVITY.items()}[args.bark], 0, 0, 0]))
+        p2p.send(
+            CMD["SET_BARKING"], bytes([{v: k for k, v in SENSITIVITY.items()}[args.bark], 0, 0, 0])
+        )
     if args.treat_sound:
         p2p.send(CMD["PLAY_TREAT_SOUND"])
     if args.toss:
@@ -1117,7 +1180,9 @@ def cmd_stream(args) -> int:
                 out.flush()
                 frames += 1
                 if frames == 1:
-                    log(f"first frame: codec={info.codec_id} key={info.is_keyframe} fps={info.framerate} bytes={ret}")
+                    log(
+                        f"first frame: codec={info.codec_id} key={info.is_keyframe} fps={info.framerate} bytes={ret}"
+                    )
                 if time.time() - last_report > 5:
                     log(f"{frames} frames, {frames / (time.time() - started):.1f} fps")
                     last_report = time.time()
@@ -1136,27 +1201,41 @@ def cmd_stream(args) -> int:
     finally:
         try:
             p2p.send(IPCAM_STOP, struct.pack("<i", 0))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         p2p.close()
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
     lg = sub.add_parser("login", help="log in to the Furbo cloud and save a session")
-    lg.add_argument("--send-only", action="store_true", help="email the MFA code and stop; finish with --code")
+    lg.add_argument(
+        "--send-only", action="store_true", help="email the MFA code and stop; finish with --code"
+    )
     lg.add_argument("--code", help="the emailed verification code, to finish a --send-only login")
     st = sub.add_parser("status", help="cloud: devices, alerts, subscription, activity, events")
     st.add_argument("--days", type=int, default=2)
 
     def p2p_args(sp):
-        sp.add_argument("--lib", default=os.environ.get("FURBO_TUTK_LIB", "/usr/local/lib/libIOTCAPIs_ALL.so"))
-        sp.add_argument("--region", default=os.environ.get("FURBO_TUTK_REGION"), help="TUTK region code, normally unset like the app")
+        sp.add_argument(
+            "--lib", default=os.environ.get("FURBO_TUTK_LIB", "/usr/local/lib/libIOTCAPIs_ALL.so")
+        )
+        sp.add_argument(
+            "--region",
+            default=os.environ.get("FURBO_TUTK_REGION"),
+            help="TUTK region code, normally unset like the app",
+        )
         sp.add_argument("--device", help="device id, defaults to the first one")
         sp.add_argument("--timeout", type=int, default=10, help="connect timeout in seconds")
         sp.add_argument("--tutk-log", help="write the SDK's own debug log here")
-        sp.add_argument("--tcp-relay", action="store_true", help="IOTC_TCPRelayOnly_TurnOn: relay over TCP when UDP is blocked")
+        sp.add_argument(
+            "--tcp-relay",
+            action="store_true",
+            help="IOTC_TCPRelayOnly_TurnOn: relay over TCP when UDP is blocked",
+        )
 
     ps = sub.add_parser("p2p-status", help="connect over P2P and print camera state")
     p2p_args(ps)
@@ -1165,14 +1244,24 @@ def main() -> int:
     pset.add_argument("--camera", choices=["on", "off"])
     pset.add_argument("--volume", type=int, help="speaker volume 0-100")
     pset.add_argument("--night", choices=list(NIGHT_MODES.values()))
-    pset.add_argument("--bark", choices=["off", "low", "medium", "high"], help="barking alert sensitivity")
+    pset.add_argument(
+        "--bark", choices=["off", "low", "medium", "high"], help="barking alert sensitivity"
+    )
     pset.add_argument("--treat-size", choices=list(TREAT_SIZE), help="treat size profile (V3)")
     pset.add_argument("--voice", choices=["on", "off"], help="voice control (V3)")
     pset.add_argument("--tracking", choices=["on", "off"], help="auto pet tracking (V3)")
     pset.add_argument("--zoom", choices=["on", "off"], help="auto zoom (V3)")
-    pset.add_argument("--schedule", type=lambda v: v == "on", choices=[True, False], metavar="on|off", help="on/off scheduling master switch (V3)")
+    pset.add_argument(
+        "--schedule",
+        type=lambda v: v == "on",
+        choices=[True, False],
+        metavar="on|off",
+        help="on/off scheduling master switch (V3)",
+    )
     pset.add_argument("--pan", choices=list(PAN_DIR), help="rotate the camera left or right (V3)")
-    pset.add_argument("--pan-degrees", type=int, default=60, help="degrees to rotate per --pan, default 60")
+    pset.add_argument(
+        "--pan-degrees", type=int, default=60, help="degrees to rotate per --pan, default 60"
+    )
     pset.add_argument("--treat-sound", action="store_true", help="play the treat tossing sound")
     pset.add_argument("--toss", action="store_true", help="toss a treat (dispenses a real treat)")
     s = sub.add_parser("stream", help="write the H.264 stream to stdout")
@@ -1180,13 +1269,21 @@ def main() -> int:
     s.add_argument("--quality", choices=list(QUALITY), default="720p")
     s.add_argument("--duration", type=int, default=0, help="stop after this many seconds")
     s.add_argument("--audio", action="store_true")
-    tk = sub.add_parser("talk", help="send G.711 mu-law 16k mono audio from stdin to the camera speaker")
+    tk = sub.add_parser(
+        "talk", help="send G.711 mu-law 16k mono audio from stdin to the camera speaker"
+    )
     p2p_args(tk)
-    tk.add_argument("--frame", type=int, default=320, help="mu-law bytes per frame (320 = 20ms at 16k)")
-    tk.add_argument("--pace", action="store_true", help="pace sending to real time (for file input)")
-    sv = sub.add_parser("serve", help="HTTP API over one long-lived P2P session (for Home Assistant)")
+    tk.add_argument(
+        "--frame", type=int, default=320, help="mu-law bytes per frame (320 = 20ms at 16k)"
+    )
+    tk.add_argument(
+        "--pace", action="store_true", help="pace sending to real time (for file input)"
+    )
+    sv = sub.add_parser(
+        "serve", help="HTTP API over one long-lived P2P session (for Home Assistant)"
+    )
     p2p_args(sv)
-    import furbo_bridge  # noqa: PLC0415 - optional, keeps the CLI importable without aiohttp
+    import furbo_bridge
 
     furbo_bridge.add_arguments(sv)
     args = p.parse_args()

@@ -7,7 +7,7 @@
 # The TUTK library is fetched at build time (see Dockerfile); no proprietary
 # binary is stored in this repository.
 name: Furbo Bridge
-version: "0.1.0"
+version: "0.1.1"
 slug: furbo_bridge
 description: >-
   Runs the Furbo camera's proprietary P2P session outside Home Assistant and
@@ -30,22 +30,19 @@ init: false
 ports:
   8791/tcp: 8791
   8554/tcp: 8554
-  1984/tcp: 1984
 ports_description:
   8791/tcp: HTTP state & control API (used by the Furbo integration)
   8554/tcp: RTSP live stream (point the camera entity here)
-  1984/tcp: go2rtc web UI and API
 options:
   email: ""
   password: ""
   mfa_code: ""
   quality: 1080p
-  api_token: ""
   log_level: info
 schema:
   email: email?
   password: password?
   mfa_code: str?
   quality: list(1080p|720p|360p)
-  api_token: password?
+  api_token: password
   log_level: list(trace|debug|info|warning|error|fatal)

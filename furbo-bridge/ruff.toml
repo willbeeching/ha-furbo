@@ -1,0 +1,40 @@
+# The add-on is operational tooling that talks to the camera's proprietary P2P
+# protocol, not the shipped Home Assistant integration. It is linted for
+# correctness (bugs, imports, async misuse) but held to a looser style bar than
+# custom_components/furbo: the protocol decoder is deliberately dense and the
+# CLI imports some modules lazily. This config is standalone (ruff resolves the
+# nearest config per file), so it does not inherit the repository root's rules.
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes
+  "I",        # isort
+  "UP",       # pyupgrade
+  "B",        # flake8-bugbear
+  "C4",       # comprehensions
+  "SIM",      # simplify
+  "TID",      # tidy imports
+  "RUF",      # ruff
+  "ASYNC",    # async correctness
+]
+ignore = [
+  # The CLI imports aiohttp/furbo_bridge lazily so `stream`/`talk` still run
+  # without them installed; this is intentional, not a mistake.
+  "PLC0415",
+]
+
+[lint.per-file-ignores]
+# furbo_p2p.py is the dense protocol decoder + CLI recovered from the app. It is
+# held to correctness rules but not to line length or to async-blocking rules in
+# its one-shot CLI paths (interactive login, short session-file writes, a
+# best-effort close in a finally): E501 (long protocol/format lines), ASYNC240
+# and ASYNC250 (blocking I/O in CLI helpers, not the server loop), SIM105.
+"src/furbo_p2p.py" = ["E501", "ASYNC240", "ASYNC250", "SIM105"]
+"tests/*" = ["S101"]
+
+[lint.isort]
+force-sort-within-sections = true
+combine-as-imports = true
