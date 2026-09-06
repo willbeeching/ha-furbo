@@ -8,7 +8,7 @@ from typing import Final
 DOMAIN: Final = "furbo"
 
 # Config-entry schema version. Bump with a tested migration when data changes.
-CONFIG_ENTRY_VERSION: Final = 2
+CONFIG_ENTRY_VERSION: Final = 3
 
 # Config-entry data keys.
 CONF_ACCOUNT_ID: Final = "account_id"

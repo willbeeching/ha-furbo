@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, Platform
@@ -25,7 +27,7 @@ from .const import (
     MANUFACTURER,
 )
 from .coordinator import FurboBridgeCoordinator, FurboCoordinator
-from .discovery import async_discover_bridge
+from .discovery import RTSP_USERNAME, async_discover_bridge, rtsp_password
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,11 +56,36 @@ class FurboRuntimeData:
 type FurboConfigEntry = ConfigEntry[FurboRuntimeData]
 
 
+def _migrate_stream_urls(options: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Rewrite stream URLs that embed the raw token as the RTSP password.
+
+    Up to and including 0.1.2 the auto-filled stream URL carried the api_token
+    itself as the RTSP password (``rtsp://furbo:<token>@host:8554/furbo``). From
+    0.1.3 the add-on derives a distinct RTSP password, so a saved old URL would
+    no longer authenticate. Where a stored stream URL used the bridge token as
+    its password, swap in the derived password. Returns new options, or None if
+    nothing needed changing.
+    """
+    bridges: dict[str, dict[str, str]] = options.get(CONF_BRIDGES, {})
+    streams: dict[str, str] = options.get(CONF_STREAM_URLS, {})
+    updated: dict[str, str] = {}
+    for device_id, url in streams.items():
+        token = bridges.get(device_id, {}).get(CONF_BRIDGE_TOKEN)
+        old_auth = f"{RTSP_USERNAME}:{token}@"
+        if token and old_auth in url:
+            new_auth = f"{RTSP_USERNAME}:{rtsp_password(token)}@"
+            updated[device_id] = url.replace(old_auth, new_auth)
+    if not updated:
+        return None
+    return {**options, CONF_STREAM_URLS: {**streams, **updated}}
+
+
 async def async_migrate_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> bool:
     """Migrate an old config entry to the current schema.
 
-    Version 1 stored the account password, which setup never uses. Version 2
-    drops it; reauth and reconfigure ask for it again when needed.
+    Version 1 stored the account password, which setup never uses; version 2
+    drops it. Version 3 rewrites stream URLs that embedded the raw token as the
+    RTSP password (see :func:`_migrate_stream_urls`).
     """
     if entry.version > CONFIG_ENTRY_VERSION:
         # Downgrade from a newer schema is not supported.
@@ -66,6 +93,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> b
     if entry.version == 1:
         data = {k: v for k, v in entry.data.items() if k != CONF_PASSWORD}
         hass.config_entries.async_update_entry(entry, data=data, version=2)
+    if entry.version == 2:
+        options = _migrate_stream_urls(entry.options) or entry.options
+        hass.config_entries.async_update_entry(entry, options=options, version=3)
     return True
 
 

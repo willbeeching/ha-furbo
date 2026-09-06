@@ -34,14 +34,22 @@ nothing proprietary is stored in the repository.
 The add-on is reachable from Home Assistant at the add-on's own hostname on
 the Supervisor network. In the Furbo integration's options, per camera set:
 
-- **Stream URL:** `rtsp://furbo:<api_token>@<addon-hostname>:8554/furbo`
-  (RTSP is password-protected; the username is `furbo` and the password is your
-  `api_token`)
+- **Stream URL:** `rtsp://furbo:<rtsp-password>@<addon-hostname>:8554/furbo`
+  (RTSP is password-protected; the username is `furbo`)
 - **Bridge URL:** `http://<addon-hostname>:8791`
 - **Bridge token:** the same `api_token` you set above
 
 When the integration discovers the add-on automatically it fills all three in
-for you, including the RTSP credentials.
+for you, including the RTSP password — you normally never type it.
+
+The **RTSP password is not the `api_token`**: it is derived from it (so a leaked
+stream URL cannot drive the control API). The add-on prints the exact value in
+its log on start (`RTSP username 'furbo', password ...`). To compute it
+yourself:
+
+```sh
+printf 'furbo-rtsp:%s' "<api_token>" | sha256sum | cut -c1-32
+```
 
 `<addon-hostname>` is shown in the add-on's info; for a locally-built add-on it
 is typically `local-furbo_bridge` (or `<repo-slug>-furbo_bridge`). Because the

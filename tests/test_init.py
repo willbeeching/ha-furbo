@@ -10,11 +10,17 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.furbo.api import FurboAuthError, FurboConnectionError
 from custom_components.furbo.const import (
+    CONF_BRIDGE_TOKEN,
+    CONF_BRIDGE_URL,
+    CONF_BRIDGES,
     CONF_EVENTS_ENABLED,
     CONF_SCAN_INTERVAL,
+    CONF_STREAM_URLS,
     DOMAIN,
 )
+from custom_components.furbo.discovery import rtsp_password
 
+from . import const as c
 from .conftest import setup_integration
 
 
@@ -126,9 +132,62 @@ async def test_migration_strips_password(
         },
     )
     await setup_integration(hass, entry)
-    assert entry.version == 2
+    assert entry.version == 3
     assert "password" not in entry.data
     assert entry.data["cognito_token"] == "t"
+
+
+async def test_migration_rewrites_stale_stream_url(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_bridge: AsyncMock
+) -> None:
+    """A v2 stream URL that embedded the raw token gets the derived password."""
+    token = "old-token"
+    stale = f"rtsp://furbo:{token}@10.0.0.5:8554/furbo"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        unique_id=c.ACCOUNT_ID,
+        data={"account_id": c.ACCOUNT_ID, "cognito_token": "t", "mobile_id": "m"},
+        options={
+            CONF_BRIDGES: {
+                c.DEVICE_ID: {
+                    CONF_BRIDGE_URL: "http://10.0.0.5:8791",
+                    CONF_BRIDGE_TOKEN: token,
+                }
+            },
+            CONF_STREAM_URLS: {c.DEVICE_ID: stale},
+        },
+    )
+    await setup_integration(hass, entry)
+    assert entry.version == 3
+    migrated = entry.options[CONF_STREAM_URLS][c.DEVICE_ID]
+    assert migrated == f"rtsp://furbo:{rtsp_password(token)}@10.0.0.5:8554/furbo"
+    assert token not in migrated
+
+
+async def test_migration_leaves_unrelated_stream_url(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_bridge: AsyncMock
+) -> None:
+    """A stream URL that does not embed the token is left untouched."""
+    custom = "rtsp://user:custompw@10.0.0.5:8554/furbo"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        unique_id=c.ACCOUNT_ID,
+        data={"account_id": c.ACCOUNT_ID, "cognito_token": "t", "mobile_id": "m"},
+        options={
+            CONF_BRIDGES: {
+                c.DEVICE_ID: {
+                    CONF_BRIDGE_URL: "http://10.0.0.5:8791",
+                    CONF_BRIDGE_TOKEN: "tok",
+                }
+            },
+            CONF_STREAM_URLS: {c.DEVICE_ID: custom},
+        },
+    )
+    await setup_integration(hass, entry)
+    assert entry.version == 3
+    assert entry.options[CONF_STREAM_URLS][c.DEVICE_ID] == custom
 
 
 async def test_migration_downgrade_rejected(

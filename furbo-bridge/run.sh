@@ -56,6 +56,9 @@ fi
 # integration derives the same value; keep this in step with discovery.py.
 export RTSP_PASSWORD
 RTSP_PASSWORD="$(printf 'furbo-rtsp:%s' "$API_TOKEN" | sha256 | cut -c1-32)"
+# Printed so a manual (Container/Core) setup can build the RTSP URL; the
+# integration derives the same value and fills it in automatically.
+echo "[furbo] RTSP username 'furbo', password '$RTSP_PASSWORD' (for manual stream URLs)" >&2
 
 # Reset the stored session on request, so a user can re-authenticate (expired
 # session, changed password, wrong account) without reinstalling the add-on.
