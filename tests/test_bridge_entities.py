@@ -7,6 +7,7 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 
 from freezegun.api import FrozenDateTimeFactory
+from homeassistant.components.camera import async_get_stream_source
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -23,6 +24,7 @@ from custom_components.furbo.const import (
     CONF_BRIDGE_URL,
     CONF_BRIDGES,
 )
+from custom_components.furbo.discovery import DiscoveredBridge
 
 from . import const as c
 from .conftest import BRIDGE_STATE, setup_integration
@@ -243,3 +245,35 @@ async def test_bridge_without_p2p_session_is_unavailable(
     await setup_integration(hass, mock_config_entry, BRIDGE_OPTIONS)
     for entity_id in ENTITIES:
         assert hass.states.get(entity_id).state == "unavailable", entity_id
+
+
+async def test_discovered_addon_auto_creates_entities(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A running Furbo Bridge add-on auto-creates the camera and its controls."""
+    monkeypatch.setattr(
+        "custom_components.furbo.async_discover_bridge",
+        AsyncMock(
+            return_value=DiscoveredBridge(
+                slug="abc_furbo_bridge", host="abc-furbo-bridge", token="tok"
+            )
+        ),
+    )
+
+    # No options at all — everything comes from the discovered add-on.
+    await setup_integration(hass, mock_config_entry)
+
+    # The camera is created and streams from the add-on's RTSP URL.
+    assert hass.states.get("camera.test_camera") is not None
+    assert (
+        await async_get_stream_source(hass, "camera.test_camera")
+        == "rtsp://abc-furbo-bridge:8554/furbo"
+    )
+    # The bridge-backed controls are created too.
+    assert hass.states.get("button.test_camera_toss_treat") is not None
+    assert hass.states.get("switch.test_camera_camera").state == "on"
+    assert hass.states.get("number.test_camera_speaker_volume").state == "40"

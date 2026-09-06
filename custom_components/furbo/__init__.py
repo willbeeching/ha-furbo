@@ -18,11 +18,13 @@ from .const import (
     CONF_BRIDGE_URL,
     CONF_BRIDGES,
     CONF_COGNITO_TOKEN,
+    CONF_STREAM_URLS,
     CONFIG_ENTRY_VERSION,
     DOMAIN,
     MANUFACTURER,
 )
 from .coordinator import FurboBridgeCoordinator, FurboCoordinator
+from .discovery import async_discover_bridge
 
 PLATFORMS: list[Platform] = [
     Platform.BUTTON,
@@ -39,8 +41,11 @@ class FurboRuntimeData:
     """Objects owned by a loaded config entry."""
 
     coordinator: FurboCoordinator
-    # One bridge coordinator per camera that has a bridge URL configured.
+    # One bridge coordinator per camera that has a bridge (configured or the
+    # auto-discovered Furbo Bridge add-on).
     bridges: dict[str, FurboBridgeCoordinator] = field(default_factory=dict)
+    # Per-camera live-stream URL (configured, or the discovered add-on's).
+    stream_urls: dict[str, str] = field(default_factory=dict)
 
 
 type FurboConfigEntry = ConfigEntry[FurboRuntimeData]
@@ -85,26 +90,45 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
     )
     coordinator.hub_device_id = hub.id
 
+    # Resolve each camera's bridge and stream. Explicit options win; otherwise
+    # fall back to the Furbo Bridge add-on if it is running, so the camera and
+    # its controls appear automatically with no manual configuration.
+    discovered = await async_discover_bridge(hass)
+    configured_bridges: dict[str, dict[str, str]] = entry.options.get(CONF_BRIDGES, {})
+    configured_streams: dict[str, str] = entry.options.get(CONF_STREAM_URLS, {})
+
     # A bridge that is down at startup must not keep the cloud entities from
     # loading: refresh without raising, and let its entities be unavailable
     # until it answers.
     bridges: dict[str, FurboBridgeCoordinator] = {}
-    configured: dict[str, dict[str, str]] = entry.options.get(CONF_BRIDGES, {})
-    for device_id, bridge_conf in configured.items():
-        if device_id not in coordinator.data.devices:
-            continue
-        bridge_client = FurboBridgeClient(
-            async_get_clientsession(hass),
-            bridge_conf[CONF_BRIDGE_URL],
-            bridge_conf.get(CONF_BRIDGE_TOKEN),
-        )
-        bridge = FurboBridgeCoordinator(
-            hass, entry, device_id, bridge_client, coordinator
-        )
-        await bridge.async_refresh()
-        bridges[device_id] = bridge
+    stream_urls: dict[str, str] = {}
+    for device_id in coordinator.data.devices:
+        bridge_conf = configured_bridges.get(device_id)
+        if bridge_conf is None and discovered is not None:
+            bridge_conf = {CONF_BRIDGE_URL: discovered.bridge_url}
+            if discovered.token:
+                bridge_conf[CONF_BRIDGE_TOKEN] = discovered.token
+        if bridge_conf is not None:
+            bridge_client = FurboBridgeClient(
+                async_get_clientsession(hass),
+                bridge_conf[CONF_BRIDGE_URL],
+                bridge_conf.get(CONF_BRIDGE_TOKEN),
+            )
+            bridge = FurboBridgeCoordinator(
+                hass, entry, device_id, bridge_client, coordinator
+            )
+            await bridge.async_refresh()
+            bridges[device_id] = bridge
 
-    entry.runtime_data = FurboRuntimeData(coordinator=coordinator, bridges=bridges)
+        stream = configured_streams.get(device_id)
+        if not stream and discovered is not None:
+            stream = discovered.stream_url
+        if stream:
+            stream_urls[device_id] = stream
+
+    entry.runtime_data = FurboRuntimeData(
+        coordinator=coordinator, bridges=bridges, stream_urls=stream_urls
+    )
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

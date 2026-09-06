@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import FurboConfigEntry
-from .const import CONF_STREAM_URLS, MANUFACTURER, MODEL_NAMES
+from .const import MANUFACTURER, MODEL_NAMES
 from .coordinator import FurboCoordinator
 from .entity import FurboDeviceEntity
 
@@ -27,9 +27,9 @@ async def async_setup_entry(
     entry: FurboConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up one camera per device that has a stream URL configured."""
+    """Set up one camera per device that has a stream URL (configured or discovered)."""
     coordinator = entry.runtime_data.coordinator
-    stream_urls: dict[str, str] = entry.options.get(CONF_STREAM_URLS, {})
+    stream_urls = entry.runtime_data.stream_urls
     async_add_entities(
         FurboCamera(coordinator, device_id, url)
         for device_id in coordinator.data.devices
