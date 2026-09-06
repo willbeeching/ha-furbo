@@ -135,3 +135,52 @@ async def test_auth_error_during_update(
     mock_client.get_devices.side_effect = FurboAuthError("expired")
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_update_data()
+
+
+async def test_calendar_rate_limit_does_not_fail_setup(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """An 80002 rate limit on the calendar host is best-effort, not fatal."""
+    mock_client.get_daily_summary.side_effect = FurboError("rate limited", code=80002)
+    await setup_integration(hass, mock_config_entry)
+
+    # The entry still loads and the non-calendar data is present.
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert hass.states.get("sensor.test_camera_subscription_days_left").state == "24"
+
+    # No calendar data this cycle (there was no previous cycle to carry over).
+    data = mock_config_entry.runtime_data.coordinator.data
+    assert data.notable_events_today == 0
+    assert data.activity_today == {}
+    assert data.daily_summary == ""
+
+
+async def test_calendar_failure_carries_over_previous(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A later calendar failure keeps the previous cycle's event data."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    assert coordinator.data.activity_today["Barking"] == 6
+    assert coordinator.data.notable_events_today == 2
+    last_before = hass.states.get("sensor.test_camera_last_event").state
+
+    mock_client.get_activity_report.side_effect = FurboError("rate", code=80002)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # Previous calendar values are retained rather than blanked.
+    assert coordinator.data.activity_today["Barking"] == 6
+    assert coordinator.data.notable_events_today == 2
+    assert hass.states.get("sensor.test_camera_last_event").state == last_before
+
+
+async def test_calendar_auth_error_triggers_reauth(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """An auth failure on the calendar still raises for reauth, not best-effort."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    mock_client.get_notable_events.side_effect = FurboAuthError("bad token")
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()

@@ -176,8 +176,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
     def _carry_over_calendar(
         self, devices: dict[str, FurboDeviceData]
     ) -> tuple[str, dict[str, int], int]:
-        """Reuse the previous cycle's calendar data when this one failed, so a
-        transient rate limit does not blank the event sensors."""
+        """Reuse the previous cycle's calendar data when this one is unavailable."""
         previous = self.data
         if previous is None:
             return "", {}, 0

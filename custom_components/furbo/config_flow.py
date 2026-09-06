@@ -54,6 +54,7 @@ from .const import (
     MIN_SCAN_INTERVAL_SECONDS,
     STREAM_URL_SCHEMES,
 )
+from .discovery import DiscoveredBridge, async_discover_bridge
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -285,6 +286,15 @@ class FurboOptionsFlow(OptionsFlow):
         self._pending: list[tuple[str, str]] = []
         self._stream_urls: dict[str, str] = {}
         self._bridges: dict[str, dict[str, str]] = {}
+        self._discovered: DiscoveredBridge | None = None
+        self._discovery_done = False
+
+    async def _async_discovered_bridge(self) -> DiscoveredBridge | None:
+        """Look for the Furbo Bridge add-on once and cache the result."""
+        if not self._discovery_done:
+            self._discovery_done = True
+            self._discovered = await async_discover_bridge(self.hass)
+        return self._discovered
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -358,16 +368,31 @@ class FurboOptionsFlow(OptionsFlow):
 
         device_id, name = self._pending[0]
         bridge_conf = self._bridges.get(device_id, {})
+        # Offer the Furbo Bridge add-on's URLs and token when it is running and
+        # this camera has not already been configured by hand.
+        discovered = await self._async_discovered_bridge()
+        suggested_stream = self._stream_urls.get(device_id) or (
+            discovered.stream_url if discovered else ""
+        )
+        suggested_bridge = bridge_conf.get(CONF_BRIDGE_URL) or (
+            discovered.bridge_url if discovered else ""
+        )
+        suggested_token = bridge_conf.get(CONF_BRIDGE_TOKEN) or (
+            discovered.token if discovered and discovered.token else ""
+        )
+        placeholders = {"name": name}
+        if discovered:
+            placeholders["discovered"] = discovered.host
         return self.async_show_form(
             step_id="camera",
             data_schema=self.add_suggested_values_to_schema(
                 CAMERA_SCHEMA,
                 {
-                    CONF_STREAM_URL: self._stream_urls.get(device_id, ""),
-                    CONF_BRIDGE_URL: bridge_conf.get(CONF_BRIDGE_URL, ""),
-                    CONF_BRIDGE_TOKEN: bridge_conf.get(CONF_BRIDGE_TOKEN, ""),
+                    CONF_STREAM_URL: suggested_stream,
+                    CONF_BRIDGE_URL: suggested_bridge,
+                    CONF_BRIDGE_TOKEN: suggested_token,
                 },
             ),
             errors=errors,
-            description_placeholders={"name": name},
+            description_placeholders=placeholders,
         )

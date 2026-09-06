@@ -8,6 +8,7 @@ from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
@@ -484,3 +485,34 @@ async def test_cooldown_on_send_code(
         result["flow_id"], USER_INPUT
     )
     assert result["errors"] == {"base": "too_many_attempts"}
+
+
+async def test_options_flow_prefills_discovered_bridge(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the bridge add-on is running, its host is offered on the camera step."""
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-token")
+    aioclient_mock.get(
+        "http://supervisor/addons",
+        json={"data": {"addons": [{"slug": "abc_furbo_bridge", "state": "started"}]}},
+    )
+    aioclient_mock.get(
+        "http://supervisor/addons/abc_furbo_bridge/info",
+        json={
+            "data": {"hostname": "abc-furbo-bridge", "options": {"api_token": "tok"}}
+        },
+    )
+    await setup_integration(hass, mock_config_entry)
+
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SCAN_INTERVAL: 120, CONF_EVENTS_ENABLED: True},
+    )
+    assert result["step_id"] == "camera"
+    # The discovered add-on host is surfaced to the user on the form.
+    assert result["description_placeholders"]["discovered"] == "abc-furbo-bridge"
