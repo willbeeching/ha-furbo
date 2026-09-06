@@ -18,8 +18,10 @@ nothing proprietary is stored in the repository.
 1. **Install** the add-on (this repository must be added under Add-on Store →
    ⋮ → Repositories first).
 2. In **Configuration**, set your Furbo **email** and **password**, pick a
-   video **quality**, and set an **api_token** (any long random string — the
-   integration will use the same value).
+   video **quality**, and set an **api_token**. Generate a long random value —
+   for example `openssl rand -hex 32` — and use the **same** value as the
+   integration's bridge token. The add-on refuses to start without one, because
+   the HTTP API can toss treats and change camera settings.
 3. **Start** the add-on and open the **Log**. On the first start it emails a
    verification code and prints:
    *"A code was emailed to … Put it in the 'mfa_code' option and restart."*
@@ -48,7 +50,7 @@ ports also works.
 | `email` / `password` | Furbo account credentials (used only to log in and fetch P2P credentials). |
 | `mfa_code` | The emailed verification code, needed once to complete login. Clear it afterwards. |
 | `quality` | `1080p`, `720p` or `360p`. This camera serves 1080p or 360p; 720p falls back to 360p. |
-| `api_token` | Bearer token the HTTP API requires. Use the same value in the integration. |
+| `api_token` | **Required.** Bearer token the HTTP API requires; the add-on will not start without it. Use a long random value and set the same value in the integration. |
 | `log_level` | go2rtc log verbosity. |
 
 ## Notes and limits
