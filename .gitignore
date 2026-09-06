@@ -18,6 +18,8 @@ coverage.xml
 
 # Local environment
 .env
+.venv/
+.venv-*/
 
 # Session credentials and captured device data — never commit. These are
 # produced by running the bridge/RE tooling locally and contain live Furbo
