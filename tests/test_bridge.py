@@ -37,6 +37,9 @@ FULL_STATUS: dict[str, Any] = {
         "bark_sensitivity": "medium",
         "auto_tracking": False,
         "auto_zoom": True,
+        "voice_control": True,
+        "treat_size": "large",
+        "snack_call": "default",
         "firmware": "108",
     },
 }
@@ -57,6 +60,9 @@ def test_parse_state_full() -> None:
         bark_sensitivity="medium",
         auto_tracking=False,
         auto_zoom=True,
+        voice_control=True,
+        treat_size="large",
+        snack_call="default",
         firmware="108",
     )
 

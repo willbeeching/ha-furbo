@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import FurboConfigEntry
-from .bridge import BARK_LEVELS, NIGHT_MODES, BridgeState
+from .bridge import BARK_LEVELS, NIGHT_MODES, TREAT_SIZES, BridgeState
 from .coordinator import FurboBridgeCoordinator
 from .entity import FurboBridgeEntity
 
@@ -43,6 +43,14 @@ SELECTS: tuple[FurboSelectDescription, ...] = (
         options=list(BARK_LEVELS),
         value_fn=lambda state: state.bark_sensitivity,
         setting="bark_sensitivity",
+    ),
+    FurboSelectDescription(
+        key="treat_size",
+        translation_key="treat_size",
+        entity_category=EntityCategory.CONFIG,
+        options=list(TREAT_SIZES),
+        value_fn=lambda state: state.treat_size,
+        setting="treat_size",
     ),
 )
 

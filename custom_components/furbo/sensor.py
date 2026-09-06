@@ -17,8 +17,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import FurboConfigEntry
-from .coordinator import FurboCoordinator, FurboData, FurboDeviceData
-from .entity import FurboAccountEntity, FurboDeviceEntity
+from .bridge import SNACK_MODES, BridgeState
+from .coordinator import (
+    FurboBridgeCoordinator,
+    FurboCoordinator,
+    FurboData,
+    FurboDeviceData,
+)
+from .entity import FurboAccountEntity, FurboBridgeEntity, FurboDeviceEntity
 
 # Reads only; no writes to serialize.
 PARALLEL_UPDATES = 0
@@ -40,6 +46,13 @@ class FurboAccountSensorDescription(SensorEntityDescription):
 
     value_fn: Callable[[FurboData], Any]
     attributes_fn: Callable[[FurboData], dict[str, Any]] | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class FurboBridgeSensorDescription(SensorEntityDescription):
+    """Describes a read-only camera value served by the bridge."""
+
+    value_fn: Callable[[BridgeState], Any]
 
 
 def _subscription_days(device: FurboDeviceData) -> int | None:
@@ -115,6 +128,19 @@ ACCOUNT_SENSORS: tuple[FurboAccountSensorDescription, ...] = (
     ),
 )
 
+# The treat-tossing sound is a preset the app picks from a list of sound files;
+# the camera only reports which kind is set, so it is surfaced read-only.
+BRIDGE_SENSORS: tuple[FurboBridgeSensorDescription, ...] = (
+    FurboBridgeSensorDescription(
+        key="treat_toss_sound",
+        translation_key="treat_toss_sound",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        device_class=SensorDeviceClass.ENUM,
+        options=list(SNACK_MODES),
+        value_fn=lambda state: state.snack_call,
+    ),
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -133,6 +159,11 @@ async def async_setup_entry(
             FurboAccountSensor(coordinator, description)
             for description in ACCOUNT_SENSORS
         )
+    entities.extend(
+        FurboBridgeSensor(bridge, description)
+        for bridge in entry.runtime_data.bridges.values()
+        for description in BRIDGE_SENSORS
+    )
     async_add_entities(entities)
 
 
@@ -194,3 +225,24 @@ class FurboAccountSensor(FurboAccountEntity, SensorEntity):
         if self.entity_description.attributes_fn is None:
             return None
         return self.entity_description.attributes_fn(self.coordinator.data)
+
+
+class FurboBridgeSensor(FurboBridgeEntity, SensorEntity):
+    """A read-only camera value served by the bridge."""
+
+    entity_description: FurboBridgeSensorDescription
+
+    def __init__(
+        self,
+        coordinator: FurboBridgeCoordinator,
+        description: FurboBridgeSensorDescription,
+    ) -> None:
+        """Initialise the bridge sensor."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_unique_id = f"{coordinator.device_id}_{description.key}"
+
+    @property
+    def native_value(self) -> Any:
+        """Return the value, or None while the camera has not reported it."""
+        return self.entity_description.value_fn(self.coordinator.data)

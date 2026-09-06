@@ -150,6 +150,9 @@
       },
       "auto_zoom": {
         "name": "Auto zoom"
+      },
+      "voice_control": {
+        "name": "Voice control"
       }
     },
     "sensor": {
@@ -170,6 +173,14 @@
       },
       "notable_events_today": {
         "name": "Notable events today"
+      },
+      "treat_toss_sound": {
+        "name": "Treat toss sound",
+        "state": {
+          "default": "Default",
+          "custom": "Custom",
+          "mute": "Mute"
+        }
       }
     },
     "number": {
@@ -193,6 +204,13 @@
           "low": "Low",
           "medium": "Medium",
           "high": "High"
+        }
+      },
+      "treat_size": {
+        "name": "Treat size",
+        "state": {
+          "large": "Large",
+          "small": "Small"
         }
       }
     },

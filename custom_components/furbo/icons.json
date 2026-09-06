@@ -159,6 +159,13 @@
       },
       "auto_zoom": {
         "default": "mdi:magnify-scan"
+      },
+      "voice_control": {
+        "default": "mdi:microphone",
+        "state": {
+          "on": "mdi:microphone",
+          "off": "mdi:microphone-off"
+        }
       }
     },
     "sensor": {
@@ -179,6 +186,9 @@
       },
       "notable_events_today": {
         "default": "mdi:paw"
+      },
+      "treat_toss_sound": {
+        "default": "mdi:music-note"
       }
     },
     "number": {
@@ -192,6 +202,9 @@
       },
       "bark_sensitivity": {
         "default": "mdi:dog-side"
+      },
+      "treat_size": {
+        "default": "mdi:bone"
       }
     },
     "button": {

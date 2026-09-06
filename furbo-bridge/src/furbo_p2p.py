@@ -179,6 +179,7 @@ SNACK_CALL = {0: "default", 1: "custom", 2: "mute"}
 QUALITY = {"1080p": 1, "720p": 2, "360p": 3, "1440p": 0}       # V2
 BARK_V3 = {"off": 0, "low": 1, "medium": 2, "high": 3}        # SoundSensitivity
 TREAT_SIZE = {"large": 0, "small": 1}                         # TreatSizeType
+TREAT_SIZE_NAME = {v: k for k, v in TREAT_SIZE.items()}
 PAN_DIR = {"left": 1, "right": 2}                             # setRotate direction
 QUALITY_V3 = {"1080p": 0, "720p": 1, "360p": 2, "1440p": 3}    # V3
 
@@ -619,6 +620,10 @@ class FurboP2P:
             s["auto_tracking"] = {"cruise": data[1] == 1, "live": data[2] == 1}
         elif opcode == CMD3["GET_AUTO_ZOOM"] + 1 and len(data) > 2:
             s["auto_zoom"] = {"cruise": data[1] == 1, "live": data[2] == 1}
+        elif opcode == CMD3["GET_VOICE_CONTROL"] + 1 and len(data) > 1:
+            s["voice_control"] = data[1] == 1
+        elif opcode == CMD3["GET_TOSS_PROFILE"] + 1 and len(data) > 1:
+            s["treat_size"] = TREAT_SIZE_NAME.get(data[1], data[1])
         elif opcode == CMD["IPCAM_START_RESP"]:
             s["video_started"] = ok
         elif opcode == 0x40001 and len(data) >= 3:
@@ -692,7 +697,8 @@ class FurboP2P:
             for op in ("GET_DEVICE_INFO", "GET_CAMERA_ON", "GET_VOLUME",
                        "GET_NIGHT_VISION", "GET_BARKING", "GET_SNACKCALL",
                        "GET_CAMERA_SCHEDULE", "GET_UPGRADE_INFO",
-                       "GET_AUTO_TRACKING", "GET_AUTO_ZOOM"):
+                       "GET_AUTO_TRACKING", "GET_AUTO_ZOOM",
+                       "GET_VOICE_CONTROL", "GET_TOSS_PROFILE"):
                 self.send(CMD3[op], z)
                 self.drain(0.4)
             self.drain(wait)

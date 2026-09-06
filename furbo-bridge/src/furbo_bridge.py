@@ -57,6 +57,8 @@ DEFAULT_INTERVAL = 30.0
 NIGHT_MODES = ("auto", "on", "off")
 BARK_LEVELS = ("off", "low", "medium", "high")
 PAN_DIRECTIONS = ("left", "right")
+TREAT_SIZES = ("large", "small")
+SNACK_MODES = ("default", "custom", "mute")
 
 
 class BridgeUnavailable(Exception):
@@ -85,6 +87,12 @@ def normalise_state(raw: dict[str, Any]) -> dict[str, Any]:
     firmware = raw.get("firmware")
     if isinstance(firmware, dict) and firmware.get("current"):
         out["firmware"] = str(firmware["current"])
+    if "voice_control" in raw:
+        out["voice_control"] = bool(raw["voice_control"])
+    if raw.get("treat_size") in TREAT_SIZES:
+        out["treat_size"] = raw["treat_size"]
+    if raw.get("snack_call") in SNACK_MODES:
+        out["snack_call"] = raw["snack_call"]
     return out
 
 
@@ -182,6 +190,12 @@ class P2PWorker:
             if p2p.proto == "v3" and "auto_zoom" in settings:
                 on = 1 if settings["auto_zoom"] else 0
                 p2p.send(fp.CMD3["SET_AUTO_ZOOM"], bytes([on, on, 0, 0]))
+            if p2p.proto == "v3" and "voice_control" in settings:
+                on = 1 if settings["voice_control"] else 0
+                p2p.send(fp.CMD3["SET_VOICE_CONTROL"], bytes([on, 0, 0, 0]))
+            if p2p.proto == "v3" and "treat_size" in settings:
+                code = fp.TREAT_SIZE[settings["treat_size"]]
+                p2p.send(fp.CMD3["SET_TOSS_PROFILE"], bytes([code, 0, 0, 0]))
             p2p.drain(2.0)
             return self._readback(p2p, 1.5)
 
@@ -220,7 +234,7 @@ def _parse_settings(body: Any) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise ValueError("body must be an object")
     out: dict[str, Any] = {}
-    for key in ("camera_on", "auto_tracking", "auto_zoom"):
+    for key in ("camera_on", "auto_tracking", "auto_zoom", "voice_control"):
         if key in body:
             if not isinstance(body[key], bool):
                 raise ValueError(f"{key} must be true or false")
@@ -238,6 +252,10 @@ def _parse_settings(body: Any) -> dict[str, Any]:
         if body["bark_sensitivity"] not in BARK_LEVELS:
             raise ValueError(f"bark_sensitivity must be one of {', '.join(BARK_LEVELS)}")
         out["bark_sensitivity"] = body["bark_sensitivity"]
+    if "treat_size" in body:
+        if body["treat_size"] not in TREAT_SIZES:
+            raise ValueError(f"treat_size must be one of {', '.join(TREAT_SIZES)}")
+        out["treat_size"] = body["treat_size"]
     unknown = set(body) - set(out)
     if unknown:
         raise ValueError(f"unknown settings: {', '.join(sorted(unknown))}")

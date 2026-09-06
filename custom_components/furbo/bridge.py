@@ -22,6 +22,8 @@ DEFAULT_TIMEOUT = 10
 NIGHT_MODES = ("auto", "on", "off")
 BARK_LEVELS = ("off", "low", "medium", "high")
 PAN_DIRECTIONS = ("left", "right")
+TREAT_SIZES = ("large", "small")
+SNACK_MODES = ("default", "custom", "mute")
 
 
 class FurboBridgeError(Exception):
@@ -53,6 +55,9 @@ class BridgeState:
     bark_sensitivity: str | None = None
     auto_tracking: bool | None = None
     auto_zoom: bool | None = None
+    voice_control: bool | None = None
+    treat_size: str | None = None
+    snack_call: str | None = None
     firmware: str | None = None
 
 
@@ -88,6 +93,9 @@ def parse_state(data: Any) -> BridgeState:
         bark_sensitivity=_choice(state.get("bark_sensitivity"), BARK_LEVELS),
         auto_tracking=_bool(state.get("auto_tracking")),
         auto_zoom=_bool(state.get("auto_zoom")),
+        voice_control=_bool(state.get("voice_control")),
+        treat_size=_choice(state.get("treat_size"), TREAT_SIZES),
+        snack_call=_choice(state.get("snack_call"), SNACK_MODES),
         firmware=firmware if isinstance(firmware, str) and firmware else None,
     )
 

@@ -51,6 +51,13 @@ BRIDGE_SWITCHES: tuple[FurboBridgeSwitchDescription, ...] = (
         value_fn=lambda state: state.auto_zoom,
         setting="auto_zoom",
     ),
+    FurboBridgeSwitchDescription(
+        key="voice_control",
+        translation_key="voice_control",
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: state.voice_control,
+        setting="voice_control",
+    ),
 )
 
 

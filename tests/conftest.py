@@ -72,6 +72,9 @@ BRIDGE_STATE = BridgeState(
     bark_sensitivity="medium",
     auto_tracking=False,
     auto_zoom=True,
+    voice_control=True,
+    treat_size="large",
+    snack_call="default",
     firmware="108",
 )
 
