@@ -39,6 +39,7 @@ pet-activity data from your Furbo account.
   sensitivity, auto pet tracking, auto zoom, voice control, treat size,
   the on/off schedule and Calm My Pet
 - **Pan** left / right, **toss treat** and **play treat sound**
+- **Two-way audio** — talk to your pet from the camera's live view (via go2rtc)
 - **Treat toss sound** shown read-only (the app picks presets by sound file)
 
 ## Requirements

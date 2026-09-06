@@ -38,7 +38,8 @@ RUN pip install --no-cache-dir aiohttp cryptography
 COPY src/ /app/
 COPY go2rtc.yaml /app/go2rtc.yaml
 COPY stream.sh /app/stream.sh
-RUN chmod +x /app/stream.sh
+COPY talk.sh /app/talk.sh
+RUN chmod +x /app/stream.sh /app/talk.sh
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 

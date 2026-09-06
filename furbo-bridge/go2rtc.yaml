@@ -7,6 +7,9 @@
 streams:
   furbo:
     - "exec:/app/stream.sh {output}#killsignal=15#killtimeout=8"
+    # Two-way audio: go2rtc pipes the client mic here (16-bit 16 kHz mono PCM)
+    # and talk.sh forwards it to the camera speaker.
+    - "exec:/app/talk.sh#backchannel=1#killsignal=15#killtimeout=5"
 
 api:
   listen: ":1984"

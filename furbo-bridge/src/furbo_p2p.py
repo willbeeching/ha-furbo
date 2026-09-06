@@ -25,6 +25,7 @@ Usage:
     furbo_p2p.py stream > out.h264      # or | ffplay -f h264 -
     furbo_p2p.py stream | ffmpeg -f h264 -i - -c copy -f rtsp rtsp://127.0.0.1:8554/furbo
     furbo_p2p.py serve --token secret   # HTTP API for the Home Assistant integration
+    furbo_p2p.py talk < audio.ulaw      # send G.711 mu-law 16k mono to the speaker
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ import sys
 import time
 from ctypes import (
     CDLL,
+    CFUNCTYPE,
+    POINTER,
     RTLD_GLOBAL,
     Structure,
     byref,
@@ -52,6 +55,7 @@ from ctypes import (
     c_uint8,
     c_uint16,
     c_uint32,
+    c_void_p,
     create_string_buffer,
     sizeof,
 )
@@ -285,6 +289,73 @@ class AVClientStartOutConfig(Structure):
     ]
 
 
+# --- talk-back (audio server) ctypes -----------------------------------------
+# avServStartEx's St_AVServStartInConfig, inferred from the app's Java struct
+# and the client config layout docker-wyze-bridge documents (cb first, then the
+# session/channel/timeout/type/resend/security ints, the seven auth callbacks,
+# and the DTLS cipher suites string). The SDK reads cb to know the size.
+_PW_AUTH = CFUNCTYPE(c_int, c_char_p, POINTER(c_char_p))
+_TOKEN_AUTH = CFUNCTYPE(c_int, c_char_p, POINTER(c_char_p))
+_TOKEN_REQUEST = CFUNCTYPE(c_int, c_int, c_char_p, c_char_p, POINTER(c_char_p))
+_TOKEN_DELETE = CFUNCTYPE(c_int, c_int, c_char_p)
+_IDENTITY_ARRAY = CFUNCTYPE(None, c_int, c_void_p, c_void_p)
+_ABILITY = CFUNCTYPE(None, c_int, c_void_p)
+_CHANGE_PW = CFUNCTYPE(c_int, c_int, c_char_p, c_char_p, c_char_p, c_char_p)
+
+
+# Offsets verified by disassembling avServStartEx in the TUTK 4.2 library:
+# it reads session at 0x4, channel (byte) at 0x8, ints at 0xc/0x10/0x14/0x18,
+# and six callback pointers at 0x30-0x58 (48-88); the config size (cb) must be
+# > 0x5f. So 20 reserved bytes sit between security_mode and the callbacks.
+class AVServStartInConfig(Structure):
+    _fields_ = [
+        ("cb", c_uint32),  # 0
+        ("iotc_session_id", c_uint32),  # 4
+        ("iotc_channel_id", c_uint8),  # 8
+        ("_pad0", c_uint8 * 3),  # 9-11
+        ("timeout_sec", c_uint32),  # 12
+        ("server_type", c_uint32),  # 16
+        ("resend", c_int32),  # 20
+        ("security_mode", c_uint32),  # 24
+        ("_reserved", c_uint8 * 20),  # 28-47
+        ("password_auth", _PW_AUTH),  # 48
+        ("token_auth", _TOKEN_AUTH),  # 56
+        ("token_request", _TOKEN_REQUEST),  # 64
+        ("token_delete", _TOKEN_DELETE),  # 72
+        ("identity_array_request", _IDENTITY_ARRAY),  # 80
+        ("ability_request", _ABILITY),  # 88
+        ("change_password_request", _CHANGE_PW),  # 96
+        ("json_request", c_void_p),  # 104
+        ("dtls_cipher_suites", c_char_p),  # 112
+    ]
+
+
+# avServStartEx requires the out config's cb to be > 0x10f (271 bytes), so pad
+# it well past that; only the first fields are written back.
+class AVServStartOutConfig(Structure):
+    _fields_ = [
+        ("cb", c_uint32),
+        ("server_type", c_uint32),
+        ("resend", c_int32),
+        ("two_way_streaming", c_int32),
+        ("security_mode", c_uint32),
+        ("_reserved", c_uint8 * 300),
+    ]
+
+
+def _accept_all_serv_callbacks() -> dict:
+    """Auth callbacks that accept unconditionally (return 0), like the app."""
+    return {
+        "password_auth": _PW_AUTH(lambda account, password: 0),
+        "token_auth": _TOKEN_AUTH(lambda identity, token: 0),
+        "token_request": _TOKEN_REQUEST(lambda i, ident, desc, token: 0),
+        "token_delete": _TOKEN_DELETE(lambda i, ident: 1),
+        "identity_array_request": _IDENTITY_ARRAY(lambda i, arr, status: None),
+        "ability_request": _ABILITY(lambda i, ability: None),
+        "change_password_request": _CHANGE_PW(lambda i, a, o, n, k: 1),
+    }
+
+
 class FrameInfo(Structure):
     _fields_ = [
         ("codec_id", c_uint16),
@@ -467,6 +538,8 @@ class FurboP2P:
         self.region = region
         self.log_path = log_path
         self.proto = "v2"
+        self.talk_channel = -1
+        self.talk_av = -1
         self.state: dict = {}
 
     def initialize(self) -> None:
@@ -745,8 +818,95 @@ class FurboP2P:
         info.size = sizeof(info)
         return self.lib.IOTC_Session_Check_Ex(c_int(self.session_id), byref(info)) >= 0
 
+    # --- talk-back (two-way audio) ---
+    # The app sends the mic to the camera as G.711 mu-law, 16 kHz, mono. It
+    # opens a free IOTC channel, tells the camera to open its speaker
+    # (IPCAM_SPEAKERSTART, opcode 848, payload = [channel int32 LE, 4 zero]),
+    # starts an AV *server* on that channel, then pushes audio frames with
+    # avSendAudioData. Each frame carries a 16-byte header: [codec_id int16 LE]
+    # [flags][cam][online][7 reserved][timestamp int32 LE], where codec_id 137
+    # is G711U and flags 14 = 16 kHz | 16-bit | mono.
+    AUDIO_CODEC_G711U = 137
+    AUDIO_FLAGS_16K_16BIT_MONO = 14
+    SPEAKER_START = 848
+    SPEAKER_STOP = 849
+
+    def start_talk(self, creds: dict, timeout: int = 30) -> None:
+        """Open the DTLS speaker channel so audio can be sent to the camera.
+
+        The camera requires DTLS on the audio channel (avServStart2 without it
+        is rejected with -20027), so this uses avServStartEx with security_mode
+        3, matching the app. The auth callbacks accept unconditionally (return
+        0), as the app's do."""
+        lib = self.lib
+        lib.IOTC_Session_Get_Free_Channel.restype = c_int
+        ch = lib.IOTC_Session_Get_Free_Channel(c_int(self.session_id))
+        if ch < 0:
+            raise SystemExit(f"IOTC_Session_Get_Free_Channel failed: {err(ch)}")
+        self.talk_channel = ch
+        self.send(self.SPEAKER_START, struct.pack("<i", ch) + b"\0\0\0\0")
+
+        cin = AVServStartInConfig()
+        cin.cb = sizeof(cin)
+        cin.iotc_session_id = self.session_id
+        cin.iotc_channel_id = ch
+        cin.timeout_sec = timeout
+        cin.server_type = 0
+        cin.resend = 0
+        cin.security_mode = 3
+        # Accept-all auth callbacks (return 0), like the app; kept referenced
+        # so the CFUNCTYPE objects are not garbage-collected while in use.
+        self._talk_cbs = _accept_all_serv_callbacks()
+        cin.password_auth = self._talk_cbs["password_auth"]
+        cin.token_auth = self._talk_cbs["token_auth"]
+        cin.token_request = self._talk_cbs["token_request"]
+        cin.token_delete = self._talk_cbs["token_delete"]
+        cin.identity_array_request = self._talk_cbs["identity_array_request"]
+        cin.ability_request = self._talk_cbs["ability_request"]
+        cin.change_password_request = self._talk_cbs["change_password_request"]
+        cin.dtls_cipher_suites = b"PSK-AES128-CBC-SHA256"
+        cout = AVServStartOutConfig()
+        cout.cb = sizeof(cout)
+        lib.avServStartEx.restype = c_int
+        av = lib.avServStartEx(byref(cin), byref(cout))
+        if av < 0:
+            raise SystemExit(f"avServStartEx failed: {err(av)}")
+        self.talk_av = av
+        # A zero resend buffer makes every frame exceed the max size (-20006);
+        # give it room, as the app does when it hits that error.
+        lib.avServSetResendSize(c_int(av), c_uint(512 * 1024))
+        log(f"talk channel {ch}, av {av} open (DTLS, mu-law 16k mono)")
+
+    def send_audio(self, ulaw: bytes) -> int:
+        """Send one mu-law audio frame to the camera. Returns the SDK code."""
+        header = struct.pack(
+            "<hBBB7xI",
+            self.AUDIO_CODEC_G711U,
+            self.AUDIO_FLAGS_16K_16BIT_MONO,
+            0,
+            0,
+            int(time.time() * 1000) & 0xFFFFFFFF,
+        )
+        return self.lib.avSendAudioData(
+            c_int(self.talk_av), ulaw, c_int(len(ulaw)), header, c_int(len(header))
+        )
+
+    def stop_talk(self) -> None:
+        """Close the speaker channel."""
+        lib = self.lib
+        if getattr(self, "talk_channel", -1) >= 0:
+            self.send(self.SPEAKER_STOP, struct.pack("<i", self.talk_channel) + b"\0\0\0\0")
+        if getattr(self, "talk_av", -1) >= 0:
+            lib.avServStop(c_int(self.talk_av))
+        if getattr(self, "talk_channel", -1) >= 0:
+            lib.IOTC_Session_Channel_OFF(c_int(self.session_id), c_uint8(self.talk_channel))
+        self.talk_av = -1
+        self.talk_channel = -1
+
     def close(self) -> None:
         lib = self.lib
+        if getattr(self, "talk_av", -1) >= 0 or getattr(self, "talk_channel", -1) >= 0:
+            self.stop_talk()
         if self.av_chan >= 0:
             lib.avSendIOCtrlExit(c_int(self.av_chan))
             lib.avClientStop(c_int(self.av_chan))
@@ -813,7 +973,43 @@ def open_session(args) -> FurboP2P:
     except SystemExit:
         p2p.close()
         raise
+    p2p.creds = creds
     return p2p
+
+
+def cmd_talk(args) -> int:
+    """Read G.711 mu-law (16 kHz, mono) from stdin and send it to the camera."""
+    p2p = open_session(args)
+    frames = 0
+    # G.711 at 16 kHz is 16000 bytes/s, so a frame of N bytes is N/16000 s of
+    # audio. Pace sending to real time so the camera plays it smoothly.
+    seconds_per_frame = args.frame / 16000.0
+    try:
+        p2p.start_talk(p2p.creds)
+        stdin = sys.stdin.buffer
+        started = time.time()
+        while True:
+            chunk = stdin.read(args.frame)
+            if not chunk:
+                break
+            ret = p2p.send_audio(chunk)
+            frames += 1
+            if frames == 1:
+                log(f"first audio frame sent: {err(ret)} ({len(chunk)} bytes)")
+            elif ret != 0 and frames % 50 == 0:
+                log(f"avSendAudioData returned {err(ret)}")
+            if args.pace:
+                target = started + frames * seconds_per_frame
+                delay = target - time.time()
+                if delay > 0:
+                    time.sleep(delay)
+        log(f"talk finished, {frames} frames")
+        return 0
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        p2p.stop_talk()
+        p2p.close()
 
 
 def cmd_p2p_status(args) -> int:
@@ -984,6 +1180,10 @@ def main() -> int:
     s.add_argument("--quality", choices=list(QUALITY), default="720p")
     s.add_argument("--duration", type=int, default=0, help="stop after this many seconds")
     s.add_argument("--audio", action="store_true")
+    tk = sub.add_parser("talk", help="send G.711 mu-law 16k mono audio from stdin to the camera speaker")
+    p2p_args(tk)
+    tk.add_argument("--frame", type=int, default=320, help="mu-law bytes per frame (320 = 20ms at 16k)")
+    tk.add_argument("--pace", action="store_true", help="pace sending to real time (for file input)")
     sv = sub.add_parser("serve", help="HTTP API over one long-lived P2P session (for Home Assistant)")
     p2p_args(sv)
     import furbo_bridge  # noqa: PLC0415 - optional, keeps the CLI importable without aiohttp
@@ -1001,6 +1201,8 @@ def main() -> int:
         return cmd_p2p_status(args)
     if args.cmd == "p2p-set":
         return cmd_p2p_set(args)
+    if args.cmd == "talk":
+        return cmd_talk(args)
     if args.cmd == "serve":
         try:
             asyncio.run(furbo_bridge.serve(args))
