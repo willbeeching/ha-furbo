@@ -115,10 +115,11 @@ jobs:
         run: uv run ruff check src tests
       - name: Ruff format (add-on)
         run: uv run ruff format --check src tests
-      - name: Tests with coverage (auth boundary + worker dispatch)
+      - name: Tests with coverage (auth boundary, worker dispatch, cloud client)
         run: >-
           uv run pytest
-          --cov=furbo_bridge --cov-report=term-missing --cov-fail-under=80
+          --cov=furbo_bridge --cov=furbo_cloud
+          --cov-report=term-missing --cov-fail-under=80
 
   release-archive:
     runs-on: ubuntu-latest
