@@ -58,6 +58,20 @@ BRIDGE_SWITCHES: tuple[FurboBridgeSwitchDescription, ...] = (
         value_fn=lambda state: state.voice_control,
         setting="voice_control",
     ),
+    FurboBridgeSwitchDescription(
+        key="schedule_enabled",
+        translation_key="schedule_enabled",
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: state.schedule_enabled,
+        setting="schedule_enabled",
+    ),
+    FurboBridgeSwitchDescription(
+        key="calm_enabled",
+        translation_key="calm_enabled",
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: state.calm_enabled,
+        setting="calm_enabled",
+    ),
 )
 
 

@@ -60,6 +60,8 @@ class BridgeState:
     treat_size: str | None = None
     snack_call: str | None = None
     quality: str | None = None
+    schedule_enabled: bool | None = None
+    calm_enabled: bool | None = None
     firmware: str | None = None
 
 
@@ -99,6 +101,8 @@ def parse_state(data: Any) -> BridgeState:
         treat_size=_choice(state.get("treat_size"), TREAT_SIZES),
         snack_call=_choice(state.get("snack_call"), SNACK_MODES),
         quality=_choice(state.get("quality"), VIDEO_QUALITIES),
+        schedule_enabled=_bool(state.get("schedule_enabled")),
+        calm_enabled=_bool(state.get("calm_enabled")),
         firmware=firmware if isinstance(firmware, str) and firmware else None,
     )
 

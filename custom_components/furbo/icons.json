@@ -166,6 +166,12 @@
           "on": "mdi:microphone",
           "off": "mdi:microphone-off"
         }
+      },
+      "schedule_enabled": {
+        "default": "mdi:calendar-clock"
+      },
+      "calm_enabled": {
+        "default": "mdi:heart-pulse"
       }
     },
     "sensor": {

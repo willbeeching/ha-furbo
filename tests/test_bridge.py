@@ -41,6 +41,8 @@ FULL_STATUS: dict[str, Any] = {
         "treat_size": "large",
         "snack_call": "default",
         "quality": "1080p",
+        "schedule_enabled": False,
+        "calm_enabled": True,
         "firmware": "108",
     },
 }
@@ -65,6 +67,8 @@ def test_parse_state_full() -> None:
         treat_size="large",
         snack_call="default",
         quality="1080p",
+        schedule_enabled=False,
+        calm_enabled=True,
         firmware="108",
     )
 

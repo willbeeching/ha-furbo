@@ -113,6 +113,12 @@ def normalise_state(raw: dict[str, Any]) -> dict[str, Any]:
         out["treat_size"] = raw["treat_size"]
     if raw.get("snack_call") in SNACK_MODES:
         out["snack_call"] = raw["snack_call"]
+    schedule = raw.get("schedule")
+    if isinstance(schedule, dict) and isinstance(schedule.get("enable"), bool):
+        out["schedule_enabled"] = schedule["enable"]
+    calm = raw.get("auto_calm")
+    if isinstance(calm, dict) and calm.get("enable") is not None:
+        out["calm_enabled"] = bool(calm.get("enable"))
     return out
 
 
@@ -219,8 +225,41 @@ class P2PWorker:
             if p2p.proto == "v3" and "treat_size" in settings:
                 code = fp.TREAT_SIZE[settings["treat_size"]]
                 p2p.send(fp.CMD3["SET_TOSS_PROFILE"], bytes([code, 0, 0, 0]))
+            if p2p.proto == "v3" and (
+                "schedule_enabled" in settings or "calm_enabled" in settings
+            ):
+                self._apply_json_toggles(p2p, settings)
             p2p.drain(2.0)
             return self._readback(p2p, 1.5)
+
+    def _apply_json_toggles(self, p2p: fp.FurboP2P, settings: dict[str, Any]) -> None:
+        """Flip the enable flag on the schedule or auto-calm config, keeping the
+        rest of the config the camera already holds. Both are JSON payloads."""
+        if "schedule" not in p2p.state or "auto_calm" not in p2p.state:
+            p2p.send(fp.CMD3["GET_CAMERA_SCHEDULE"], b"\0\0\0\0")
+            p2p.send(fp.CMD3["GET_AUTO_CALM"], b"\0\0\0\0")
+            p2p.drain(1.5)
+        if "schedule_enabled" in settings:
+            sched = p2p.state.get("schedule")
+            if isinstance(sched, dict) and "enabledDay" in sched and "schedule" in sched:
+                body = {
+                    "enable": bool(settings["schedule_enabled"]),
+                    "enabledDay": sched["enabledDay"],
+                    "schedule": sched["schedule"],
+                }
+                p2p.send(fp.CMD3["SET_CAMERA_SCHEDULE"], json.dumps(body).encode() + b"\0")
+        if "calm_enabled" in settings:
+            calm = p2p.state.get("auto_calm")
+            if isinstance(calm, dict):
+                body = {
+                    "enable": 1 if settings["calm_enabled"] else 0,
+                    "startAudio": int(calm.get("startAudio", 0)),
+                    "treatToss": int(calm.get("treatToss", 0)),
+                }
+                buf = bytearray(1024)
+                payload = json.dumps(body).encode()
+                buf[: len(payload)] = payload
+                p2p.send(fp.CMD3["SET_AUTO_CALM"], bytes(buf))
 
     def pan(self, direction: str, degrees: int) -> None:
         with self._lock:
@@ -257,7 +296,14 @@ def _parse_settings(body: Any) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise ValueError("body must be an object")
     out: dict[str, Any] = {}
-    for key in ("camera_on", "auto_tracking", "auto_zoom", "voice_control"):
+    for key in (
+        "camera_on",
+        "auto_tracking",
+        "auto_zoom",
+        "voice_control",
+        "schedule_enabled",
+        "calm_enabled",
+    ):
         if key in body:
             if not isinstance(body[key], bool):
                 raise ValueError(f"{key} must be true or false")

@@ -35,7 +35,8 @@ pet-activity data from your Furbo account.
 - **Camera** — live video (WebRTC / RTSP), with snapshots
 - **Video quality** — 1080p / 720p / 360p select
 - **Controls** — camera power, speaker volume, night vision, barking
-  sensitivity, auto pet tracking, auto zoom, voice control and treat size
+  sensitivity, auto pet tracking, auto zoom, voice control, treat size,
+  the on/off schedule and Calm My Pet
 - **Pan** left / right, **toss treat** and **play treat sound**
 - **Treat toss sound** shown read-only (the app picks presets by sound file)
 

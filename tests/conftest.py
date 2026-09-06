@@ -76,6 +76,8 @@ BRIDGE_STATE = BridgeState(
     treat_size="large",
     snack_call="default",
     quality="1080p",
+    schedule_enabled=False,
+    calm_enabled=True,
     firmware="108",
 )
 

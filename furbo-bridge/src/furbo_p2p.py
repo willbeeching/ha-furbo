@@ -611,6 +611,8 @@ class FurboP2P:
             s["snack_call"] = SNACK_CALL.get(data[1], data[1])
         elif opcode == CMD3["GET_CAMERA_SCHEDULE"] + 1:
             s["schedule"] = _json(data[1:] if ok else data)
+        elif opcode == CMD3["GET_AUTO_CALM"] + 1:
+            s["auto_calm"] = _json(data[1:] if ok else data)
         elif opcode == CMD3["GET_UPGRADE_INFO"] + 1 and ok:
             vers = _ascii_fields(data[2:], 4)
             s.setdefault("firmware", {}).update(
@@ -698,7 +700,8 @@ class FurboP2P:
                        "GET_NIGHT_VISION", "GET_BARKING", "GET_SNACKCALL",
                        "GET_CAMERA_SCHEDULE", "GET_UPGRADE_INFO",
                        "GET_AUTO_TRACKING", "GET_AUTO_ZOOM",
-                       "GET_VOICE_CONTROL", "GET_TOSS_PROFILE"):
+                       "GET_VOICE_CONTROL", "GET_TOSS_PROFILE",
+                       "GET_AUTO_CALM"):
                 self.send(CMD3[op], z)
                 self.drain(0.4)
             self.drain(wait)

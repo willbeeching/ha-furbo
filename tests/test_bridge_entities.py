@@ -50,6 +50,8 @@ ENTITIES = (
     "button.test_camera_toss_treat",
     "button.test_camera_play_treat_sound",
     "switch.test_camera_voice_control",
+    "switch.test_camera_on_off_schedule",
+    "switch.test_camera_calm_my_pet",
     "select.test_camera_treat_size",
     "select.test_camera_video_quality",
     "sensor.test_camera_treat_toss_sound",
@@ -97,6 +99,8 @@ async def test_bridge_entities_reflect_state(
     assert hass.states.get("select.test_camera_night_vision").state == "auto"
     assert hass.states.get("select.test_camera_barking_sensitivity").state == "medium"
     assert hass.states.get("switch.test_camera_voice_control").state == "on"
+    assert hass.states.get("switch.test_camera_on_off_schedule").state == "off"
+    assert hass.states.get("switch.test_camera_calm_my_pet").state == "on"
     assert hass.states.get("select.test_camera_treat_size").state == "large"
     assert hass.states.get("select.test_camera_video_quality").state == "1080p"
     assert hass.states.get("sensor.test_camera_treat_toss_sound").state == "default"
@@ -176,6 +180,12 @@ async def test_writes_go_through_bridge(
         {"entity_id": "select.test_camera_video_quality", "option": "720p"},
         blocking=True,
     )
+    await hass.services.async_call(
+        "switch",
+        "turn_off",
+        {"entity_id": "switch.test_camera_on_off_schedule"},
+        blocking=True,
+    )
     assert [call.kwargs for call in mock_bridge.async_set.await_args_list] == [
         {"camera_on": False},
         {"volume": 70},
@@ -184,6 +194,7 @@ async def test_writes_go_through_bridge(
         {"treat_size": "small"},
         {"voice_control": False},
         {"quality": "720p"},
+        {"schedule_enabled": False},
     ]
     assert hass.states.get("switch.test_camera_camera").state == "off"
     assert hass.states.get("number.test_camera_speaker_volume").state == "70"

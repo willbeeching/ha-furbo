@@ -153,6 +153,12 @@
       },
       "voice_control": {
         "name": "Voice control"
+      },
+      "schedule_enabled": {
+        "name": "On/off schedule"
+      },
+      "calm_enabled": {
+        "name": "Calm my pet"
       }
     },
     "sensor": {
