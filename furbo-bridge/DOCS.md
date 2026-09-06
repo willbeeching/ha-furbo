@@ -11,7 +11,12 @@ two forms the Furbo integration and Home Assistant can consume:
   sensitivity, tracking, pan, treat toss) — the integration polls and drives it.
 
 The TUTK library and go2rtc are downloaded when the add-on image is built;
-nothing proprietary is stored in the repository.
+nothing proprietary is stored in this repository. The TUTK P2P library is
+fetched at build time from the [docker-wyze-bridge](https://github.com/mrlt8/docker-wyze-bridge)
+project (the same SDK it uses), and the image is built on your own machine — so
+this project neither stores nor distributes any ThroughTek binary. If you later
+publish a pre-built image containing the SDK, that is redistribution and is your
+responsibility to clear with the vendor.
 
 ## Setup
 

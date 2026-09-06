@@ -6,9 +6,12 @@
 # immutable source (a commit or a release tag) and verified against a recorded
 # SHA-256, so a build either produces the exact bytes reviewed here or fails.
 #
-# The TUTK library is the same one docker-wyze-bridge ships. It is a third-party
-# vendor SDK; confirm you are entitled to use and distribute it this way before
-# publishing an image built from it (see furbo-bridge/DOCS.md).
+# The TUTK library is the same one docker-wyze-bridge ships, and it is fetched
+# from that project at build time — this repository redistributes no ThroughTek
+# binary. The image is built locally on the user's own machine, so no built
+# image containing the SDK is distributed here either. If you go on to publish a
+# pre-built image yourself, that is redistribution and you must confirm your own
+# entitlement to do so first (see furbo-bridge/DOCS.md).
 FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
 
 # TUTK P2P library, pinned to an immutable docker-wyze-bridge commit with a
