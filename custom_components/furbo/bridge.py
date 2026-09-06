@@ -49,6 +49,10 @@ class BridgeState:
     """Camera state as reported by the bridge. None means not reported yet."""
 
     connected: bool
+    # The Furbo cloud device id the bridge is actually serving, so the
+    # integration can detect a bridge pointed at the wrong camera. None until
+    # the bridge has established a session.
+    device_id: str | None = None
     camera_on: bool | None = None
     volume: int | None = None
     muted: bool | None = None
@@ -88,8 +92,11 @@ def parse_state(data: Any) -> BridgeState:
     ):
         volume = None
     firmware = state.get("firmware")
+    device = data.get("device", {})
+    device_id = device.get("device_id") if isinstance(device, dict) else None
     return BridgeState(
         connected=data.get("connected") is True,
+        device_id=device_id if isinstance(device_id, str) and device_id else None,
         camera_on=_bool(state.get("camera_on")),
         volume=volume,
         muted=_bool(state.get("muted")),

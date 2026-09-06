@@ -17,7 +17,7 @@ the live Furbo cloud. Negative results are kept deliberately.
 | 2026-09-05 | FB0030 / 108 (lib 003.011) | Live video (P2P) | `furbo_p2p.py stream` on a LAN host (research branch) | H.264 frames | Verified: 1920x1080 at 25 fps for quality slot 0 after one 640x360 preview frame; slots 1 to 3 return 640x360 |
 | 2026-09-05 | FB0030 / 108 | P2P state and controls | `furbo_p2p.py p2p-status` / `p2p-set` (research branch) | State read, volume set, pan, treat toss | Verified: V3 opcode set; volume reads back, pan moves and returns, one treat dispensed |
 | n/a | n/a | Camera entity | Unit tests with a mocked stream URL | Stream source and snapshots via the stream | Tested; go2rtc feeding the entity not yet run end to end |
-| 2026-09-05 | FB0030 / 108 | Two-way audio (P2P) | `furbo_p2p.py talk` sending G.711 µ-law over the DTLS audio channel | Camera accepts audio frames | Verified: camera accepts frames after `avServStartEx` (security mode 3) + `avServSetResendSize` |
+| 2026-09-05 | FB0030 / 108 | Talkback at P2P layer | `furbo_p2p.py talk` sending G.711 µ-law over the DTLS audio channel | Camera accepts audio frames | Verified at the P2P layer: camera accepts frames after `avServStartEx` (security mode 3) + `avServSetResendSize`. **Not** verified through the full browser -> go2rtc (PCMA) -> ffmpeg -> camera path. |
 | 2026-09-06 | n/a (arm64 host) | Add-on image build | `docker build` of `furbo-bridge/` under colima | Image builds; pinned TUTK + go2rtc checksums verify | Verified; a deliberately wrong TUTK hash aborts the build |
 | n/a | n/a | Bridge controls | Unit tests with a mocked bridge client; bridge HTTP layer tested against a fake session | Switch, number, select and button entities write through the bridge | Tested; the bridge process not yet run against the camera |
 | n/a | n/a | Bridge API auth | Add-on test suite drives the real aiohttp app | Anonymous/wrong-token status, control and settings requests are rejected | Verified in tests: every endpoint returns 401 and reaches nothing without the token |
@@ -29,6 +29,10 @@ the live Furbo cloud. Negative results are kept deliberately.
 - Multiple cameras on one account (only single-camera verified).
 - A camera leaving the account (stale-device handling).
 - The camera entity playing a real go2rtc stream produced by the bridge.
+- RTSP authentication end to end (the camera entity playing the password-
+  protected stream over the network).
+- The talkback path through a real browser: HA dashboard microphone -> go2rtc
+  (PCMA) -> `talk.sh` -> the camera speaker, over HTTPS.
 - The bridge's HTTP API (`furbo_p2p.py serve`) against the camera, including
   a control session alongside go2rtc's video session.
 - The full add-on running under a real Home Assistant Supervisor (auto-discovery

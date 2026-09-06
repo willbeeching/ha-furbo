@@ -30,6 +30,16 @@ in the add-on's private `/data` storage (`furbo_session.json`); fresh P2P
 credentials are fetched from the cloud each session and held only in memory.
 Your password is used only for that first sign-in.
 
+Note that Home Assistant's Supervisor stores every add-on option, including
+`email`, `password` and `mfa_code`, in its own `options.json` for as long as
+they are set — the add-on cannot erase them from there. Clear `mfa_code` once
+login completes, and if you would rather the password not persist, you may
+blank it after the first successful login (the saved session keeps working; set
+it again only to re-authenticate). To start over without reinstalling — an
+expired session, a changed password, or the wrong account — turn on the
+**`reset_session`** option once: the add-on discards the stored session and logs
+in again, then you turn the option back off.
+
 Its HTTP API exposes the camera's controls (treat toss, pan, settings) and its
 state, so it requires a bearer **`api_token`**:
 

@@ -518,12 +518,28 @@ async def cloud_status(days: int) -> None:
 
 
 async def fetch_p2p_credentials(device_id: str | None) -> dict:
-    """Uid, auth key and a fresh P2P password for one device."""
+    """Uid, auth key and a fresh P2P password for one device.
+
+    With more than one camera on the account a device_id must be given, so the
+    bridge never silently serves the wrong camera; the resolved cloud device id
+    is returned as ``device_id`` for the integration to verify.
+    """
     import aiohttp
 
     session = _load_session()
     devices = session["devices"]
-    device = next((d for d in devices if d["Id"] == device_id), devices[0])
+    if device_id:
+        device = next((d for d in devices if str(d["Id"]) == str(device_id)), None)
+        if device is None:
+            ids = ", ".join(str(d["Id"]) for d in devices)
+            raise SystemExit(f"device_id {device_id} not found; available: {ids}")
+    elif len(devices) == 1:
+        device = devices[0]
+    else:
+        ids = ", ".join(str(d["Id"]) for d in devices)
+        raise SystemExit(
+            f"this account has {len(devices)} cameras; set the 'device_id' option to one of: {ids}"
+        )
     async with aiohttp.ClientSession() as http:
         client = FurboClient(http, session["account_id"], session["cognito_token"])
         try:
@@ -532,6 +548,7 @@ async def fetch_p2p_credentials(device_id: str | None) -> dict:
             raise _cloud_fail(exc) from exc
     return {
         "name": device["DeviceName"],
+        "device_id": str(device["Id"]),
         "uid": device["P2PUuid"],
         "auth_key": p2p["AuthKey"],
         "account": p2p["P2PAccountId"],
@@ -1228,7 +1245,12 @@ def main() -> int:
             default=os.environ.get("FURBO_TUTK_REGION"),
             help="TUTK region code, normally unset like the app",
         )
-        sp.add_argument("--device", help="device id, defaults to the first one")
+        sp.add_argument(
+            "--device",
+            default=os.environ.get("FURBO_DEVICE") or None,
+            help="cloud device id; required when the account has more than one "
+            "camera (defaults to $FURBO_DEVICE)",
+        )
         sp.add_argument("--timeout", type=int, default=10, help="connect timeout in seconds")
         sp.add_argument("--tutk-log", help="write the SDK's own debug log here")
         sp.add_argument(

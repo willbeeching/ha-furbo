@@ -238,8 +238,17 @@ class FurboBridgeCoordinator(DataUpdateCoordinator[BridgeState]):
         self.cloud = cloud
 
     async def _async_update_data(self) -> BridgeState:
-        """Fetch the bridge's cached camera state."""
+        """Fetch the bridge's cached camera state, verifying its identity."""
         try:
-            return await self.client.async_get_status()
+            state = await self.client.async_get_status()
         except FurboBridgeError as err:
             raise UpdateFailed(str(err)) from err
+        # Guard against a bridge wired to the wrong camera: if it reports a cloud
+        # device id, it must match the one this coordinator serves, or its state
+        # and controls would belong to another camera.
+        if state.device_id is not None and state.device_id != self.device_id:
+            raise UpdateFailed(
+                f"bridge is serving camera {state.device_id}, not {self.device_id}; "
+                "check the add-on's device_id option"
+            )
+        return state

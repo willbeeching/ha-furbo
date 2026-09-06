@@ -7,7 +7,7 @@
 # The TUTK library is fetched at build time (see Dockerfile); no proprietary
 # binary is stored in this repository.
 name: Furbo Bridge
-version: "0.1.1"
+version: "0.1.2"
 slug: furbo_bridge
 description: >-
   Runs the Furbo camera's proprietary P2P session outside Home Assistant and
@@ -37,12 +37,20 @@ options:
   email: ""
   password: ""
   mfa_code: ""
+  device_id: ""
+  reset_session: false
   quality: 1080p
   log_level: info
 schema:
   email: email?
   password: password?
   mfa_code: str?
+  # Required only when the account has more than one camera; the add-on refuses
+  # to guess in that case. Find the id in the integration or the add-on log.
+  device_id: str?
+  # Turn on once to discard the stored session and log in again (expired
+  # session, changed password), then turn it off.
+  reset_session: bool?
   quality: list(1080p|720p|360p)
   api_token: password
   log_level: list(trace|debug|info|warning|error|fatal)

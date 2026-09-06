@@ -50,8 +50,13 @@ RUN set -eux; \
     echo "${sha}  /usr/local/bin/go2rtc" | sha256sum -c -; \
     chmod +x /usr/local/bin/go2rtc
 
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# Install the runtime deps from a fully hash-locked file (all transitive
+# packages pinned with SHA-256), so a compromised index cannot substitute a
+# different wheel. Regenerate with:
+#   uv pip compile furbo-bridge/requirements.txt --generate-hashes --universal \
+#     -o furbo-bridge/requirements.lock
+COPY requirements.lock /app/requirements.lock
+RUN pip install --no-cache-dir --require-hashes -r /app/requirements.lock
 
 COPY src/ /app/
 COPY go2rtc.yaml /app/go2rtc.yaml

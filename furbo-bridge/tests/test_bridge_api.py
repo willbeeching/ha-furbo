@@ -33,7 +33,12 @@ class FakeWorker:
         self.connected = True
         self.updated_at = 123.0
         self.last_error: str | None = None
-        self.device = {"id": "UID", "name": "Furbo", "product": "FB0030"}
+        self.device = {
+            "id": "UID",
+            "device_id": "12345",
+            "name": "Furbo",
+            "product": "FB0030",
+        }
         self.state: dict[str, Any] = {"camera_on": True, "volume": 50}
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
@@ -133,6 +138,7 @@ def test_status_with_token() -> None:
         body = await resp.json()
         assert body["connected"] is True
         assert body["device"]["product"] == "FB0030"
+        assert body["device"]["device_id"] == "12345"
         assert body["state"]["camera_on"] is True
         assert "quality" in body["state"]
 

@@ -7,8 +7,9 @@
 streams:
   furbo:
     - "exec:/app/stream.sh {output}#killsignal=15#killtimeout=8"
-    # Two-way audio: go2rtc pipes the client mic here (16-bit 16 kHz mono PCM)
-    # and talk.sh forwards it to the camera speaker.
+    # Talkback: go2rtc pipes the client microphone here (negotiated as PCMA,
+    # G.711 A-law 8 kHz) and talk.sh forwards it to the camera speaker. This is
+    # one-way; the camera's own audio is not carried in the stream above.
     - "exec:/app/talk.sh#backchannel=1#killsignal=15#killtimeout=5"
 
 # The go2rtc API (config, stream list, snapshots) is for the bridge's own use;
@@ -17,8 +18,15 @@ streams:
 api:
   listen: "127.0.0.1:1984"
 
+# RTSP is reachable on the LAN so Home Assistant can pull the stream, so it is
+# password-protected: go2rtc requires these credentials for any non-loopback
+# client. The password is the same api_token the HTTP API uses; the integration
+# builds rtsp://furbo:<token>@host:8554/furbo. (go2rtc skips the check for
+# loopback, so local tools still work without credentials.)
 rtsp:
   listen: ":8554"
+  username: "furbo"
+  password: "${API_TOKEN}"
 
 webrtc:
   listen: ":8555"

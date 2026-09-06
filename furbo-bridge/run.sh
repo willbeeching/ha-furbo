@@ -24,8 +24,21 @@ FURBO_QUALITY="$(opt quality)"; FURBO_QUALITY="${FURBO_QUALITY:-1080p}"
 # Seed it from the add-on option on first run; the Home Assistant select then
 # writes it and that choice persists across restarts.
 [ -f /data/quality ] || echo "$FURBO_QUALITY" > /data/quality
-API_TOKEN="$(opt api_token)"
+# Exported so go2rtc.yaml can use it for the RTSP password via ${API_TOKEN}.
+export API_TOKEN; API_TOKEN="$(opt api_token)"
 LOG_LEVEL="$(opt log_level)"; export GO2RTC_LOG="${LOG_LEVEL:-info}"
+# Exported so serve, stream.sh and talk.sh all target the same camera. Required
+# when the account has more than one camera.
+export FURBO_DEVICE; FURBO_DEVICE="$(opt device_id)"
+RESET_SESSION="$(opt reset_session)"
+
+# Reset the stored session on request, so a user can re-authenticate (expired
+# session, changed password, wrong account) without reinstalling the add-on.
+if [ "$RESET_SESSION" = "true" ]; then
+  echo "[furbo] reset_session is on: clearing the stored session." >&2
+  rm -f "$FURBO_SESSION_FILE" /data/furbo_session.pending.json
+  echo "[furbo] cleared. Turn 'reset_session' off again; a fresh login follows." >&2
+fi
 
 if [ -z "$API_TOKEN" ]; then
   echo "[furbo] the 'api_token' option is required: set it to a long random" >&2

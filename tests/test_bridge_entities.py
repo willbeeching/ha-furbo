@@ -287,6 +287,35 @@ async def test_bridge_without_p2p_session_is_unavailable(
         assert hass.states.get(entity_id).state == "unavailable", entity_id
 
 
+async def test_bridge_serving_wrong_camera_is_unavailable(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """A bridge reporting a different cloud device id is rejected, not trusted."""
+    mock_bridge.async_get_status.return_value = replace(
+        BRIDGE_STATE, device_id="9999999999999999"
+    )
+    await setup_integration(hass, mock_config_entry, BRIDGE_OPTIONS)
+    for entity_id in ENTITIES:
+        assert hass.states.get(entity_id).state == "unavailable", entity_id
+
+
+async def test_bridge_matching_device_id_is_trusted(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """A bridge reporting the right device id drives the entities normally."""
+    mock_bridge.async_get_status.return_value = replace(
+        BRIDGE_STATE, device_id=c.DEVICE_ID
+    )
+    await setup_integration(hass, mock_config_entry, BRIDGE_OPTIONS)
+    assert hass.states.get("switch.test_camera_camera").state == "on"
+
+
 async def test_discovered_addon_auto_creates_entities(
     hass: HomeAssistant,
     mock_client: AsyncMock,
@@ -311,7 +340,7 @@ async def test_discovered_addon_auto_creates_entities(
     assert hass.states.get("camera.test_camera") is not None
     assert (
         await async_get_stream_source(hass, "camera.test_camera")
-        == "rtsp://abc-furbo-bridge:8554/furbo"
+        == "rtsp://furbo:tok@abc-furbo-bridge:8554/furbo"
     )
     # The bridge-backed controls are created too.
     assert hass.states.get("button.test_camera_toss_treat") is not None

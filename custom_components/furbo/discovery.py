@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import logging
 import os
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 from homeassistant.core import HomeAssistant
@@ -29,6 +30,9 @@ SUPERVISOR_URL = "http://supervisor"
 ADDON_SLUG_SUFFIX = "furbo_bridge"
 BRIDGE_PORT = 8791
 RTSP_PORT = 8554
+# The add-on protects RTSP with these credentials (username fixed; password is
+# the api_token). Keep in step with furbo-bridge/go2rtc.yaml.
+RTSP_USERNAME = "furbo"
 _TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 
@@ -47,8 +51,13 @@ class DiscoveredBridge:
 
     @property
     def stream_url(self) -> str:
-        """The add-on's go2rtc RTSP URL."""
-        return f"rtsp://{self.host}:{RTSP_PORT}/furbo"
+        """The add-on's go2rtc RTSP URL, with credentials when a token is set.
+
+        The add-on requires RTSP authentication for non-loopback clients, so the
+        token is carried as the RTSP password (URL-encoded).
+        """
+        auth = f"{RTSP_USERNAME}:{quote(self.token, safe='')}@" if self.token else ""
+        return f"rtsp://{auth}{self.host}:{RTSP_PORT}/furbo"
 
 
 async def _get(session: aiohttp.ClientSession, path: str, token: str) -> Any:

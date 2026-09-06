@@ -117,11 +117,15 @@ jobs:
         run: .venv/bin/ruff check src tests
       - name: Ruff format (add-on)
         run: .venv/bin/ruff format --check src tests
-      - name: Tests with coverage (auth boundary, worker dispatch, cloud client)
+      # Coverage spans all three production modules. furbo_p2p.py is largely
+      # ctypes glue to the native TUTK SDK that only runs against real hardware
+      # (see HARDWARE_VERIFICATION.md), so the overall floor is lower than the
+      # integration's; its pure decode/lifecycle logic is covered by tests.
+      - name: Tests with coverage (all bridge modules)
         run: >-
           .venv/bin/python -m pytest
-          --cov=furbo_bridge --cov=furbo_cloud
-          --cov-report=term-missing --cov-fail-under=80
+          --cov=furbo_bridge --cov=furbo_cloud --cov=furbo_p2p
+          --cov-report=term-missing --cov-fail-under=50
 
   release-archive:
     runs-on: ubuntu-latest
@@ -132,6 +136,46 @@ jobs:
           python-version: "3.13"
       - name: Build and verify the reproducible archive
         run: python scripts/build_release.py
+
+  addon-image:
+    # Build the add-on image for both architectures (so a break on either is
+    # caught in CI) and scan the amd64 image for known vulnerabilities, emitting
+    # an SBOM artifact.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build both architectures
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: furbo-bridge
+          platforms: linux/amd64,linux/arm64
+          push: false
+      - name: Build amd64 image for scanning
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: furbo-bridge
+          load: true
+          tags: furbo-bridge:ci
+      - name: Vulnerability scan (report only)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: furbo-bridge:ci
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: "true"
+          exit-code: "0"
+      - name: Generate SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: furbo-bridge:ci
+          format: cyclonedx
+          output: furbo-bridge.sbom.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: furbo-bridge-sbom
+          path: furbo-bridge.sbom.json
 
   addon-version:
     # On pull requests, require a version bump when shipped add-on files change,

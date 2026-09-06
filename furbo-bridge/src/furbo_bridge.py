@@ -159,7 +159,12 @@ class P2PWorker:
         except SystemExit as exc:
             self.last_error = str(exc)
             raise BridgeUnavailable(str(exc)) from None
-        self.device = {"id": creds["uid"], "name": creds["name"], "product": creds["product"]}
+        self.device = {
+            "id": creds["uid"],
+            "device_id": creds["device_id"],
+            "name": creds["name"],
+            "product": creds["product"],
+        }
         self._p2p = p2p
         self.last_error = None
         return p2p

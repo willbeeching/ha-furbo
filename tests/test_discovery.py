@@ -10,7 +10,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMocker,
 )
 
-from custom_components.furbo.discovery import async_discover_bridge
+from custom_components.furbo.discovery import DiscoveredBridge, async_discover_bridge
 
 ADDONS_URL = "http://supervisor/addons"
 INFO_URL = "http://supervisor/addons/abc123_furbo_bridge/info"
@@ -57,7 +57,8 @@ async def test_discovers_started_addon_with_token(
     assert found.host == "abc123-furbo-bridge"
     assert found.token == "s3cret"
     assert found.bridge_url == "http://abc123-furbo-bridge:8791"
-    assert found.stream_url == "rtsp://abc123-furbo-bridge:8554/furbo"
+    # The token is carried as the RTSP password so the stream is authenticated.
+    assert found.stream_url == "rtsp://furbo:s3cret@abc123-furbo-bridge:8554/furbo"
 
 
 async def test_prefers_started_over_stopped(
@@ -80,6 +81,14 @@ async def test_prefers_started_over_stopped(
     assert found is not None
     assert found.slug == "abc123_furbo_bridge"
     assert found.token is None
+    # With no token the stream URL carries no credentials.
+    assert found.stream_url == "rtsp://h:8554/furbo"
+
+
+def test_stream_url_encodes_token() -> None:
+    """A token with URL-reserved characters is percent-encoded in the RTSP URL."""
+    bridge = DiscoveredBridge(slug="s", host="h", token="a/b@c:d")
+    assert bridge.stream_url == "rtsp://furbo:a%2Fb%40c%3Ad@h:8554/furbo"
 
 
 async def test_no_matching_addon_returns_none(
