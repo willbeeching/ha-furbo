@@ -9,10 +9,12 @@ over a proprietary P2P protocol that needs a bridge on the camera's LAN (see
 [Live video](#live-video)).
 
 Everything the cloud side exposes is proven against the live Furbo API. The
-P2P bridge that produces the stream lives in a separate development branch,
-kept out of this integration package. The bridge itself is verified on real
-hardware (1920x1080 H.264 at 25 fps from a Furbo 360); the last hop, go2rtc
-into this camera entity, has not yet been run end to end.
+P2P bridge that produces the stream ships in this repository as a Home
+Assistant **add-on** (see [`furbo-bridge/`](furbo-bridge/)): it runs the
+proprietary session outside Home Assistant and republishes it as RTSP/WebRTC
+via go2rtc and as an HTTP state/control API. The whole chain is verified end
+to end on a Furbo 360 — 1920x1080 H.264 out of the add-on's RTSP endpoint,
+and live state and controls over its HTTP API.
 
 ## Supported devices
 
@@ -119,36 +121,32 @@ that can run inside a Home Assistant integration, so the video path is:
 Furbo camera  --TUTK P2P (LAN, UDP)-->  furbo_p2p.py bridge  --H.264-->  go2rtc  --RTSP/WebRTC-->  Home Assistant
 ```
 
-1. Run the bridge on a Linux machine on the same LAN as the camera. It is
-   `furbo_p2p.py` on the `claude/furbo-home-assistant-integration-m2ojey`
-   branch of this repository; the README there explains the protocol and
-   how to run it (Docker with host networking, or bare Linux). It needs the
-   TUTK 4.2 library (the copy that docker-wyze-bridge ships works) and a
-   Furbo login of its own.
-2. Publish the bridge output through [go2rtc](https://github.com/AlexxIT/go2rtc),
-   which is bundled with Home Assistant OS and available as an add-on:
+The easiest path is the bundled **Furbo Bridge add-on** in
+[`furbo-bridge/`](furbo-bridge/):
 
-   ```yaml
-   streams:
-     furbo:
-       - "exec:python3 /config/furbo_p2p.py stream --quality 1080p#killsignal=2"
-   ```
-
-   Ask for 1080p: on the shipping firmware the other quality slots return
-   the camera's 640x360 profile, and the first 1080p keyframe follows a
+1. Add this repository under **Settings → Add-ons → Add-on Store → ⋮ →
+   Repositories**, then install **Furbo Bridge**. It downloads the TUTK 4.2
+   library and go2rtc at build time (nothing proprietary is stored here), runs
+   the P2P session with host networking, and needs a one-time Furbo login (its
+   [docs](furbo-bridge/DOCS.md) walk through the emailed-code step).
+2. The add-on serves `rtsp://<add-on host>:8554/furbo` and an HTTP API on
+   `:8791`. Ask for 1080p: on the shipping firmware the other quality slots
+   return the camera's 640x360 profile, and the first 1080p keyframe follows a
    single low-resolution preview frame a few seconds in.
+3. In the Furbo options, per camera, set the **stream URL** to that RTSP URL
+   and the **bridge URL**/**token** to the add-on's API. The camera entity and
+   controls appear after the reload; with Home Assistant's own go2rtc enabled,
+   the dashboard plays it over WebRTC with low latency.
 
-   go2rtc then serves `rtsp://<go2rtc host>:8554/furbo`.
-3. Enter that RTSP URL as the camera's stream URL in the Furbo options. The
-   camera entity appears after the reload. With Home Assistant's own go2rtc
-   integration enabled, the dashboard plays it over WebRTC with low latency.
+On Home Assistant Container or Core (no add-on support), run `furbo_p2p.py
+serve` and go2rtc yourself from [`furbo-bridge/`](furbo-bridge/) and point the
+options at them.
 
-Status: the bridge speaks the protocol as the Furbo app does (license key,
-`IOTC_Connect_ByUIDEx` with the device auth key, DTLS `PSK-AES128-CBC-SHA256`,
-the V3 control opcodes) and is verified live on a Furbo 360: 1080p video,
-device state, pan and treat toss. The camera entity is tested against a
-mocked stream URL. What remains unproven is only the combination: the bridge
-under go2rtc feeding this entity on a running Home Assistant.
+Status: verified end to end on a Furbo 360. The add-on speaks the protocol as
+the Furbo app does (license key, `IOTC_Connect_ByUIDEx` with the device auth
+key, DTLS `PSK-AES128-CBC-SHA256`, the V3 control opcodes); a live test pulled
+1920x1080 H.264 from the add-on's go2rtc RTSP endpoint and live state, pan and
+treat toss from its HTTP API.
 
 ## Controls via the bridge
 

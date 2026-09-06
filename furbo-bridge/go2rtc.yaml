@@ -1,0 +1,21 @@
+# go2rtc turns the raw H.264 that furbo_p2p.py emits into RTSP/WebRTC.
+#
+# The exec source runs on demand: go2rtc starts the P2P stream only while a
+# client is watching and stops it when idle, so the video P2P session is not
+# held open continuously. go2rtc substitutes {output} with an internal RTSP
+# endpoint that ffmpeg republishes to (a straight remux, -c copy).
+streams:
+  furbo:
+    - "exec:bash -c 'python3 /app/furbo_p2p.py stream --quality ${FURBO_QUALITY} | exec ffmpeg -hide_banner -loglevel error -fflags nobuffer -f h264 -i - -c copy -f rtsp -rtsp_transport tcp {output}'#killsignal=15#killtimeout=8"
+
+api:
+  listen: ":1984"
+
+rtsp:
+  listen: ":8554"
+
+webrtc:
+  listen: ":8555"
+
+log:
+  level: ${GO2RTC_LOG}

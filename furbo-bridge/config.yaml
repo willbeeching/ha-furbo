@@ -1,0 +1,51 @@
+# Home Assistant add-on: Furbo Bridge
+#
+# Holds one TUTK/Kalay P2P session to a Furbo camera on the LAN and exposes:
+#   - an HTTP JSON API (state + controls) the Furbo integration talks to
+#   - an RTSP/WebRTC stream (via go2rtc) the camera entity points at
+#
+# The TUTK library is fetched at build time (see Dockerfile); no proprietary
+# binary is stored in this repository.
+name: Furbo Bridge
+version: "0.1.0"
+slug: furbo_bridge
+description: >-
+  Runs the Furbo camera's proprietary P2P session outside Home Assistant and
+  exposes its live video (RTSP/WebRTC) and its state/controls (HTTP) to the
+  Furbo integration.
+url: https://github.com/willbeeching/ha-furbo/tree/main/furbo-bridge
+# TUTK ships amd64 and arm64 builds; the Dockerfile picks by architecture.
+arch:
+  - amd64
+  - aarch64
+# host_network is required: TUTK opens UDP sockets and hole-punches to the
+# Kalay servers and the camera, which the bridged add-on network cannot do.
+host_network: true
+# Persist the cloud session (furbo_session.json) across restarts.
+map:
+  - addon_config:rw
+init: false
+# Ports are informational under host_network; listed for documentation and so
+# the UI can surface them. 8791 = HTTP API, 8554 = RTSP, 1984 = go2rtc UI/API.
+ports:
+  8791/tcp: 8791
+  8554/tcp: 8554
+  1984/tcp: 1984
+ports_description:
+  8791/tcp: HTTP state & control API (used by the Furbo integration)
+  8554/tcp: RTSP live stream (point the camera entity here)
+  1984/tcp: go2rtc web UI and API
+options:
+  email: ""
+  password: ""
+  mfa_code: ""
+  quality: 1080p
+  api_token: ""
+  log_level: info
+schema:
+  email: email?
+  password: password?
+  mfa_code: str?
+  quality: list(1080p|720p|360p)
+  api_token: password?
+  log_level: list(trace|debug|info|warning|error|fatal)
