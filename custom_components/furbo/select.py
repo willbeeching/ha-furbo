@@ -1,4 +1,4 @@
-"""Select platform for Furbo: night vision and bark sensitivity, via the bridge."""
+"""Select platform for Furbo: camera settings and alert frequency."""
 
 from __future__ import annotations
 
@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import FurboConfigEntry
+from .api import FurboError
 from .bridge import (
     BARK_LEVELS,
     NIGHT_MODES,
@@ -18,11 +20,24 @@ from .bridge import (
     VIDEO_QUALITIES,
     BridgeState,
 )
-from .coordinator import FurboBridgeCoordinator
-from .entity import FurboBridgeEntity
+from .const import ALERT_FREQUENCIES, DOMAIN, FREQUENCY_ALERTS
+from .coordinator import FurboBridgeCoordinator, FurboCoordinator
+from .entity import FurboBridgeEntity, FurboDeviceEntity
 
-# Writes go through the bridge's single P2P session; serialize them.
+# Writes go through the bridge's single P2P session (or the cloud); serialize them.
 PARALLEL_UPDATES = 1
+
+_SECONDS_FOR_OPTION = {option: seconds for seconds, option in ALERT_FREQUENCIES.items()}
+
+
+def _snake(key: str) -> str:
+    """Convert an alert key like 'PersonDetection' to 'person_detection'."""
+    out: list[str] = []
+    for index, char in enumerate(key):
+        if char.isupper() and index and not key[index - 1].isupper():
+            out.append("_")
+        out.append(char.lower())
+    return "".join(out)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -74,12 +89,20 @@ async def async_setup_entry(
     entry: FurboConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the select entities per configured bridge."""
-    async_add_entities(
+    """Set up bridge selects per camera and alert-frequency selects per device."""
+    coordinator = entry.runtime_data.coordinator
+    entities: list[SelectEntity] = [
         FurboSelect(bridge, description)
         for bridge in entry.runtime_data.bridges.values()
         for description in SELECTS
+    ]
+    entities.extend(
+        FurboAlertFrequencySelect(coordinator, device_id, alert)
+        for device_id, device in coordinator.data.devices.items()
+        for alert in FREQUENCY_ALERTS
+        if f"Frequency:{alert}" in device.alerts
     )
+    async_add_entities(entities)
 
 
 class FurboSelect(FurboBridgeEntity, SelectEntity):
@@ -103,3 +126,42 @@ class FurboSelect(FurboBridgeEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         """Change the setting."""
         await self._async_apply(**{self.entity_description.setting: option})
+
+
+class FurboAlertFrequencySelect(FurboDeviceEntity, SelectEntity):
+    """How often one smart alert may notify (a cloud setting)."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self, coordinator: FurboCoordinator, device_id: str, alert: str
+    ) -> None:
+        """Initialise the frequency select for one alert."""
+        super().__init__(coordinator, device_id)
+        self._alert = alert
+        self._attr_options = list(ALERT_FREQUENCIES.values())
+        self._attr_translation_key = f"frequency_{_snake(alert)}"
+        self._attr_unique_id = f"{device_id}_frequency_{alert}"
+
+    @property
+    def current_option(self) -> str | None:
+        """Return the current frequency, or None if unset/unknown."""
+        return ALERT_FREQUENCIES.get(
+            self.device.alerts.get(f"Frequency:{self._alert}", "")
+        )
+
+    async def async_select_option(self, option: str) -> None:
+        """Write the new frequency and reflect it locally on success."""
+        seconds = _SECONDS_FOR_OPTION[option]
+        try:
+            await self.coordinator.client.set_alert_frequency(
+                self._device_id, self._alert, seconds
+            )
+        except FurboError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="set_alert_failed",
+                translation_placeholders={"name": self._alert, "error": str(err)},
+            ) from err
+        self.device.alerts[f"Frequency:{self._alert}"] = seconds
+        self.async_write_ha_state()

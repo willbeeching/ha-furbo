@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.furbo import entity as entity_module
 from custom_components.furbo.api import FurboError
 
+from . import const as c
 from .conftest import setup_integration
 
 
@@ -153,3 +154,32 @@ async def test_activity_counts_default_to_zero(
     await setup_integration(hass, mock_config_entry)
     assert hass.states.get("sensor.furbo_account_barking_events_today").state == "0"
     assert hass.states.get("sensor.furbo_account_activity_events_today").state == "0"
+
+
+async def test_alert_frequency_select(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """The frequency select reads the current value and writes a new one."""
+    await setup_integration(hass, mock_config_entry)
+    # Created only for alerts that report a Frequency value.
+    assert hass.states.get("select.test_camera_barking_alert_frequency").state == (
+        "every_30_minutes"
+    )
+    assert hass.states.get("select.test_camera_person_alert_frequency") is not None
+    assert hass.states.get("select.test_camera_activity_alert_frequency") is None
+
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {
+            "entity_id": "select.test_camera_barking_alert_frequency",
+            "option": "always",
+        },
+        blocking=True,
+    )
+    mock_client.set_alert_frequency.assert_awaited_once_with(
+        c.DEVICE_ID, "Barking", "1"
+    )
+    assert (
+        hass.states.get("select.test_camera_barking_alert_frequency").state == "always"
+    )

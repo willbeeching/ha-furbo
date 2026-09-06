@@ -23,7 +23,8 @@ pet-activity data from your Furbo account.
 **With the integration alone** (Furbo cloud account):
 
 - **Smart-alert switches** — barking, crying, person, activity and the other
-  alerts your camera reports
+  alerts your camera reports, plus a **notification-frequency** select for the
+  main ones (barking, person, activity)
 - **Pet activity sensors** — today's notable events with the daily summary,
   plus barking and activity counts
 - **Last event** — timestamp, caption, action and location of the most recent

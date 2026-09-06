@@ -379,6 +379,20 @@ class FurboClient:
             },
         )
 
+    async def set_alert_frequency(
+        self, device_id: str, alert: str, seconds: str
+    ) -> None:
+        """Set how often one alert may notify, as a ``Frequency:<alert>`` value."""
+        await self._post(
+            "/v5/device/alert-setting/update",
+            {
+                **self._base(),
+                "DeviceId": device_id,
+                "Name": f"Frequency:{alert}",
+                "Value": seconds,
+            },
+        )
+
     async def get_license(self) -> dict[str, list[dict[str, Any]]]:
         """Return subscription (Furbo Nanny) entries keyed by device id.
 

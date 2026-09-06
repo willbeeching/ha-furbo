@@ -226,6 +226,30 @@
           "720p": "720p",
           "360p": "360p"
         }
+      },
+      "frequency_barking": {
+        "name": "Barking alert frequency",
+        "state": {
+          "always": "Always",
+          "every_30_minutes": "Every 30 minutes",
+          "every_hour": "Every hour"
+        }
+      },
+      "frequency_person_detection": {
+        "name": "Person alert frequency",
+        "state": {
+          "always": "Always",
+          "every_30_minutes": "Every 30 minutes",
+          "every_hour": "Every hour"
+        }
+      },
+      "frequency_dog_move_above10_sec": {
+        "name": "Activity alert frequency",
+        "state": {
+          "always": "Always",
+          "every_30_minutes": "Every 30 minutes",
+          "every_hour": "Every hour"
+        }
       }
     },
     "button": {

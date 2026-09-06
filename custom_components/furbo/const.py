@@ -89,3 +89,17 @@ ALERT_KEYS: Final = (
 DEFAULT_ENABLED_ALERTS: Final = frozenset(
     {"Barking", "Crying", "PersonDetection", "DogMoveAbove10Sec"}
 )
+
+
+# Smart alerts that also expose a notification-frequency select. Kept to the
+# everyday alerts to avoid a select per alert. Only created when the device
+# reports a "Frequency:<alert>" value for the alert.
+FREQUENCY_ALERTS: Final = ("Barking", "PersonDetection", "DogMoveAbove10Sec")
+
+# Frequency value (seconds, as the API stores it) -> option key. From the app:
+# ALWAYS "1", EVERY_30_MINS "1800", EVERY_1_HR "3600".
+ALERT_FREQUENCIES: Final = {
+    "1": "always",
+    "1800": "every_30_minutes",
+    "3600": "every_hour",
+}

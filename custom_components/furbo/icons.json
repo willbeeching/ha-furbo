@@ -214,6 +214,15 @@
       },
       "video_quality": {
         "default": "mdi:video-high-definition"
+      },
+      "frequency_barking": {
+        "default": "mdi:timer-cog-outline"
+      },
+      "frequency_person_detection": {
+        "default": "mdi:timer-cog-outline"
+      },
+      "frequency_dog_move_above10_sec": {
+        "default": "mdi:timer-cog-outline"
       }
     },
     "button": {
