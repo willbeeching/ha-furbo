@@ -11,7 +11,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import FurboConfigEntry
-from .bridge import BARK_LEVELS, NIGHT_MODES, TREAT_SIZES, BridgeState
+from .bridge import (
+    BARK_LEVELS,
+    NIGHT_MODES,
+    TREAT_SIZES,
+    VIDEO_QUALITIES,
+    BridgeState,
+)
 from .coordinator import FurboBridgeCoordinator
 from .entity import FurboBridgeEntity
 
@@ -51,6 +57,14 @@ SELECTS: tuple[FurboSelectDescription, ...] = (
         options=list(TREAT_SIZES),
         value_fn=lambda state: state.treat_size,
         setting="treat_size",
+    ),
+    FurboSelectDescription(
+        key="video_quality",
+        translation_key="video_quality",
+        entity_category=EntityCategory.CONFIG,
+        options=list(VIDEO_QUALITIES),
+        value_fn=lambda state: state.quality,
+        setting="quality",
     ),
 )
 

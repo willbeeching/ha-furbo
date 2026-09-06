@@ -42,6 +42,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
+import os
+from pathlib import Path
 import threading
 import time
 from typing import Any
@@ -59,6 +61,24 @@ BARK_LEVELS = ("off", "low", "medium", "high")
 PAN_DIRECTIONS = ("left", "right")
 TREAT_SIZES = ("large", "small")
 SNACK_MODES = ("default", "custom", "mute")
+VIDEO_QUALITIES = ("1080p", "720p", "360p")
+# go2rtc's on-demand stream reads the chosen quality from this file when a
+# viewer connects, so a change takes effect on the next view.
+QUALITY_FILE = Path(os.environ.get("FURBO_QUALITY_FILE", "/data/quality"))
+
+
+def read_quality() -> str:
+    """Return the configured stream quality, defaulting to 1080p."""
+    try:
+        value = QUALITY_FILE.read_text().strip()
+    except OSError:
+        value = ""
+    return value if value in VIDEO_QUALITIES else "1080p"
+
+
+def write_quality(quality: str) -> None:
+    """Persist the stream quality for the next go2rtc stream start."""
+    QUALITY_FILE.write_text(quality + "\n")
 
 
 class BridgeUnavailable(Exception):
@@ -167,6 +187,9 @@ class P2PWorker:
 
     def apply(self, settings: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
+            if "quality" in settings:
+                # Stream quality is a bridge/go2rtc concern, not a P2P command.
+                write_quality(settings.pop("quality"))
             p2p = self._ensure()
             cmd = fp.CMD3 if p2p.proto == "v3" else fp.CMD
             if "camera_on" in settings:
@@ -256,6 +279,10 @@ def _parse_settings(body: Any) -> dict[str, Any]:
         if body["treat_size"] not in TREAT_SIZES:
             raise ValueError(f"treat_size must be one of {', '.join(TREAT_SIZES)}")
         out["treat_size"] = body["treat_size"]
+    if "quality" in body:
+        if body["quality"] not in VIDEO_QUALITIES:
+            raise ValueError(f"quality must be one of {', '.join(VIDEO_QUALITIES)}")
+        out["quality"] = body["quality"]
     unknown = set(body) - set(out)
     if unknown:
         raise ValueError(f"unknown settings: {', '.join(sorted(unknown))}")
@@ -273,7 +300,7 @@ def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> 
             "updated_at": worker.updated_at,
             "last_error": worker.last_error,
             "device": worker.device,
-            "state": worker.state,
+            "state": {**worker.state, "quality": read_quality()},
         }
 
     async def run(fn: Any, *args: Any) -> Any:

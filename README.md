@@ -32,10 +32,12 @@ pet-activity data from your Furbo account.
 
 **With the Furbo Bridge add-on** as well:
 
-- **Camera** — live 1080p video (WebRTC / RTSP), with snapshots
+- **Camera** — live video (WebRTC / RTSP), with snapshots
+- **Video quality** — 1080p / 720p / 360p select
 - **Controls** — camera power, speaker volume, night vision, barking
-  sensitivity, auto pet tracking and auto zoom
+  sensitivity, auto pet tracking, auto zoom, voice control and treat size
 - **Pan** left / right, **toss treat** and **play treat sound**
+- **Treat toss sound** shown read-only (the app picks presets by sound file)
 
 ## Requirements
 

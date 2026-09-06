@@ -24,6 +24,7 @@ BARK_LEVELS = ("off", "low", "medium", "high")
 PAN_DIRECTIONS = ("left", "right")
 TREAT_SIZES = ("large", "small")
 SNACK_MODES = ("default", "custom", "mute")
+VIDEO_QUALITIES = ("1080p", "720p", "360p")
 
 
 class FurboBridgeError(Exception):
@@ -58,6 +59,7 @@ class BridgeState:
     voice_control: bool | None = None
     treat_size: str | None = None
     snack_call: str | None = None
+    quality: str | None = None
     firmware: str | None = None
 
 
@@ -96,6 +98,7 @@ def parse_state(data: Any) -> BridgeState:
         voice_control=_bool(state.get("voice_control")),
         treat_size=_choice(state.get("treat_size"), TREAT_SIZES),
         snack_call=_choice(state.get("snack_call"), SNACK_MODES),
+        quality=_choice(state.get("quality"), VIDEO_QUALITIES),
         firmware=firmware if isinstance(firmware, str) and firmware else None,
     )
 

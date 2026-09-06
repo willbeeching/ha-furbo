@@ -205,6 +205,9 @@
       },
       "treat_size": {
         "default": "mdi:bone"
+      },
+      "video_quality": {
+        "default": "mdi:video-high-definition"
       }
     },
     "button": {

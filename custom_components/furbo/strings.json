@@ -212,6 +212,14 @@
           "large": "Large",
           "small": "Small"
         }
+      },
+      "video_quality": {
+        "name": "Video quality",
+        "state": {
+          "1080p": "1080p",
+          "720p": "720p",
+          "360p": "360p"
+        }
       }
     },
     "button": {

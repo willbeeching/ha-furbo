@@ -75,6 +75,7 @@ BRIDGE_STATE = BridgeState(
     voice_control=True,
     treat_size="large",
     snack_call="default",
+    quality="1080p",
     firmware="108",
 )
 

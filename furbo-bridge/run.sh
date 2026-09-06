@@ -19,7 +19,11 @@ fi
 export FURBO_EMAIL="$(opt email)"
 export FURBO_PASSWORD="$(opt password)"
 MFA_CODE="$(opt mfa_code)"
-export FURBO_QUALITY="$(opt quality)"; FURBO_QUALITY="${FURBO_QUALITY:-1080p}"
+FURBO_QUALITY="$(opt quality)"; FURBO_QUALITY="${FURBO_QUALITY:-1080p}"
+# The chosen stream quality lives in a file the on-demand go2rtc stream reads.
+# Seed it from the add-on option on first run; the Home Assistant select then
+# writes it and that choice persists across restarts.
+[ -f /data/quality ] || echo "$FURBO_QUALITY" > /data/quality
 API_TOKEN="$(opt api_token)"
 LOG_LEVEL="$(opt log_level)"; export GO2RTC_LOG="${LOG_LEVEL:-info}"
 
