@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, Platform
@@ -25,6 +26,8 @@ from .const import (
 )
 from .coordinator import FurboBridgeCoordinator, FurboCoordinator
 from .discovery import async_discover_bridge
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
     Platform.BUTTON,
@@ -97,6 +100,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
     configured_bridges: dict[str, dict[str, str]] = entry.options.get(CONF_BRIDGES, {})
     configured_streams: dict[str, str] = entry.options.get(CONF_STREAM_URLS, {})
 
+    # A discovered add-on serves exactly one camera, so it can only be bound
+    # automatically when the account has a single camera; with more than one we
+    # cannot tell which camera the add-on is paired with, and binding it to all
+    # of them would show one camera's video and controls under every device.
+    # In that case, require the user to map each bridge to its camera explicitly
+    # (Configure -> per-camera bridge/stream URLs).
+    auto_bind = discovered if len(coordinator.data.devices) == 1 else None
+    if discovered is not None and auto_bind is None:
+        _LOGGER.warning(
+            "Found the Furbo Bridge add-on but this account has %d cameras; "
+            "not auto-binding it. Configure each camera's bridge and stream URL "
+            "in the Furbo integration's options to avoid crossing streams.",
+            len(coordinator.data.devices),
+        )
+
     # A bridge that is down at startup must not keep the cloud entities from
     # loading: refresh without raising, and let its entities be unavailable
     # until it answers.
@@ -104,10 +122,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
     stream_urls: dict[str, str] = {}
     for device_id in coordinator.data.devices:
         bridge_conf = configured_bridges.get(device_id)
-        if bridge_conf is None and discovered is not None:
-            bridge_conf = {CONF_BRIDGE_URL: discovered.bridge_url}
-            if discovered.token:
-                bridge_conf[CONF_BRIDGE_TOKEN] = discovered.token
+        if bridge_conf is None and auto_bind is not None:
+            bridge_conf = {CONF_BRIDGE_URL: auto_bind.bridge_url}
+            if auto_bind.token:
+                bridge_conf[CONF_BRIDGE_TOKEN] = auto_bind.token
         if bridge_conf is not None:
             bridge_client = FurboBridgeClient(
                 async_get_clientsession(hass),
@@ -121,8 +139,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
             bridges[device_id] = bridge
 
         stream = configured_streams.get(device_id)
-        if not stream and discovered is not None:
-            stream = discovered.stream_url
+        if not stream and auto_bind is not None:
+            stream = auto_bind.stream_url
         if stream:
             stream_urls[device_id] = stream
 

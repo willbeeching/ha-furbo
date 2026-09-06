@@ -317,3 +317,71 @@ async def test_discovered_addon_auto_creates_entities(
     assert hass.states.get("button.test_camera_toss_treat") is not None
     assert hass.states.get("switch.test_camera_camera").state == "on"
     assert hass.states.get("number.test_camera_speaker_volume").state == "40"
+
+
+async def test_discovered_addon_not_auto_bound_with_multiple_cameras(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """With two cameras, a single discovered add-on must not bind to either.
+
+    One add-on serves one camera; binding it to both would show one camera's
+    video and controls under the other. The user must map bridges explicitly.
+    """
+    second = dict(c.DEVICE)
+    second["Id"] = 1788515097680000
+    second["DeviceName"] = "Second Camera"
+    mock_client.get_devices.return_value = [dict(c.DEVICE), second]
+    monkeypatch.setattr(
+        "custom_components.furbo.async_discover_bridge",
+        AsyncMock(
+            return_value=DiscoveredBridge(
+                slug="abc_furbo_bridge", host="abc-furbo-bridge", token="tok"
+            )
+        ),
+    )
+
+    await setup_integration(hass, mock_config_entry)
+
+    # Nothing was auto-bound: no bridge coordinators, no stream URLs, no
+    # bridge-backed entities, and a warning tells the user why.
+    runtime = mock_config_entry.runtime_data
+    assert runtime.bridges == {}
+    assert runtime.stream_urls == {}
+    assert hass.states.get("button.test_camera_toss_treat") is None
+    # No stream URL was bound, so no camera entity is created.
+    assert hass.states.get("camera.test_camera") is None
+    assert "2 cameras" in caplog.text
+
+
+async def test_explicit_bridge_still_binds_with_multiple_cameras(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit per-camera config is honoured even with multiple cameras."""
+    second = dict(c.DEVICE)
+    second["Id"] = 1788515097680000
+    second["DeviceName"] = "Second Camera"
+    mock_client.get_devices.return_value = [dict(c.DEVICE), second]
+    monkeypatch.setattr(
+        "custom_components.furbo.async_discover_bridge",
+        AsyncMock(
+            return_value=DiscoveredBridge(
+                slug="abc_furbo_bridge", host="abc-furbo-bridge", token="tok"
+            )
+        ),
+    )
+
+    # The first camera is mapped explicitly; the second is not.
+    await setup_integration(hass, mock_config_entry, BRIDGE_OPTIONS)
+
+    runtime = mock_config_entry.runtime_data
+    assert set(runtime.bridges) == {c.DEVICE_ID}
+    assert hass.states.get("switch.test_camera_camera") is not None
