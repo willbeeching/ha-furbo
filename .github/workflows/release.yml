@@ -48,9 +48,11 @@ jobs:
           base="${tag%%-*}"
           prerelease=false
           [ "$base" != "$tag" ] && prerelease=true
-          echo "tag=v$tag" >>"$GITHUB_OUTPUT"
-          echo "base=$base" >>"$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >>"$GITHUB_OUTPUT"
+          {
+            echo "tag=v$tag"
+            echo "base=$base"
+            echo "prerelease=$prerelease"
+          } >>"$GITHUB_OUTPUT"
       - name: Build, verify and checksum the archive
         env:
           VERSION: ${{ steps.version.outputs.base }}
