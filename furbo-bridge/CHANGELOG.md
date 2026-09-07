@@ -3,6 +3,14 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.1.0-beta.4
+
+- Fixed the reply matching added in beta.3. A V3 camera answers some commands
+  on the request opcode and others on the request plus one, and only the
+  second form was recognised, so every settings read waited out its ceiling
+  and the poll got slower rather than faster. Both forms are now accepted, and
+  a read that really goes unanswered logs which opcodes did arrive.
+
 ## 1.1.0-beta.3
 
 - The full settings poll now waits for each reply instead of sleeping a fixed

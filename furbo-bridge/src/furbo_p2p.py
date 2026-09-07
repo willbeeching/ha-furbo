@@ -873,23 +873,30 @@ class FurboP2P:
     def await_reply(self, opcode: int, timeout: float) -> bool:
         """Poll until the camera answers `opcode`, or the timeout runs out.
 
-        A reply carries the request opcode plus one, and a refusal arrives as
-        CMD_REJECTED with the low 16 bits of the request in its payload.
-        Everything polled along the way is decoded as usual, so a reply that
-        arrives out of order still lands in state. Returns whether the camera
-        answered at all; a refusal counts as an answer.
+        A reply carries either the request opcode or the request plus one; both
+        are seen, which is why decode() looks up its name both ways. A refusal
+        arrives as CMD_REJECTED with the low 16 bits of the request in its
+        payload. Everything polled along the way is decoded as usual, so a
+        reply that arrives out of order still lands in state. Returns whether
+        the camera answered; a refusal counts as an answer.
         """
         end = time.time() + timeout
+        seen: list[int] = []
         while time.time() < end:
             got = self.poll(100)
             if got is None:
                 continue
             reply, data = got
-            if reply == opcode + 1:
+            if reply in (opcode, opcode + 1):
                 return True
             refused = reply == CMD_REJECTED and len(data) >= 3
             if refused and data[1] | (data[2] << 8) == opcode & 0xFFFF:
                 return True
+            seen.append(reply)
+        # Naming what did arrive turns "no reply" from a dead end into a
+        # diagnosis: an unexpected opcode here is a reply we failed to match.
+        if seen:
+            log(f"0x{opcode:x} unanswered; saw {[hex(o) for o in seen]}")
         return False
 
     def drain(self, seconds: float) -> None:

@@ -223,3 +223,14 @@ def test_query_state_v3_waits_per_reply_not_per_command(
     assert {t for _, t in awaited} == {fp.REPLY_TIMEOUT}
     # One short catch-all at the end, not the caller's wait.
     assert drains == [fp.TRAILING_DRAIN]
+
+
+def test_await_reply_accepts_the_request_opcode_as_the_reply() -> None:
+    """Some V3 replies come back on the request opcode, not the request + 1.
+
+    decode() has always looked the name up both ways; matching only the +1
+    form made every one of those commands sit out the full ceiling.
+    """
+    op = fp.CMD3["GET_TOSS_PROFILE"]
+    p2p = _waiter([(op, bytes([0, 0]))])
+    assert p2p.await_reply(op, 5.0) is True
