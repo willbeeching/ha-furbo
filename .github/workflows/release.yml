@@ -1,17 +1,23 @@
 name: Release
 
-# Publishes a release archive when a vX.Y.Z tag is pushed. The write-capable
+# Publishes a release archive for a vX.Y.Z tag. The tag can be pushed, or
+# named on a manual run, in which case the job creates it. The write-capable
 # job uses only first-party actions plus the GitHub CLI (no third-party code).
 
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release, e.g. v1.1.0-beta.1. Created if missing."
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -24,10 +30,12 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
-      - name: Derive version from tag
+      - name: Derive version from the tag
         id: version
         env:
-          REF_NAME: ${{ github.ref_name }}
+          # On a tag push ref_name is the tag; on a manual run it is the branch
+          # the run was started from, so the input names the tag instead.
+          REF_NAME: ${{ inputs.tag || github.ref_name }}
         run: |
           tag="${REF_NAME#v}"
           # Accept X.Y.Z or a prerelease like X.Y.Z-beta.1.
@@ -40,6 +48,7 @@ jobs:
           base="${tag%%-*}"
           prerelease=false
           [ "$base" != "$tag" ] && prerelease=true
+          echo "tag=v$tag" >>"$GITHUB_OUTPUT"
           echo "base=$base" >>"$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >>"$GITHUB_OUTPUT"
       - name: Build, verify and checksum the archive
@@ -49,13 +58,16 @@ jobs:
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.version.outputs.tag }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
           flags=()
           [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          # --target is what lets a manual run create the tag; on a tag push the
+          # tag already exists and this is the commit it points at either way.
           gh release create "$TAG" \
             dist/*.tar.gz dist/*.sha256 \
+            --target "$GITHUB_SHA" \
             --title "$TAG" \
             --generate-notes \
             "${flags[@]}"
