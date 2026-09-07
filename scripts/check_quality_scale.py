@@ -26,12 +26,28 @@ ADDON_DIR = ROOT / "furbo-bridge"
 VALID = {"done", "todo", "exempt"}
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-# Home Assistant 2026.3 serves custom-integration icons from
-# custom_components/<domain>/brand/; home-assistant/brands no longer takes
-# those PRs. Icons are exact squares; logos are capped on the shortest side.
-# https://github.com/home-assistant/brands#logo-image-requirements
+# Home Assistant serves a custom integration's own brand images from
+# <integration>/brand/ since 2026.3 (homeassistant/components/brands, gated on
+# Integration.has_branding, which is just "brand" being a top-level entry).
+# Only these eight filenames are served, and everything except icon.png falls
+# back to another image, so icon.png is the one file that must exist.
+# Sizes follow https://github.com/home-assistant/brands#image-requirements
+ALLOWED_IMAGES = frozenset(
+    {
+        "icon.png",
+        "logo.png",
+        "icon@2x.png",
+        "logo@2x.png",
+        "dark_icon.png",
+        "dark_logo.png",
+        "dark_icon@2x.png",
+        "dark_logo@2x.png",
+    }
+)
 ICON_SIZES = {"icon.png": (256, 256), "icon@2x.png": (512, 512)}
 LOGO_BASES = ("logo", "dark_logo")
+# The shortest side of a logo, per variant.
+MIN_SHORTEST_SIDE = {"": 128, "@2x": 256}
 MAX_SHORTEST_SIDE = {"": 256, "@2x": 512}
 MIN_ADDON_ICON = 128
 
@@ -81,9 +97,11 @@ def _check_logo_pair(base: str, errors: list[str]) -> list[Path]:
         return []
     for path, suffix in ((one, ""), (two, "@2x")):
         shortest = min(png_size(path))
-        cap = MAX_SHORTEST_SIDE[suffix]
-        if shortest > cap:
-            errors.append(f"brands: {path.name} shortest side {shortest} > {cap}")
+        low, high = MIN_SHORTEST_SIDE[suffix], MAX_SHORTEST_SIDE[suffix]
+        if not low <= shortest <= high:
+            errors.append(
+                f"brands: {path.name} shortest side {shortest} outside {low}-{high}"
+            )
     if png_size(two) != tuple(2 * v for v in png_size(one)):
         errors.append(f"brands: {base}@2x.png is not exactly twice {base}.png")
     return [one, two]
@@ -107,8 +125,21 @@ def _check_addon_images(errors: list[str]) -> list[Path]:
     return [p for p in (icon, logo) if p.is_file()]
 
 
+def _check_no_stray_files(errors: list[str]) -> None:
+    """Home Assistant serves only the eight known names; anything else is dead."""
+    for path in sorted(BRAND_DIR.iterdir()):
+        if path.name not in ALLOWED_IMAGES:
+            errors.append(f"brands: {path.name} is not one of the served brand images")
+        elif path.is_symlink():
+            errors.append(f"brands: {path.name} is a symlink, which does not ship")
+
+
 def check_brand_images(errors: list[str]) -> None:
     """Validate the brand images the integration and the add-on ship."""
+    if not BRAND_DIR.is_dir():
+        errors.append("brands: custom_components/furbo/brand/ is missing")
+        return
+    _check_no_stray_files(errors)
     required = _check_icons(errors)
     supplied = [b for b in LOGO_BASES if (BRAND_DIR / f"{b}.png").is_file()]
     if not supplied:

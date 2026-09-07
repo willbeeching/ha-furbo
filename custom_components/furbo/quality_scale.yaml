@@ -14,18 +14,26 @@ rules:
   brands:
     status: done
     comment: |
-      Home Assistant 2026.3 serves custom-integration icons from
-      custom_components/<domain>/brand/; home-assistant/brands no longer
-      accepts those PRs. icon.png is 256x256 and icon@2x.png is 512x512;
-      the logo and dark-logo pairs are 873x256 / 1746x512, shortest side at
-      the 256 / 512 maximum in
-      https://github.com/home-assistant/brands#logo-image-requirements.
-      The add-on ships furbo-bridge/icon.png (square) and logo.png.
-      scripts/check_quality_scale.py asserts the PNG type, those sizes, that
-      each @2x is exactly twice its 1x, and that git tracks them so they
-      reach the release archive and the add-on image. The wordmark and icon
-      are Furbo's own artwork, used to identify the product the integration
-      talks to.
+      Brand images ship in custom_components/furbo/brand/. Home Assistant
+      serves a custom integration's own images from there since 2026.3
+      (homeassistant/components/brands, gated on Integration.has_branding,
+      which is "brand" being a top-level entry), and local files take
+      priority over the brands CDN; home-assistant/brands no longer accepts
+      custom-integration PRs. Only eight filenames are served and every one
+      except icon.png falls back to another image, so icon.png is the only
+      file that must exist; dark_icon is deliberately not shipped because it
+      falls back to icon.png and the tile reads on both themes.
+      Sizes follow the brands image requirements: icons exactly 256x256 and
+      512x512, logo and dark_logo pairs 873x256 and 1746x512 with the
+      shortest side inside the 128-256 and 256-512 ranges, trimmed, with
+      transparency. The add-on ships furbo-bridge/icon.png (square, the only
+      hard Supervisor requirement) and logo.png.
+      scripts/check_quality_scale.py asserts the PNG type, the icon sizes,
+      the logo ranges, that each @2x is exactly twice its 1x, that no stray
+      or symlinked files sit in brand/, the square add-on icon, and that git
+      tracks every file so it reaches the release archive and the add-on
+      image. The wordmark and icon are Furbo's own artwork, used to identify
+      the product the integration talks to.
   common-modules:
     status: done
     comment: Shared client in api.py, coordinator in coordinator.py, base entities in entity.py.
