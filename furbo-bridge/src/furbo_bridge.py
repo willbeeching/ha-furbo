@@ -301,13 +301,19 @@ class P2PWorker:
                 write_quality(settings.pop("quality"))
             p2p = self._ensure()
             cmd = fp.CMD3 if p2p.proto == "v3" else fp.CMD
+            # Setting name -> the opcode written for it, so a refusal can be
+            # matched back to the setting it belongs to.
+            sent: dict[str, int] = {}
             if "camera_on" in settings:
                 key = "SET_CAMERA_ON" if p2p.proto == "v3" else "SET_FURBO_POWER"
+                sent["camera_on"] = cmd[key]
                 p2p.send(cmd[key], bytes([1 if settings["camera_on"] else 0, 0, 0, 0]))
             if "volume" in settings:
+                sent["volume"] = cmd["SET_VOLUME"]
                 p2p.send(cmd["SET_VOLUME"], bytes([settings["volume"], 0, 0, 0]))
             if "night_mode" in settings:
                 code = {v: k for k, v in fp.NIGHT_MODES.items()}[settings["night_mode"]]
+                sent["night_mode"] = cmd["SET_NIGHT_VISION"]
                 p2p.send(cmd["SET_NIGHT_VISION"], bytes([code, 0, 0, 0]))
             if "bark_sensitivity" in settings:
                 level = settings["bark_sensitivity"]
@@ -315,27 +321,61 @@ class P2PWorker:
                     code = fp.BARK_V3[level]
                 else:
                     code = {v: k for k, v in fp.SENSITIVITY.items()}.get(level, 0)
+                sent["bark_sensitivity"] = cmd["SET_BARKING"]
                 p2p.send(cmd["SET_BARKING"], bytes([code, 0, 0, 0]))
             if p2p.proto == "v3" and "auto_tracking" in settings:
                 on = 1 if settings["auto_tracking"] else 0
+                sent["auto_tracking"] = fp.CMD3["SET_AUTO_TRACKING"]
                 p2p.send(fp.CMD3["SET_AUTO_TRACKING"], bytes([on, on, on, 0]))
             if p2p.proto == "v3" and "auto_zoom" in settings:
                 on = 1 if settings["auto_zoom"] else 0
+                sent["auto_zoom"] = fp.CMD3["SET_AUTO_ZOOM"]
                 p2p.send(fp.CMD3["SET_AUTO_ZOOM"], bytes([on, on, 0, 0]))
             if p2p.proto == "v3" and "voice_control" in settings:
                 on = 1 if settings["voice_control"] else 0
+                sent["voice_control"] = fp.CMD3["SET_VOICE_CONTROL"]
                 p2p.send(fp.CMD3["SET_VOICE_CONTROL"], bytes([on, 0, 0, 0]))
             if p2p.proto == "v3" and "treat_size" in settings:
                 code = fp.TREAT_SIZE[settings["treat_size"]]
+                sent["treat_size"] = fp.CMD3["SET_TOSS_PROFILE"]
                 p2p.send(fp.CMD3["SET_TOSS_PROFILE"], bytes([code, 0, 0, 0]))
             if p2p.proto == "v3" and ("schedule_enabled" in settings or "calm_enabled" in settings):
-                self._apply_json_toggles(p2p, settings)
+                sent.update(self._apply_json_toggles(p2p, settings))
             p2p.drain(2.0)
-            return self._readback(p2p, 1.5)
+            return self._confirm(p2p, settings, sent)
 
-    def _apply_json_toggles(self, p2p: fp.FurboP2P, settings: dict[str, Any]) -> None:
+    def _confirm(
+        self, p2p: fp.FurboP2P, settings: dict[str, Any], sent: dict[str, int]
+    ) -> dict[str, Any]:
+        """Fold the values just written into the cache, without re-reading.
+
+        Reading everything back costs one round trip per setting, which is over
+        ten seconds on a relayed session - long enough for Home Assistant to
+        give up on the write even though the camera applied it. The camera
+        answers each SET with a status, so a refused write is dropped here
+        instead, and the periodic full sweep still reconciles anything changed
+        from the Furbo app.
+        """
+        refused = {
+            entry.get("opcode")
+            for entry in p2p.state.pop("rejected", None) or []
+            if isinstance(entry, dict)
+        }
+        applied = {k: v for k, v in settings.items() if k in sent and sent[k] not in refused}
+        for name in sorted(set(sent) - set(applied)):
+            _LOGGER.warning("camera refused %s; the cached value is unchanged", name)
+        self.state = {**self.state, **applied}
+        self.updated_at = time.time()
+        return self.state
+
+    def _apply_json_toggles(self, p2p: fp.FurboP2P, settings: dict[str, Any]) -> dict[str, int]:
         """Flip the enable flag on the schedule or auto-calm config, keeping the
-        rest of the config the camera already holds. Both are JSON payloads."""
+        rest of the config the camera already holds. Both are JSON payloads.
+
+        Returns the opcode written per setting, empty for one the camera has
+        not reported a usable config for.
+        """
+        sent: dict[str, int] = {}
         if "schedule" not in p2p.state or "auto_calm" not in p2p.state:
             p2p.send(fp.CMD3["GET_CAMERA_SCHEDULE"], b"\0\0\0\0")
             p2p.send(fp.CMD3["GET_AUTO_CALM"], b"\0\0\0\0")
@@ -348,6 +388,7 @@ class P2PWorker:
                     "enabledDay": sched["enabledDay"],
                     "schedule": sched["schedule"],
                 }
+                sent["schedule_enabled"] = fp.CMD3["SET_CAMERA_SCHEDULE"]
                 p2p.send(fp.CMD3["SET_CAMERA_SCHEDULE"], json.dumps(body).encode() + b"\0")
         if "calm_enabled" in settings:
             calm = p2p.state.get("auto_calm")
@@ -360,7 +401,9 @@ class P2PWorker:
                 buf = bytearray(1024)
                 payload = json.dumps(body).encode()
                 buf[: len(payload)] = payload
+                sent["calm_enabled"] = fp.CMD3["SET_AUTO_CALM"]
                 p2p.send(fp.CMD3["SET_AUTO_CALM"], bytes(buf))
+        return sent
 
     def pan(self, direction: str, degrees: int) -> None:
         with self._lock:

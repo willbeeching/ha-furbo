@@ -98,5 +98,20 @@ ports also works.
   `LAN` or `P2P` is a direct path; `relay` means the traffic is going out to a
   Kalay relay, which makes commands slow and can stop video starting at all.
   The add-on logs the mode when it connects and warns if a poll runs long.
+- **LAN mode needs one broadcast domain.** The SDK finds the camera by sending
+  a UDP broadcast, so it reports `LAN` only when the add-on and the camera sit
+  on the same subnet. It cannot be pointed at an address instead: the library
+  exposes no connect-by-IP, only the broadcast-based `IOTC_Lan_Search`. With
+  the camera on another VLAN you have two routes. Allow UDP in both directions
+  between the Home Assistant host and the camera, which lets the session come
+  up as `P2P`, a direct path that is nearly as quick as `LAN`. Or carry the
+  search broadcast across with a UDP broadcast relay. Still seeing `relay`
+  after either change means UDP between the two hosts is being dropped.
+- **Writes do not re-read the camera.** A setting change updates the cached
+  state from what it wrote and returns. Reading every setting back costs one
+  round trip each, which on a relayed session took longer than Home Assistant
+  waits, so a write that the camera had accepted was reported as a timeout. A
+  setting the camera refuses is left at its cached value, and the five-minute
+  full poll still picks up changes made from the Furbo app.
 - **1080p** sends a brief 360p preview frame before switching up; give the
   stream a few seconds to reach full resolution.

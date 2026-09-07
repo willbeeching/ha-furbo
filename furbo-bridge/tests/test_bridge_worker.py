@@ -336,3 +336,66 @@ def test_reconnect_waits_for_the_reader_to_leave_the_sdk(
     worker._reader_active.clear()
     worker._drop()
     assert fake2.closed is True
+
+
+def test_apply_does_not_read_everything_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A write updates the cache from what it wrote, not from a full sweep.
+
+    The full sweep is one round trip per setting, which on a relayed session
+    takes longer than Home Assistant waits for the write.
+    """
+    fake = FakeP2P()
+    worker = _worker_with(monkeypatch, fake)
+    worker.state = {"volume": 10, "camera_on": False}
+    state = worker.apply({"volume": 42})
+    assert fake.query_calls == 0
+    # The written value lands, and the rest of the cache is left alone.
+    assert state == {"volume": 42, "camera_on": False}
+    assert worker.updated_at > 0
+
+
+def test_apply_drops_a_refused_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A setting the camera refuses is not reported as applied."""
+    fake = FakeP2P()
+    worker = _worker_with(monkeypatch, fake)
+    worker.state = {"volume": 10, "night_mode": "off"}
+
+    def send(opcode: int, payload: bytes = b"") -> None:
+        fake.sends.append((opcode, payload))
+        if opcode == fp.CMD3["SET_VOLUME"]:
+            fake.state.setdefault("rejected", []).append({"opcode": opcode, "status": 5})
+
+    monkeypatch.setattr(fake, "send", send)
+    state = worker.apply({"volume": 42, "night_mode": "on"})
+    assert state == {"volume": 10, "night_mode": "on"}
+    # The rejection is consumed, so it cannot leak into the next write.
+    assert "rejected" not in fake.state
+
+
+def test_apply_skips_settings_the_camera_cannot_take(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A V3-only setting sent to a V2 camera is not cached as applied."""
+    fake = FakeP2P()
+    fake.proto = "v2"
+    worker = _worker_with(monkeypatch, fake)
+    state = worker.apply({"auto_zoom": True, "volume": 20})
+    assert state == {"volume": 20}
+
+
+def test_apply_caches_the_json_toggles(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The schedule and calm toggles report back through the same path."""
+    fake = FakeP2P(
+        state={
+            "schedule": {"enable": False, "enabledDay": [1], "schedule": [[0, 1]]},
+            "auto_calm": {"enable": 0, "startAudio": 0, "treatToss": 0},
+        }
+    )
+    worker = _worker_with(monkeypatch, fake)
+    state = worker.apply({"schedule_enabled": True, "calm_enabled": True})
+    assert state == {"schedule_enabled": True, "calm_enabled": True}
+
+
+def test_apply_ignores_a_toggle_with_no_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no schedule config to amend, nothing is written and nothing cached."""
+    fake = FakeP2P(state={"schedule": "not-a-config", "auto_calm": "not-a-config"})
+    worker = _worker_with(monkeypatch, fake)
+    assert worker.apply({"schedule_enabled": True}) == {}
