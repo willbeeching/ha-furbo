@@ -1,9 +1,9 @@
 # go2rtc turns the raw H.264 that furbo_p2p.py emits into RTSP/WebRTC.
 #
 # The exec source runs on demand: go2rtc starts the stream only while a client
-# is watching and stops it when idle, so the video P2P session is not held open
-# continuously. /app/stream.sh reads the chosen quality and republishes to the
-# {output} endpoint go2rtc provides.
+# is watching and stops it when idle. /app/stream.sh does not open its own P2P
+# session — it reads H.264 from the bridge's single session over
+# GET /api/stream, so the camera only ever has one session and one credential.
 streams:
   furbo:
     - "exec:/app/stream.sh {output}#killsignal=15#killtimeout=8"

@@ -7,6 +7,7 @@ command-building logic is exercised without the TUTK library or a camera.
 from __future__ import annotations
 
 import argparse
+import struct
 from typing import Any
 
 import pytest
@@ -20,9 +21,20 @@ class FakeP2P:
 
     def __init__(self, state: dict[str, Any] | None = None) -> None:
         self.proto = "v3"
+        self.mode = "LAN"
         self.state: dict[str, Any] = state or {}
         self.sends: list[tuple[int, bytes]] = []
         self.closed = False
+        self.frames: list[bytes] = []
+        self.query_calls = 0
+
+    def recv_frame(self, buf: Any, _info: Any) -> tuple[int, int]:
+        if self.frames:
+            data = self.frames.pop(0)
+            buf[0 : len(data)] = data
+            return len(data), 0
+        # Nothing left: report the session going away so the loop ends.
+        return -20015, 0
 
     def alive(self) -> bool:
         return True
@@ -34,6 +46,7 @@ class FakeP2P:
         pass
 
     def query_state(self, wait: float = 0.0) -> dict[str, Any]:
+        self.query_calls += 1
         return dict(self.state)
 
     def close(self) -> None:
@@ -204,3 +217,99 @@ def test_connected_and_close(monkeypatch: pytest.MonkeyPatch) -> None:
     worker.close()
     assert fake.closed is True
     assert worker.connected is False
+
+
+# --- polling cadence ---------------------------------------------------------
+
+
+def test_refresh_sweeps_once_then_polls_lightly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The full 13-command sweep is rare; the frequent poll is one command."""
+    fake = FakeP2P({"camera_on": True})
+    worker = _worker_with(monkeypatch, fake)
+
+    worker.refresh()
+    assert fake.query_calls == 1, "first refresh reads everything"
+
+    fake.sends.clear()
+    worker.refresh()
+    assert fake.query_calls == 1, "second refresh must not sweep again"
+    assert _opcodes(fake) == [fp.CMD3["GET_CAMERA_ON"]]
+
+
+def test_full_sweep_returns_when_due(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Once the full interval passes, everything is re-read to catch app changes."""
+    fake = FakeP2P({"camera_on": True})
+    worker = _worker_with(monkeypatch, fake)
+    worker.refresh()
+    worker.last_full_refresh -= fb.FULL_REFRESH_INTERVAL + 1
+    worker.refresh()
+    assert fake.query_calls == 2
+
+
+# --- video on the shared session ---------------------------------------------
+
+
+def test_open_stream_starts_video_at_the_requested_quality(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Video starts on the session already held, with no second connection."""
+    fake = FakeP2P()
+    worker = _worker_with(monkeypatch, fake)
+    worker.open_stream("720p")
+    assert fake.sends == [(fp.IPCAM_START, struct.pack("<i", fp.QUALITY_V3["720p"]))]
+    assert worker.streaming is True
+
+
+def test_second_stream_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One viewer at a time: the camera serves a single video channel."""
+    worker = _worker_with(monkeypatch, FakeP2P())
+    worker.open_stream("1080p")
+    with pytest.raises(fb.StreamBusy):
+        worker.open_stream("1080p")
+
+
+def test_iter_frames_yields_then_ends(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Frames come through, and an SDK error ends the stream quietly."""
+    fake = FakeP2P()
+    fake.frames = [b"aaa", b"bbbb"]
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+    assert list(worker.iter_frames()) == [b"aaa", b"bbbb"]
+
+
+def test_close_stream_stops_video_but_keeps_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stopping video must not drop the session the controls are using."""
+    fake = FakeP2P()
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+    fake.sends.clear()
+    worker.close_stream()
+    assert fake.sends == [(fp.IPCAM_STOP, struct.pack("<i", 0))]
+    assert worker.streaming is False
+    assert fake.closed is False
+
+
+def test_dropping_the_session_stops_the_reader(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reconnect must not leave a reader on a channel that has gone away."""
+    fake = FakeP2P()
+    fake.frames = [b"a"] * 100
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+    worker._drop()
+    assert worker.streaming is False
+    assert list(worker.iter_frames()) == []
+
+
+def test_session_mode_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The path is visible in status, so a relayed session can be spotted."""
+    fake = FakeP2P()
+    fake.mode = "relay"
+    worker = _worker_with(monkeypatch, fake)
+    assert worker.session_mode is None
+    worker._p2p = fake
+    assert worker.session_mode == "relay"

@@ -4,8 +4,13 @@
 Runs one long-lived TUTK session to a single camera on a worker thread and
 exposes its state and controls over a small JSON API. The Home Assistant
 integration on branch ``claude/furbo-integration`` talks to this API; it
-never loads the TUTK library itself. Video is not served here: go2rtc runs
-``furbo_p2p.py stream`` as an exec source for that.
+never loads the TUTK library itself.
+
+Video is served from that same session over ``GET /api/stream``. That matters:
+the camera's ``P2PAccountKey`` is reissued by the cloud on every
+``/v5/device/p2p_connection/get`` call, so a second process opening its own
+session invalidates this one's credential and both then fail to authenticate
+(``avClientStartEx`` times out). One session, one credential, no race.
 
     furbo_p2p.py serve --port 8791 --token <secret>
 
@@ -28,6 +33,10 @@ API (all JSON; ``Authorization: Bearer <token>`` required when --token is set):
     POST /api/toss       body: {}      (dispenses a real treat)
     POST /api/treat-sound body: {}
         -> 200 {"ok": true}
+    GET  /api/stream
+        -> 200 a chunked H.264 elementary stream from the live session, read
+           at the quality in the quality file. One viewer at a time; a second
+           request gets 409. go2rtc consumes this via stream.sh.
 
 Errors: 400 {"error": "bad_request", "detail": "..."}, 401 {"error":
 "unauthorized"}, 503 {"error": "p2p_unavailable", "detail": "..."} when the
@@ -39,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 import contextlib
 import hmac
@@ -46,6 +56,8 @@ import json
 import logging
 import os
 from pathlib import Path
+import signal
+import struct
 import threading
 import time
 from typing import Any
@@ -58,6 +70,18 @@ _LOGGER = logging.getLogger("furbo_bridge")
 
 DEFAULT_PORT = 8791
 DEFAULT_INTERVAL = 30.0
+# Every settings value the camera holds is written through this bridge, so the
+# only reason to re-read them all is to catch a change made in the Furbo app.
+# A full sweep is 13 round trips, so do it rarely and keep the frequent poll to
+# a single command that also proves the session is alive.
+FULL_REFRESH_INTERVAL = 300.0
+# A refresh slower than this means a degraded (usually relayed) session. Worth
+# a log line, because it is the difference between working controls and not.
+SLOW_REFRESH_SECONDS = 10.0
+# Frames are handed to the HTTP writer through this queue. Bounded so a stalled
+# viewer cannot grow the heap; overflow drops frames and ffmpeg resyncs.
+STREAM_QUEUE_MAX = 512
+FRAME_BUFFER_BYTES = 2 * 1024 * 1024
 NIGHT_MODES = ("auto", "on", "off")
 BARK_LEVELS = ("off", "low", "medium", "high")
 PAN_DIRECTIONS = ("left", "right")
@@ -81,6 +105,10 @@ def read_quality() -> str:
 def write_quality(quality: str) -> None:
     """Persist the stream quality for the next go2rtc stream start."""
     QUALITY_FILE.write_text(quality + "\n")
+
+
+class StreamBusy(Exception):
+    """Another viewer already holds the single video stream."""
 
 
 class BridgeUnavailable(Exception):
@@ -131,10 +159,17 @@ class P2PWorker:
         self._args = args
         self._p2p: fp.FurboP2P | None = None
         self._lock = threading.Lock()
+        # Set while a viewer is reading frames. The reader runs on its own
+        # thread and does not take _lock: TUTK allows avRecvFrameData2 to run
+        # alongside avSendIOCtrl on one channel, which is what lets the
+        # controls keep working while video is streaming.
+        self._streaming = False
+        self._stream_stop = threading.Event()
         self.device: dict[str, str] = {}
         self.state: dict[str, Any] = {}
         self.updated_at: float | None = None
         self.last_error: str | None = None
+        self.last_full_refresh: float = 0.0
 
     # -- session -----------------------------------------------------------
 
@@ -167,9 +202,18 @@ class P2PWorker:
         }
         self._p2p = p2p
         self.last_error = None
+        self.last_full_refresh = 0.0
+        _LOGGER.info("P2P session established to %s over %s", creds["name"], p2p.mode or "unknown")
+        if p2p.mode == "relay":
+            _LOGGER.warning(
+                "session is relayed, not local: commands will be slow and video may fail to start"
+            )
         return p2p
 
     def _drop(self) -> None:
+        # Stop the frame reader before the channel goes away under it.
+        self._stream_stop.set()
+        self._streaming = False
         if self._p2p is not None:
             # Closing an already-dead session can raise from the SDK; ignore it.
             with contextlib.suppress(Exception):
@@ -179,6 +223,15 @@ class P2PWorker:
     @property
     def connected(self) -> bool:
         return self._p2p is not None
+
+    @property
+    def session_mode(self) -> str | None:
+        """LAN, P2P or relay for the current session, None when not connected."""
+        return self._p2p.mode if self._p2p is not None else None
+
+    @property
+    def streaming(self) -> bool:
+        return self._streaming
 
     def close(self) -> None:
         with self._lock:
@@ -193,9 +246,42 @@ class P2PWorker:
         return self.state
 
     def refresh(self) -> dict[str, Any]:
+        """Poll the camera. Reads everything only when the full sweep is due.
+
+        The frequent path is a single command, which is enough to prove the
+        session is alive without holding the lock for a minute at a time on a
+        slow link. Writes update the cache directly, so a full sweep only
+        catches changes made outside Home Assistant.
+        """
         with self._lock:
+            started = time.monotonic()
             p2p = self._ensure()
-            return self._readback(p2p, 2.0)
+            due = time.monotonic() - self.last_full_refresh >= FULL_REFRESH_INTERVAL
+            if due or not self.state:
+                state = self._readback(p2p, 2.0)
+                self.last_full_refresh = time.monotonic()
+            else:
+                state = self._light_refresh(p2p)
+            elapsed = time.monotonic() - started
+            if elapsed > SLOW_REFRESH_SECONDS:
+                _LOGGER.warning(
+                    "camera poll took %.1fs over %s; controls may time out",
+                    elapsed,
+                    p2p.mode or "unknown",
+                )
+            return state
+
+    def _light_refresh(self, p2p: fp.FurboP2P) -> dict[str, Any]:
+        """One round trip that both refreshes power state and proves liveness."""
+        key = "GET_CAMERA_ON" if p2p.proto == "v3" else "GET_FURBO_POWER"
+        cmd = fp.CMD3 if p2p.proto == "v3" else fp.CMD
+        p2p.send(cmd[key], b"\0\0\0\0")
+        p2p.drain(1.0)
+        merged = normalise_state(p2p.state)
+        if merged:
+            self.state = {**self.state, **merged}
+        self.updated_at = time.time()
+        return self.state
 
     def apply(self, settings: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -287,6 +373,56 @@ class P2PWorker:
             p2p.send(cmd["PLAY_TREAT_SOUND"])
             p2p.drain(1.0)
 
+    # -- video ---------------------------------------------------------------
+
+    def open_stream(self, quality: str) -> None:
+        """Ask the camera to start video on the session we already hold."""
+        with self._lock:
+            if self._streaming:
+                raise StreamBusy("a viewer is already streaming")
+            p2p = self._ensure()
+            number = (fp.QUALITY_V3 if p2p.proto == "v3" else fp.QUALITY)[quality]
+            p2p.send(fp.IPCAM_START, struct.pack("<i", number))
+            self._stream_stop.clear()
+            self._streaming = True
+            _LOGGER.info("video started at %s over %s", quality, p2p.mode or "unknown")
+
+    def iter_frames(self) -> Iterator[bytes]:
+        """Yield H.264 frames until the viewer leaves or the session drops.
+
+        Deliberately does not take _lock, so control commands keep working
+        while video runs. Ends quietly on any SDK error; go2rtc reconnects.
+        """
+        p2p = self._p2p
+        if p2p is None:
+            return
+        buf = fp.create_string_buffer(FRAME_BUFFER_BYTES)
+        info = fp.FrameInfo()
+        while not self._stream_stop.is_set():
+            ret, _expected = p2p.recv_frame(buf, info)
+            if ret >= 0:
+                yield buf.raw[:ret]
+            elif ret == fp.AV_ER_DATA_NOREADY:
+                time.sleep(0.005)
+            elif ret in (fp.AV_ER_LOSED_THIS_FRAME, fp.AV_ER_INCOMPLETE_FRAME):
+                continue
+            else:
+                _LOGGER.info("video ended: %s", fp.err(ret))
+                return
+
+    def close_stream(self) -> None:
+        """Stop video, leaving the session up for the controls."""
+        self._stream_stop.set()
+        with self._lock:
+            if not self._streaming:
+                return
+            self._streaming = False
+            p2p = self._p2p
+            if p2p is not None:
+                with contextlib.suppress(Exception):
+                    p2p.send(fp.IPCAM_STOP, struct.pack("<i", 0))
+            _LOGGER.info("video stopped")
+
 
 # --- HTTP ------------------------------------------------------------------
 
@@ -350,6 +486,8 @@ def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> 
             "updated_at": worker.updated_at,
             "last_error": worker.last_error,
             "device": worker.device,
+            "session_mode": worker.session_mode,
+            "streaming": worker.streaming,
             "state": {**worker.state, "quality": read_quality()},
         }
 
@@ -379,6 +517,8 @@ def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> 
             return await handler(request)
         except ValueError as exc:
             return _bad_request(str(exc))
+        except StreamBusy as exc:
+            return web.json_response({"error": "stream_busy", "detail": str(exc)}, status=409)
         except BridgeUnavailable as exc:
             return web.json_response({"error": "p2p_unavailable", "detail": str(exc)}, status=503)
 
@@ -411,10 +551,58 @@ def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> 
         await run(worker.treat_sound)
         return web.json_response({"ok": True})
 
+    async def get_stream(request: web.Request) -> web.StreamResponse:
+        """Serve H.264 from the live session for as long as the viewer stays."""
+        quality = read_quality()
+        await run(worker.open_stream, quality)
+        response = web.StreamResponse(
+            status=200, headers={"Content-Type": "video/H264", "Cache-Control": "no-store"}
+        )
+        await response.prepare(request)
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=STREAM_QUEUE_MAX)
+        dropped = 0
+
+        def offer(frame: bytes | None) -> None:
+            # Runs on the event loop thread, so touching `dropped` is safe and
+            # a full queue is handled here rather than raising into the loop.
+            nonlocal dropped
+            if frame is not None and queue.full():
+                dropped += 1
+                return
+            queue.put_nowait(frame)
+
+        def pump() -> None:
+            # Runs on its own thread so the single control executor stays free.
+            try:
+                for frame in worker.iter_frames():
+                    loop.call_soon_threadsafe(offer, frame)
+            finally:
+                loop.call_soon_threadsafe(offer, None)
+
+        reader = threading.Thread(target=pump, name="furbo-video", daemon=True)
+        reader.start()
+        try:
+            while True:
+                frame = await queue.get()
+                if frame is None:
+                    break
+                await response.write(frame)
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        finally:
+            await run(worker.close_stream)
+            reader.join(timeout=5)
+            if dropped:
+                _LOGGER.warning("dropped %d frames: the viewer could not keep up", dropped)
+        return response
+
     app = web.Application(middlewares=[auth_and_errors])
     app.add_routes(
         [
             web.get("/api/status", get_status),
+            web.get("/api/stream", get_stream),
             web.post("/api/settings", post_settings),
             web.post("/api/pan", post_pan),
             web.post("/api/toss", post_toss),
@@ -452,8 +640,19 @@ async def serve(args: argparse.Namespace) -> None:
     site = web.TCPSite(runner, args.host, args.port)
     await site.start()
     _LOGGER.info("listening on http://%s:%s (bearer auth required)", args.host, args.port)
+
+    # Supervisor stops the add-on with SIGTERM. Handle it so the P2P session is
+    # closed on the camera instead of being left orphaned until it times out,
+    # and so the container exits 0 rather than 143.
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, stop.set)
+
     try:
-        await asyncio.Event().wait()
+        await stop.wait()
+        _LOGGER.info("stopping: closing the P2P session")
     finally:
         refresher.cancel()
         await runner.cleanup()

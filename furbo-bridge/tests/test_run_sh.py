@@ -42,7 +42,7 @@ def _run(
     if pending:
         pending_file.write_text("{}")
 
-    # A stub that records its args instead of running the app or go2rtc.
+    # Stubs that record their args instead of running the app or go2rtc.
     py_log = tmp_path / "py.log"
     stub = tmp_path / "stub.sh"
     stub.write_text(
@@ -54,6 +54,21 @@ def _run(
     )
     stub.chmod(0o755)
 
+    # go2rtc runs for the life of the add-on, and run.sh now shuts everything
+    # down as soon as either child exits. A stub that returned immediately
+    # would race the bridge it just launched, so this one stays up and lets
+    # the (immediately exiting) app stub end the run.
+    go2rtc_stub = tmp_path / "go2rtc.sh"
+    go2rtc_stub.write_text(
+        textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        echo "$@" >> "{py_log}"
+        trap 'exit 0' TERM
+        sleep 5 & wait
+        """)
+    )
+    go2rtc_stub.chmod(0o755)
+
     result = subprocess.run(
         ["bash", str(RUN_SH)],
         env={
@@ -61,7 +76,7 @@ def _run(
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "FURBO_DATA": str(data),
             "FURBO_PY": str(stub),
-            "FURBO_GO2RTC": str(stub),
+            "FURBO_GO2RTC": str(go2rtc_stub),
         },
         capture_output=True,
         text=True,

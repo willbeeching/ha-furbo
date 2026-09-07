@@ -40,7 +40,27 @@ class FakeWorker:
             "product": "FB0030",
         }
         self.state: dict[str, Any] = {"camera_on": True, "volume": 50}
+        self.session_mode: str | None = "LAN"
+        self.streaming = False
+        self.frames: list[bytes] = []
+        self.busy = False
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    # -- video ---------------------------------------------------------------
+
+    def open_stream(self, quality: str) -> None:
+        if self.busy:
+            raise fb.StreamBusy("a viewer is already streaming")
+        self.calls.append(("open_stream", (quality,)))
+        self.streaming = True
+
+    def iter_frames(self):
+        yield from self.frames
+        self.streaming = False
+
+    def close_stream(self) -> None:
+        self.calls.append(("close_stream", ()))
+        self.streaming = False
 
     def apply(self, settings: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(("apply", (settings,)))
@@ -216,3 +236,77 @@ def test_serve_refuses_empty_token() -> None:
     args = argparse.Namespace(token="", host="0.0.0.0", port=8791, interval=30.0)
     with pytest.raises(SystemExit):
         asyncio.run(fb.serve(args))
+
+
+# --- video ------------------------------------------------------------------
+
+
+def test_stream_serves_frames_from_the_single_session() -> None:
+    """The endpoint starts video on the live session and streams the frames."""
+    frames = [b"\x00\x00\x00\x01frame-one", b"\x00\x00\x00\x01frame-two"]
+    seen: dict[str, Any] = {}
+
+    async def scenario(client: Any, worker: Any) -> None:
+        worker.frames = list(frames)
+        resp = await client.get("/api/stream", headers=AUTH)
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "video/H264"
+        seen["body"] = await resp.read()
+        seen["calls"] = [name for name, _ in worker.calls]
+
+    _run(scenario)
+    assert seen["body"] == b"".join(frames)
+    assert "open_stream" in seen["calls"]
+    # The session is always released, so the controls keep working after.
+    assert seen["calls"][-1] == "close_stream"
+
+
+def test_stream_uses_the_configured_quality() -> None:
+    """Video starts at whatever the quality file currently holds."""
+    fb.write_quality("720p")
+    try:
+        calls: dict[str, Any] = {}
+
+        async def scenario(client: Any, worker: Any) -> None:
+            worker.frames = [b"x"]
+            await (await client.get("/api/stream", headers=AUTH)).read()
+            calls["all"] = worker.calls
+
+        _run(scenario)
+        assert ("open_stream", ("720p",)) in calls["all"]
+    finally:
+        fb.write_quality("1080p")
+
+
+def test_stream_requires_the_token() -> None:
+    """Video is behind the same bearer token as the controls."""
+
+    async def scenario(client: Any, worker: Any) -> None:
+        assert (await client.get("/api/stream")).status == 401
+        assert not worker.calls
+
+    _run(scenario)
+
+
+def test_second_viewer_is_refused() -> None:
+    """One viewer at a time; a second gets 409 rather than a broken session."""
+
+    async def scenario(client: Any, worker: Any) -> None:
+        worker.busy = True
+        resp = await client.get("/api/stream", headers=AUTH)
+        assert resp.status == 409
+        assert (await resp.json())["error"] == "stream_busy"
+
+    _run(scenario)
+
+
+def test_status_reports_the_session_path() -> None:
+    """The status document exposes the path, so a relayed session is visible."""
+
+    async def scenario(client: Any, worker: Any) -> None:
+        worker.session_mode = "relay"
+        body = await (await client.get("/api/status", headers=AUTH)).json()
+        assert body["session_mode"] == "relay"
+        assert body["streaming"] is False
+
+    _run(scenario)

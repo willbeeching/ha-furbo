@@ -574,6 +574,7 @@ class FurboP2P:
         self.region = region
         self.log_path = log_path
         self.proto = "v2"
+        self.mode: str | None = None
         self.talk_channel = -1
         self.talk_av = -1
         self.state: dict = {}
@@ -621,6 +622,9 @@ class FurboP2P:
         info.size = sizeof(info)
         if lib.IOTC_Session_Check_Ex(c_int(self.session_id), byref(info)) >= 0:
             mode = {0: "P2P", 1: "relay", 2: "LAN"}.get(info.mode, info.mode)
+            # Kept so the HTTP bridge can report the path in /api/status: a
+            # relayed session is the difference between working and not.
+            self.mode = str(mode)
             log(
                 f"session {self.session_id}: {mode} via {info.remote_ip.decode()}:{info.remote_port}"
                 f" secure={info.is_secure} nat={info.local_nat_type}/{info.remote_nat_type}"

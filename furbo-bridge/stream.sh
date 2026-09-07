@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# go2rtc exec wrapper: stream the Furbo at the chosen quality and remux to RTSP.
+# go2rtc exec wrapper: pull H.264 from the bridge's existing P2P session.
 #
-# go2rtc runs this on demand (only while a viewer is connected) and substitutes
-# {output} with an internal RTSP endpoint. The quality is read fresh each run,
-# so the Home Assistant "Video quality" select takes effect on the next view.
-# go2rtc runs the command in its own process group and kills the group on stop,
-# so the piped ffmpeg and stream both exit with it.
-quality="$(cat /data/quality 2>/dev/null || echo 1080p)"
-exec python3 /app/furbo_p2p.py stream --quality "$quality" \
+# This deliberately does NOT run `furbo_p2p.py stream`. Doing so opened a second
+# P2P session, and each session fetches its own P2PAccountKey from the cloud,
+# which reissues the key and invalidates the other session's. Both then failed
+# to authenticate (avClientStartEx -20011) until one happened to win the race.
+# Reading from the bridge keeps it to one session and one credential.
+#
+# go2rtc runs this on demand, only while a viewer is connected, and kills the
+# process group when the last one leaves; the bridge then stops the video and
+# keeps the session for the controls.
+set -euo pipefail
+exec curl -sS -N --fail-with-body \
+    -H "Authorization: Bearer ${API_TOKEN}" \
+    "http://127.0.0.1:${FURBO_API_PORT:-8791}/api/stream" \
   | exec ffmpeg -hide_banner -loglevel error -fflags nobuffer \
       -f h264 -i - -c copy -rtsp_transport tcp -f rtsp "$1"

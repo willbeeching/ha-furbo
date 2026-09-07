@@ -86,9 +86,17 @@ ports also works.
 - **Add-ons need Home Assistant OS or Supervised.** On Home Assistant Container
   or Core, run `furbo_p2p.py serve` and go2rtc yourself and point the
   integration at them.
-- **Concurrent sessions:** the state API holds one P2P session; go2rtc opens a
-  second only while someone is watching. Whether this camera is happy with two
-  simultaneous sessions is the main thing to confirm on your LAN — if live view
-  disturbs state polling, that is why.
+- **One P2P session, always.** State, controls and video all share the single
+  session the add-on holds. Video is read from it over `GET /api/stream`, which
+  go2rtc consumes on demand. Earlier versions let go2rtc open a second session:
+  because the camera's P2P credential is reissued on every cloud fetch, the two
+  sessions invalidated each other's key and both failed to authenticate
+  (`avClientStartEx -20011`), which could wedge video and controls for hours.
+  Talkback still opens its own short-lived session while the microphone is
+  open, so it remains the one place that can hit this; it is next to move.
+- **Spotting a bad connection:** `GET /api/status` reports `session_mode`.
+  `LAN` or `P2P` is a direct path; `relay` means the traffic is going out to a
+  Kalay relay, which makes commands slow and can stop video starting at all.
+  The add-on logs the mode when it connects and warns if a poll runs long.
 - **1080p** sends a brief 360p preview frame before switching up; give the
   stream a few seconds to reach full resolution.

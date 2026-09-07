@@ -103,10 +103,25 @@ echo "[furbo] starting go2rtc (RTSP :8554, WebRTC :8555, API on loopback)" >&2
 "$GO2RTC" -config /app/go2rtc.yaml &
 GO2RTC_PID=$!
 
-term() { echo "[furbo] stopping" >&2; kill "$GO2RTC_PID" 2>/dev/null || true; exit 0; }
+echo "[furbo] starting HTTP API on :8791 (bearer auth required)" >&2
+"$PY" /app/furbo_p2p.py serve \
+  --host 0.0.0.0 --port 8791 --interval 30 \
+  --token "$API_TOKEN" &
+BRIDGE_PID=$!
+
+# Deliberately not `exec`: exec would replace this shell and discard the trap,
+# which is why Supervisor had to kill the add-on with SIGTERM (exit 143) and
+# the camera was left holding an orphaned P2P session. Staying alive lets the
+# bridge shut that session down first.
+term() {
+  echo "[furbo] stopping" >&2
+  kill -TERM "$BRIDGE_PID" 2>/dev/null || true
+  kill -TERM "$GO2RTC_PID" 2>/dev/null || true
+  wait "$BRIDGE_PID" 2>/dev/null || true
+  exit 0
+}
 trap term SIGTERM SIGINT
 
-echo "[furbo] starting HTTP API on :8791 (bearer auth required)" >&2
-exec "$PY" /app/furbo_p2p.py serve \
-  --host 0.0.0.0 --port 8791 --interval 30 \
-  --token "$API_TOKEN"
+# If either process dies on its own, stop the other and let Supervisor restart.
+wait -n
+term
