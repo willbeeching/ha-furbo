@@ -1,16 +1,20 @@
-"""Fail when shipped add-on content changes without a version bump.
+"""Fail when shipped add-on content changes without a version bump and notes.
 
 Home Assistant installs add-on updates by comparing the ``version`` in
-``furbo-bridge/config.yaml``. If the image or its config changes but the
-version does not, users never receive the update. This runs in CI on pull
-requests: it diffs the shipped add-on files against the base branch and, if any
-changed, requires ``config.yaml``'s version to differ too.
+``furbo-bridge/config.yaml``, and shows ``furbo-bridge/CHANGELOG.md`` when an
+update is available. If the image or its config changes but the version does
+not, users never receive the update; if the version changes but the changelog
+does not, they are offered an update with nothing to read. This runs in CI on
+pull requests: it diffs the shipped add-on files against the base branch and,
+if any changed, requires the version to differ and the new version to have a
+changelog heading.
 
 Usage:
     python scripts/check_addon_version.py <base-ref>
 
 Only files that end up in the published add-on count. Dev-only files (the test
-suite, lint/test config) are excluded so they can change without a bump.
+suite, lint/test config) and the changelog itself are excluded so they can
+change without a bump.
 """
 
 from __future__ import annotations
@@ -22,16 +26,30 @@ import sys
 
 ADDON_DIR = "furbo-bridge"
 CONFIG = f"{ADDON_DIR}/config.yaml"
+CHANGELOG = f"{ADDON_DIR}/CHANGELOG.md"
 # Files under furbo-bridge/ that are NOT part of the published image, so they
 # may change without forcing a user-facing version bump.
 DEV_ONLY = {
     f"{ADDON_DIR}/ruff.toml",
     f"{ADDON_DIR}/pytest.ini",
     f"{ADDON_DIR}/requirements-test.txt",
+    # Release notes are checked below rather than here: requiring a bump for
+    # the file that documents the bump would never terminate.
+    CHANGELOG,
 }
 DEV_ONLY_PREFIXES = (f"{ADDON_DIR}/tests/",)
 
 _VERSION_RE = re.compile(r"""^version:\s*["']?([^"'\s]+)["']?\s*$""", re.MULTILINE)
+
+
+def _has_notes(version: str) -> bool:
+    """Whether the changelog carries a heading for this version."""
+    try:
+        text = Path(CHANGELOG).read_text()
+    except OSError:
+        return False
+    wanted = re.compile(rf"^#+\s*v?{re.escape(version)}\s*$", re.MULTILINE)
+    return bool(wanted.search(text))
 
 
 def _git(*args: str) -> str:
@@ -81,7 +99,14 @@ def main(base: str) -> int:
             f"Bump 'version' in {CONFIG}."
         )
         return 1
-    print("OK: version was bumped.")
+    if not _has_notes(new):
+        print(
+            f"FAIL: no release notes for {new}. Home Assistant shows "
+            f"{CHANGELOG} when it offers the update, so add a '## {new}' "
+            "section describing what changed."
+        )
+        return 1
+    print(f"OK: version was bumped and {new} has release notes.")
     return 0
 
 
