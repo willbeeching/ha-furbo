@@ -7,7 +7,7 @@
 # The TUTK library is fetched at build time (see Dockerfile); no proprietary
 # binary is stored in this repository.
 name: Furbo Bridge
-version: "0.1.6"
+version: "0.1.7"
 slug: furbo_bridge
 description: >-
   Runs the Furbo camera's proprietary P2P session outside Home Assistant and

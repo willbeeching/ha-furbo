@@ -12,10 +12,20 @@ rules:
       Cloud polling at a default 300s interval (coordinator.py DEFAULT_SCAN_INTERVAL),
       user-adjustable down to a 60s floor that respects the pet-gpt calendar rate limit.
   brands:
-    status: todo
-    comment: >-
-      No brand images yet. custom_components/furbo/brand/ exists but ships no PNGs;
-      Furbo trademark artwork has not been cleared for redistribution.
+    status: done
+    comment: |
+      Home Assistant 2026.3 serves custom-integration icons from
+      custom_components/<domain>/brand/; home-assistant/brands no longer
+      accepts those PRs. icon.png is 256x256 and icon@2x.png is 512x512;
+      the logo and dark-logo pairs are 873x256 / 1746x512, shortest side at
+      the 256 / 512 maximum in
+      https://github.com/home-assistant/brands#logo-image-requirements.
+      The add-on ships furbo-bridge/icon.png (square) and logo.png.
+      scripts/check_quality_scale.py asserts the PNG type, those sizes, that
+      each @2x is exactly twice its 1x, and that git tracks them so they
+      reach the release archive and the add-on image. The wordmark and icon
+      are Furbo's own artwork, used to identify the product the integration
+      talks to.
   common-modules:
     status: done
     comment: Shared client in api.py, coordinator in coordinator.py, base entities in entity.py.
