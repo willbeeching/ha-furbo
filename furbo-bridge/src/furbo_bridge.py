@@ -82,6 +82,8 @@ SLOW_REFRESH_SECONDS = 10.0
 # viewer cannot grow the heap; overflow drops frames and ffmpeg resyncs.
 STREAM_QUEUE_MAX = 512
 FRAME_BUFFER_BYTES = 2 * 1024 * 1024
+# How long a reconnect waits for the frame reader to leave the SDK.
+READER_EXIT_TIMEOUT = 3.0
 NIGHT_MODES = ("auto", "on", "off")
 BARK_LEVELS = ("off", "low", "medium", "high")
 PAN_DIRECTIONS = ("left", "right")
@@ -165,6 +167,9 @@ class P2PWorker:
         # controls keep working while video is streaming.
         self._streaming = False
         self._stream_stop = threading.Event()
+        # Set while the reader is inside the SDK. Closing the channel under it
+        # would crash the process, so a reconnect waits for this to clear.
+        self._reader_active = threading.Event()
         self.device: dict[str, str] = {}
         self.state: dict[str, Any] = {}
         self.updated_at: float | None = None
@@ -211,9 +216,15 @@ class P2PWorker:
         return p2p
 
     def _drop(self) -> None:
-        # Stop the frame reader before the channel goes away under it.
+        # Stop the frame reader and let it leave the SDK before the channel is
+        # closed; tearing it down mid-call would take the process with it.
         self._stream_stop.set()
         self._streaming = False
+        deadline = time.monotonic() + READER_EXIT_TIMEOUT
+        while self._reader_active.is_set() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if self._reader_active.is_set():
+            _LOGGER.warning("frame reader did not stop in time; closing anyway")
         if self._p2p is not None:
             # Closing an already-dead session can raise from the SDK; ignore it.
             with contextlib.suppress(Exception):
@@ -398,17 +409,21 @@ class P2PWorker:
             return
         buf = fp.create_string_buffer(FRAME_BUFFER_BYTES)
         info = fp.FrameInfo()
-        while not self._stream_stop.is_set():
-            ret, _expected = p2p.recv_frame(buf, info)
-            if ret >= 0:
-                yield buf.raw[:ret]
-            elif ret == fp.AV_ER_DATA_NOREADY:
-                time.sleep(0.005)
-            elif ret in (fp.AV_ER_LOSED_THIS_FRAME, fp.AV_ER_INCOMPLETE_FRAME):
-                continue
-            else:
-                _LOGGER.info("video ended: %s", fp.err(ret))
-                return
+        self._reader_active.set()
+        try:
+            while not self._stream_stop.is_set():
+                ret, _expected = p2p.recv_frame(buf, info)
+                if ret >= 0:
+                    yield buf.raw[:ret]
+                elif ret == fp.AV_ER_DATA_NOREADY:
+                    time.sleep(0.005)
+                elif ret in (fp.AV_ER_LOSED_THIS_FRAME, fp.AV_ER_INCOMPLETE_FRAME):
+                    continue
+                else:
+                    _LOGGER.info("video ended: %s", fp.err(ret))
+                    return
+        finally:
+            self._reader_active.clear()
 
     def close_stream(self) -> None:
         """Stop video, leaving the session up for the controls."""

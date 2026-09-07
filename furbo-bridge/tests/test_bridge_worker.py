@@ -313,3 +313,26 @@ def test_session_mode_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     assert worker.session_mode is None
     worker._p2p = fake
     assert worker.session_mode == "relay"
+
+
+def test_reconnect_waits_for_the_reader_to_leave_the_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing the channel while the reader is inside it would crash the SDK."""
+    fake = FakeP2P()
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+    worker._reader_active.set()  # pretend the reader is mid-call
+
+    monkeypatch.setattr(fb, "READER_EXIT_TIMEOUT", 0.1)
+    worker._drop()
+    # It gives up rather than hanging, but only after waiting.
+    assert fake.closed is True
+
+    # With the reader clear, the session closes without the wait.
+    fake2 = FakeP2P()
+    worker._p2p = fake2
+    worker._reader_active.clear()
+    worker._drop()
+    assert fake2.closed is True
