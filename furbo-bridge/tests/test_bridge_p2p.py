@@ -7,6 +7,7 @@ parsing that turns camera replies into state is covered without hardware.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import pytest
@@ -155,3 +156,70 @@ def test_decode_dispatches_by_proto(proto: str, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(d, "decode_v2", lambda o, x: seen.setdefault("v2", True))
     d.decode(1, b"\x00")
     assert seen == {proto: True}
+
+
+# --- waiting for replies ----------------------------------------------------
+
+
+def _waiter(replies: list[tuple[int, bytes] | None]) -> fp.FurboP2P:
+    """A FurboP2P whose poll() serves a canned sequence, then None forever."""
+    obj = _decoder()
+    queue = list(replies)
+
+    def poll(_timeout_ms: int = 10) -> tuple[int, bytes] | None:
+        return queue.pop(0) if queue else None
+
+    obj.poll = poll  # type: ignore[method-assign]
+    return obj
+
+
+def test_await_reply_returns_as_soon_as_the_reply_lands() -> None:
+    """The wait ends on the reply, not on the timeout."""
+    op = fp.CMD3["GET_VOLUME"]
+    p2p = _waiter([None, (_reply("GET_VOLUME"), bytes([0, 40]))])
+    start = time.monotonic()
+    assert p2p.await_reply(op, 5.0) is True
+    assert time.monotonic() - start < 1.0
+
+
+def test_await_reply_accepts_a_refusal() -> None:
+    """A refusal answers the command; the sweep should not sit out the ceiling."""
+    op = fp.CMD3["GET_VOLUME"]
+    payload = bytes([5, op & 0xFF, (op >> 8) & 0xFF])
+    p2p = _waiter([(fp.CMD_REJECTED, payload)])
+    assert p2p.await_reply(op, 5.0) is True
+
+
+def test_await_reply_ignores_another_commands_reply() -> None:
+    """Someone else's reply does not end this wait, and does not confuse it."""
+    op = fp.CMD3["GET_VOLUME"]
+    other = bytes([9, 0xFF, 0xFF])  # a refusal for a different opcode
+    p2p = _waiter([(_reply("GET_BARKING"), bytes([0, 2])), (fp.CMD_REJECTED, other)])
+    assert p2p.await_reply(op, 0.3) is False
+
+
+def test_await_reply_gives_up_at_the_ceiling() -> None:
+    """A command the camera never answers costs the ceiling and no more."""
+    p2p = _waiter([])
+    start = time.monotonic()
+    assert p2p.await_reply(fp.CMD3["GET_VOLUME"], 0.2) is False
+    assert 0.2 <= time.monotonic() - start < 1.0
+
+
+def test_query_state_v3_waits_per_reply_not_per_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each get is awaited individually; no fixed sleep between commands."""
+    p2p = _decoder()
+    sent: list[int] = []
+    awaited: list[tuple[int, float]] = []
+    drains: list[float] = []
+    monkeypatch.setattr(p2p, "send", lambda op, data=b"": sent.append(op))
+    monkeypatch.setattr(p2p, "await_reply", lambda op, t: (awaited.append((op, t)), True)[1])
+    monkeypatch.setattr(p2p, "drain", lambda s: drains.append(s))
+    p2p.query_state(wait=3.0)
+    assert sent == [op for op, _ in awaited]
+    assert len(sent) == 13
+    assert {t for _, t in awaited} == {fp.REPLY_TIMEOUT}
+    # One short catch-all at the end, not the caller's wait.
+    assert drains == [fp.TRAILING_DRAIN]

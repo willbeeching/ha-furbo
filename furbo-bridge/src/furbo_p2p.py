@@ -179,6 +179,12 @@ PROTO_BY_PRODUCT = {
 # The camera answers a request it will not serve with this opcode and a
 # payload of [status, opcode_lo, opcode_hi, 0, 0]. The app logs and ignores it.
 CMD_REJECTED = 0x40001
+# How long one V3 get waits for its reply before the sweep moves on. Only a
+# command the camera never answers pays this; a normal reply ends the wait as
+# soon as it lands.
+REPLY_TIMEOUT = 1.5
+# A short catch-all after the sweep, for anything the camera sent unprompted.
+TRAILING_DRAIN = 0.2
 NIGHT_MODES = {0: "auto", 1: "on", 2: "off"}
 SENSITIVITY = {1: "low", 2: "medium", 3: "high"}
 SENSITIVITY_V3 = {0: "off", 1: "low", 2: "medium", 3: "high"}  # SoundSensitivity
@@ -822,6 +828,12 @@ class FurboP2P:
             self.drain(1.0)
 
     def query_state(self, wait: float = 3.0) -> dict:
+        """Read every setting the camera exposes.
+
+        On V3 each command is awaited individually, so the sweep costs one
+        round trip per setting rather than a fixed wait per setting; `wait`
+        applies to the V2 path, which fires all its gets before waiting once.
+        """
         if self.proto == "v3":
             z = b"\0\0\0\0"
             for op in (
@@ -840,8 +852,11 @@ class FurboP2P:
                 "GET_AUTO_CALM",
             ):
                 self.send(CMD3[op], z)
-                self.drain(0.4)
-            self.drain(wait)
+                if not self.await_reply(CMD3[op], REPLY_TIMEOUT):
+                    log(f"no reply to {op} within {REPLY_TIMEOUT}s")
+            # Every command above has been answered or timed out, so this is
+            # only here to pick up anything the camera sent unprompted.
+            self.drain(TRAILING_DRAIN)
             return self.state
         self.send(CMD["GET_DEVICEINFO"], b"\1\0\0\0")
         self.send(CMD["GET_FURBO_POWER"])
@@ -854,6 +869,28 @@ class FurboP2P:
         self.send(CMD["GET_AVINFO"])
         self.drain(wait)
         return self.state
+
+    def await_reply(self, opcode: int, timeout: float) -> bool:
+        """Poll until the camera answers `opcode`, or the timeout runs out.
+
+        A reply carries the request opcode plus one, and a refusal arrives as
+        CMD_REJECTED with the low 16 bits of the request in its payload.
+        Everything polled along the way is decoded as usual, so a reply that
+        arrives out of order still lands in state. Returns whether the camera
+        answered at all; a refusal counts as an answer.
+        """
+        end = time.time() + timeout
+        while time.time() < end:
+            got = self.poll(100)
+            if got is None:
+                continue
+            reply, data = got
+            if reply == opcode + 1:
+                return True
+            refused = reply == CMD_REJECTED and len(data) >= 3
+            if refused and data[1] | (data[2] << 8) == opcode & 0xFFFF:
+                return True
+        return False
 
     def drain(self, seconds: float) -> None:
         end = time.time() + seconds

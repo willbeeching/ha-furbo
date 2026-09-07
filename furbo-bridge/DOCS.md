@@ -107,6 +107,11 @@ ports also works.
   up as `P2P`, a direct path that is nearly as quick as `LAN`. Or carry the
   search broadcast across with a UDP broadcast relay. Still seeing `relay`
   after either change means UDP between the two hosts is being dropped.
+- **The full poll waits on replies, not on a timer.** Each of the thirteen
+  settings reads is awaited individually and moves on the moment the camera
+  answers, so the sweep costs one round trip per setting. It used to sleep a
+  fixed 0.4s after each command, which made the sweep take ten seconds even on
+  a LAN session where every reply arrived in a few milliseconds.
 - **Writes do not re-read the camera.** A setting change updates the cached
   state from what it wrote and returns. Reading every setting back costs one
   round trip each, which on a relayed session took longer than Home Assistant
