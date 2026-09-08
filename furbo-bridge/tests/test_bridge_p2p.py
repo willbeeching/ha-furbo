@@ -320,3 +320,12 @@ def test_send_drains_before_transmitting() -> None:
     p2p.send(fp.CMD3["GET_VOLUME"], b"\0\0\0\0")
     # Drained until empty, then transmitted, and nothing polled afterwards.
     assert order == ["poll", "poll", "send"], order
+
+
+def test_video_opcodes_are_named() -> None:
+    """A bare '0x1ff' in the log hides whether the camera answered the start."""
+    p2p = _decoder()
+    assert p2p._name(fp.IPCAM_START) == "IPCAM_START"
+    assert p2p._name(fp.IPCAM_STOP) == "IPCAM_STOP"
+    assert p2p._name(fp.CMD3["GET_VOLUME"]) == "GET_VOLUME"
+    assert p2p._name(0xDEAD) == "0xdead"

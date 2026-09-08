@@ -445,3 +445,46 @@ def test_other_failures_do_not_set_needs_login(monkeypatch: pytest.MonkeyPatch) 
         worker.refresh()
     assert worker.needs_login is False
     assert worker._login_retry_at == 0.0
+
+
+def test_reader_gives_up_when_no_first_frame_arrives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A camera that accepts the start command and sends nothing is a failure.
+
+    Spinning on 'no data' holds the single stream slot, so every retry gets a
+    busy response and it reads as a hang rather than a refusal.
+    """
+    monkeypatch.setattr(fb, "FIRST_FRAME_TIMEOUT", 0.05)
+    fake = FakeP2P()
+    # Always "no data": the camera never sends a frame.
+    monkeypatch.setattr(fake, "recv_frame", lambda _buf, _info: (fb.fp.AV_ER_DATA_NOREADY, 0))
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+    assert list(worker.iter_frames()) == []
+    # The slot is released, so the next viewer is not turned away.
+    worker.close_stream()
+    assert worker.streaming is False
+
+
+def test_reader_keeps_waiting_once_frames_are_flowing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The give-up only applies before the first frame, not to a gap after it."""
+    monkeypatch.setattr(fb, "FIRST_FRAME_TIMEOUT", 0.05)
+    fake = FakeP2P()
+    replies = [(4, 0), (fb.fp.AV_ER_DATA_NOREADY, 0), (4, 0), (-20015, 0)]
+
+    def recv(buf: Any, _info: Any) -> tuple[int, int]:
+        ret = replies.pop(0)
+        if ret[0] > 0:
+            buf[0:4] = b"abcd"
+        return ret
+
+    monkeypatch.setattr(fake, "recv_frame", recv)
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+    # Both frames arrive; the pause in the middle does not end the stream.
+    assert list(worker.iter_frames()) == [b"abcd", b"abcd"]

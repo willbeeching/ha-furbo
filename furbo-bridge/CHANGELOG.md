@@ -3,6 +3,16 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.1.0-beta.8
+
+- A camera that accepts the start command and then sends no video is now
+  treated as a failure after eight seconds instead of being waited on
+  indefinitely. The reader used to hold the single stream slot for as long as
+  the viewer waited, so go2rtc timed out and every retry was turned away as
+  busy, which looked like a hang rather than a refusal.
+- The video opcodes are named in the log. `IPCAM_START` used to appear as a
+  bare `0x1ff` with no way to tell whether the camera answered it.
+
 ## 1.1.0-beta.7
 
 - Fixed the slow settings poll, this time from the evidence rather than a

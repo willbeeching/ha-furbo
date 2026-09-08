@@ -72,6 +72,9 @@ FURBO_LICENSE_KEY = b"AQAAAImKg/eLaZN7zGTUrAl9TqgL27EnRkTZm6iu5GvTVNWh7OW4gmiNUf
 # Standard TUTK opcodes the app uses (com.tutk.IOTC.AVIOCTRLDEFs).
 IPCAM_START = 0x1FF  # payload: int32 LE quality number
 IPCAM_STOP = 0x2FF
+# The video opcodes are not in the CMD tables, so without this they log as bare
+# hex and a camera that answers (or does not) is hard to read in a log.
+VIDEO_NAME = {IPCAM_START: "IPCAM_START", IPCAM_STOP: "IPCAM_STOP"}
 AUDIO_START = 0x300
 AUDIO_STOP = 0x301
 SETSTREAMCTRL_REQ = 0x320
@@ -758,7 +761,12 @@ class FurboP2P:
     # --- control channel ---
 
     def _name(self, opcode: int) -> str:
-        return CMD3_NAME.get(opcode) or CMD_NAME.get(opcode) or f"0x{opcode:x}"
+        return (
+            CMD3_NAME.get(opcode)
+            or CMD_NAME.get(opcode)
+            or VIDEO_NAME.get(opcode)
+            or f"0x{opcode:x}"
+        )
 
     def send(self, opcode: int, data: bytes = b"\0\0\0\0") -> None:
         name = self._name(opcode)
@@ -797,7 +805,8 @@ class FurboP2P:
         status byte then a JSON blob; the simple gets are [status, value...].
         The full handler is not in the decompiled app, so a few offsets are
         confirmed empirically against the live camera and logged raw."""
-        name = CMD3_NAME.get(opcode - 1, CMD3_NAME.get(opcode, f"0x{opcode:x}"))
+        name = CMD3_NAME.get(opcode - 1) or CMD3_NAME.get(opcode) or VIDEO_NAME.get(opcode)
+        name = name or CMD_NAME.get(opcode) or f"0x{opcode:x}"
         s = self.state
         ok = bool(data) and data[0] == 0
         if opcode == CMD3["GET_DEVICE_INFO"] + 1 and ok:
@@ -856,7 +865,8 @@ class FurboP2P:
 
     def decode_v2(self, opcode: int, data: bytes) -> None:
         """Turn a camera reply into state, following the app's handleReceiveData."""
-        name = CMD_NAME.get(opcode - 1, CMD_NAME.get(opcode, f"0x{opcode:x}"))
+        name = CMD_NAME.get(opcode - 1) or CMD_NAME.get(opcode) or VIDEO_NAME.get(opcode)
+        name = name or CMD_NAME.get(opcode) or f"0x{opcode:x}"
         s = self.state
         ok = bool(data) and data[0] == 0
         if opcode == CMD["GET_FURBO_POWER"] + 1 and ok:

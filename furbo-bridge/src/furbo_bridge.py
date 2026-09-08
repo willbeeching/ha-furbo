@@ -84,6 +84,11 @@ STREAM_QUEUE_MAX = 512
 FRAME_BUFFER_BYTES = 2 * 1024 * 1024
 # How long a reconnect waits for the frame reader to leave the SDK.
 READER_EXIT_TIMEOUT = 3.0
+# How long to wait for the first frame after asking the camera to start video.
+# Without this the reader spins on "no data" for as long as the viewer waits,
+# holding the single stream slot, so every retry gets a busy response and the
+# failure looks like a hang rather than a refusal.
+FIRST_FRAME_TIMEOUT = 8.0
 # Backoff after the cloud refuses to log us in. Furbo rate-limits repeated
 # attempts (80001, 80002), so retrying on the poll interval makes recovery
 # slower rather than faster.
@@ -480,12 +485,23 @@ class P2PWorker:
         buf = fp.create_string_buffer(FRAME_BUFFER_BYTES)
         info = fp.FrameInfo()
         self._reader_active.set()
+        started = time.monotonic()
+        seen_frame = False
         try:
             while not self._stream_stop.is_set():
                 ret, _expected = p2p.recv_frame(buf, info)
                 if ret >= 0:
+                    seen_frame = True
                     yield buf.raw[:ret]
                 elif ret == fp.AV_ER_DATA_NOREADY:
+                    if not seen_frame and time.monotonic() - started > FIRST_FRAME_TIMEOUT:
+                        _LOGGER.warning(
+                            "no video %.0fs after the start command; the camera "
+                            "accepted it and sent nothing. Giving up so the slot "
+                            "is free for the next attempt",
+                            FIRST_FRAME_TIMEOUT,
+                        )
+                        return
                     time.sleep(0.005)
                 elif ret in (fp.AV_ER_LOSED_THIS_FRAME, fp.AV_ER_INCOMPLETE_FRAME):
                     continue
