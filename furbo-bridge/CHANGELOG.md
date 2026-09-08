@@ -3,6 +3,20 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.1.0-beta.6
+
+- The device identity now lives in its own file, so turning on
+  `reset_session` clears the stored token without also changing who the
+  bridge claims to be. Keeping both in one file meant a session reset earned
+  another emailed code, which is the thing beta.5 set out to stop. An id
+  already stored in the session file is picked up and kept.
+- A settings read that is not recognised now costs 0.4s rather than 1.5s,
+  which is what the fixed wait it replaced cost. The reply matching is still
+  not right on a V3 camera, and this caps what that is worth until it is.
+- Received replies log their opcode. The names alone were enough to mislead
+  two attempts at the matching; the numbers say what the camera actually
+  sends.
+
 ## 1.1.0-beta.5
 
 - The add-on now keeps the device identity it logs in with. Furbo recognises a

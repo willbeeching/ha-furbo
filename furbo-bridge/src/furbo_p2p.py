@@ -179,10 +179,11 @@ PROTO_BY_PRODUCT = {
 # The camera answers a request it will not serve with this opcode and a
 # payload of [status, opcode_lo, opcode_hi, 0, 0]. The app logs and ignores it.
 CMD_REJECTED = 0x40001
-# How long one V3 get waits for its reply before the sweep moves on. Only a
-# command the camera never answers pays this; a normal reply ends the wait as
-# soon as it lands.
-REPLY_TIMEOUT = 1.5
+# How long one V3 get waits for its reply before the sweep moves on. A reply
+# that is recognised ends the wait as soon as it lands; this is what an
+# unrecognised one costs, and it is deliberately no more than the fixed sleep
+# this replaced, so a matching bug cannot make the sweep slower than it was.
+REPLY_TIMEOUT = 0.4
 # A short catch-all after the sweep, for anything the camera sent unprompted.
 TRAILING_DRAIN = 0.2
 NIGHT_MODES = {0: "auto", 1: "on", 2: "off"}
@@ -394,17 +395,40 @@ def _load_session() -> dict:
     return json.loads(SESSION_FILE.read_text())
 
 
+def _device_file() -> Path:
+    """Where the device identity lives.
+
+    Deliberately not the session file: 'reset_session' deletes that, and
+    clearing a dead token should not also change who this bridge claims to be.
+    """
+    return SESSION_FILE.with_name("furbo_device.json")
+
+
 def _stored_mobile_id() -> str | None:
     """The device id this bridge last logged in with, if there is one.
 
     Furbo treats MobileId as the identity of the client. Minting a new one per
     login makes every login look like a new phone, which is what makes the
-    cloud email a verification code every time, so it is kept and reused.
+    cloud email a verification code every time, so it is kept and reused. The
+    session file is read as a fallback for bridges that stored it there before
+    it had a file of its own.
     """
+    for path in (_device_file(), SESSION_FILE):
+        try:
+            value = json.loads(path.read_text()).get("mobile_id")
+        except (OSError, ValueError):
+            continue
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _remember_mobile_id(mobile_id: str) -> None:
+    """Record the device id where a session reset will not remove it."""
     try:
-        return json.loads(SESSION_FILE.read_text()).get("mobile_id")
-    except (OSError, ValueError):
-        return None
+        _device_file().write_text(json.dumps({"mobile_id": mobile_id}, indent=2))
+    except OSError as exc:  # a read-only data dir should not fail a login
+        log(f"could not save the device id: {exc}")
 
 
 class MfaRequired(Exception):
@@ -472,6 +496,7 @@ async def cloud_login(code: str | None = None, send_only: bool = False) -> dict:
         devices = await client.get_devices()
     if PENDING_FILE.exists():
         PENDING_FILE.unlink()
+    _remember_mobile_id(mobile_id)
     session = {
         "account_id": client.account_id,
         "cognito_token": client.cognito_token,
@@ -561,6 +586,7 @@ async def silent_relogin() -> dict:
         if candidate:
             raise MfaRequired("the cloud wants a verification code")
         devices = await client.get_devices()
+    _remember_mobile_id(mobile_id)
     session = {
         "account_id": client.account_id,
         "cognito_token": client.cognito_token,
@@ -821,7 +847,7 @@ class FurboP2P:
             s.setdefault("rejected", []).append({"opcode": req, "status": data[0]})
             log(f"camera rejected 0x{req:x} with status {data[0]}")
             return
-        log(f"recv {name} ({len(data)} bytes) {data[:48].hex()}")
+        log(f"recv {name} [0x{opcode:x}] ({len(data)} bytes) {data[:48].hex()}")
 
     def decode_v2(self, opcode: int, data: bytes) -> None:
         """Turn a camera reply into state, following the app's handleReceiveData."""
@@ -884,7 +910,7 @@ class FurboP2P:
             CMD["SET_BARKING"] + 1,
         ):
             s.setdefault("results", {})[name] = "ok" if ok else f"error {data[0] if data else '?'}"
-        log(f"recv {name} ({len(data)} bytes) {data[:32].hex()}")
+        log(f"recv {name} [0x{opcode:x}] ({len(data)} bytes) {data[:32].hex()}")
 
     def register(self, creds: dict) -> None:
         """What the app does right after the channel opens. On V2 devices it
@@ -920,7 +946,7 @@ class FurboP2P:
             ):
                 self.send(CMD3[op], z)
                 if not self.await_reply(CMD3[op], REPLY_TIMEOUT):
-                    log(f"no reply to {op} within {REPLY_TIMEOUT}s")
+                    log(f"no reply to {op} [0x{CMD3[op]:x}] within {REPLY_TIMEOUT}s")
             # Every command above has been answered or timed out, so this is
             # only here to pick up anything the camera sent unprompted.
             self.drain(TRAILING_DRAIN)

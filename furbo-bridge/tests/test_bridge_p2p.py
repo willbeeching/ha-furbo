@@ -260,3 +260,33 @@ def test_stored_device_id_absent_or_unreadable(
     assert fp._stored_mobile_id() is None
     missing.write_text("{not json")
     assert fp._stored_mobile_id() is None
+
+
+def test_device_id_survives_a_session_reset(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """Clearing the session must not change who the bridge claims to be.
+
+    'reset_session' deletes the session file, so an id kept only in there is
+    lost and the next login registers as a new phone, which earns a code.
+    """
+    session = tmp_path / "furbo_session.json"
+    monkeypatch.setattr(fp, "SESSION_FILE", session)
+    fp._remember_mobile_id("stable-id")
+    session.write_text('{"account_id": "A", "cognito_token": "T"}')
+    session.unlink()  # what reset_session does
+    assert fp._stored_mobile_id() == "stable-id"
+
+
+def test_device_id_falls_back_to_an_older_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """A bridge that stored the id in the session keeps the id it has."""
+    session = tmp_path / "furbo_session.json"
+    session.write_text('{"mobile_id": "from-session"}')
+    monkeypatch.setattr(fp, "SESSION_FILE", session)
+    assert not fp._device_file().exists()
+    assert fp._stored_mobile_id() == "from-session"
+
+
+def test_reply_ceiling_is_no_worse_than_the_wait_it_replaced() -> None:
+    """An unmatched reply must not cost more than the old fixed sleep."""
+    assert fp.REPLY_TIMEOUT <= 0.4
