@@ -3,6 +3,13 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.1.0-beta.11
+
+- The camera's video status notification is decoded and logged in full. It is
+  the camera's own account of why it is or is not sending video, and the
+  generic payload log truncated it at 48 bytes, which cut off the status field
+  itself.
+
 ## 1.1.0-beta.10
 
 - Fixed video. Frames were being sliced to the length the SDK call returns,

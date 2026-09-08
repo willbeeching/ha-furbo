@@ -856,6 +856,14 @@ class FurboP2P:
             s["treat_size"] = TREAT_SIZE_NAME.get(data[1], data[1])
         elif opcode == CMD["IPCAM_START_RESP"]:
             s["video_started"] = ok
+        elif opcode == CMD3["NOTIFY_AV_STATUS"]:
+            # The camera's own account of the video stream, and the only thing
+            # that says why it is sending nothing. Small, and JSON, so it is
+            # logged whole rather than truncated like the binary payloads.
+            status = _json(data)
+            s["av_status"] = status
+            log(f"camera av status: {status}")
+            return
         elif opcode == 0x40001 and len(data) >= 3:
             req = data[1] | (data[2] << 8)
             s.setdefault("rejected", []).append({"opcode": req, "status": data[0]})

@@ -329,3 +329,20 @@ def test_video_opcodes_are_named() -> None:
     assert p2p._name(fp.IPCAM_STOP) == "IPCAM_STOP"
     assert p2p._name(fp.CMD3["GET_VOLUME"]) == "GET_VOLUME"
     assert p2p._name(0xDEAD) == "0xdead"
+
+
+def test_av_status_notification_is_kept_whole() -> None:
+    """The camera's video status is the only word on why it sends nothing.
+
+    The generic log truncates payloads at 48 bytes, which cut off the status
+    field itself.
+    """
+    d = _decoder()
+    payload = b'{"session": 0, "channel": 0, "stream": 0, "status": -1}\x00'
+    d.decode(fp.CMD3["NOTIFY_AV_STATUS"], payload)
+    assert d.state["av_status"] == {
+        "session": 0,
+        "channel": 0,
+        "stream": 0,
+        "status": -1,
+    }
