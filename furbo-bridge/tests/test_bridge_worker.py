@@ -488,3 +488,33 @@ def test_reader_keeps_waiting_once_frames_are_flowing(
     worker.open_stream("1080p")
     # Both frames arrive; the pause in the middle does not end the stream.
     assert list(worker.iter_frames()) == [b"abcd", b"abcd"]
+
+
+def test_reader_gives_up_on_frames_that_never_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Frames that all arrive lost or incomplete are a failure too.
+
+    beta.8 only gave up on 'no data', so a camera sending nothing but
+    incomplete frames spun in that branch forever, silently.
+    """
+    monkeypatch.setattr(fb, "FIRST_FRAME_TIMEOUT", 0.05)
+    fake = FakeP2P()
+    monkeypatch.setattr(
+        fake, "recv_frame", lambda _buf, _info: (fb.fp.AV_ER_INCOMPLETE_FRAME, 4_000_000)
+    )
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+    assert list(worker.iter_frames()) == []
+
+
+def test_reader_reports_a_lost_frame_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stream of lost frames ends rather than running until the viewer leaves."""
+    monkeypatch.setattr(fb, "FIRST_FRAME_TIMEOUT", 0.05)
+    fake = FakeP2P()
+    monkeypatch.setattr(fake, "recv_frame", lambda _buf, _info: (fb.fp.AV_ER_LOSED_THIS_FRAME, 0))
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+    assert list(worker.iter_frames()) == []

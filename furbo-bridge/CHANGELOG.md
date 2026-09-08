@@ -3,6 +3,17 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.1.0-beta.9
+
+- The give-up added in beta.8 only covered one of the ways a frame can fail to
+  arrive, and it was the wrong one. Frames that come back lost or incomplete
+  were discarded in a tight loop with no logging and no pause, which is what
+  the camera has actually been doing: the stream ran for as long as the viewer
+  waited and produced nothing, while the loop starved the controls sharing
+  that channel. The give-up now covers every outcome, the loop pauses, and a
+  stream that yields no frames reports which codes it saw and how large a
+  frame the camera was trying to send.
+
 ## 1.1.0-beta.8
 
 - A camera that accepts the start command and then sends no video is now

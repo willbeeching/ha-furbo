@@ -487,29 +487,47 @@ class P2PWorker:
         self._reader_active.set()
         started = time.monotonic()
         seen_frame = False
+        # What the SDK kept telling us, so a stream that yields nothing can say
+        # why instead of spinning in silence.
+        outcomes: dict[int, int] = {}
+        biggest_expected = 0
         try:
             while not self._stream_stop.is_set():
-                ret, _expected = p2p.recv_frame(buf, info)
+                ret, expected = p2p.recv_frame(buf, info)
                 if ret >= 0:
                     seen_frame = True
                     yield buf.raw[:ret]
-                elif ret == fp.AV_ER_DATA_NOREADY:
-                    if not seen_frame and time.monotonic() - started > FIRST_FRAME_TIMEOUT:
-                        _LOGGER.warning(
-                            "no video %.0fs after the start command; the camera "
-                            "accepted it and sent nothing. Giving up so the slot "
-                            "is free for the next attempt",
-                            FIRST_FRAME_TIMEOUT,
-                        )
-                        return
-                    time.sleep(0.005)
-                elif ret in (fp.AV_ER_LOSED_THIS_FRAME, fp.AV_ER_INCOMPLETE_FRAME):
                     continue
-                else:
+                outcomes[ret] = outcomes.get(ret, 0) + 1
+                biggest_expected = max(biggest_expected, expected)
+                # The give-up covers every way of not getting a frame, not just
+                # "no data": a camera whose frames all arrive lost or
+                # incomplete never reaches that branch.
+                if not seen_frame and time.monotonic() - started > FIRST_FRAME_TIMEOUT:
+                    _LOGGER.warning(
+                        "no usable video %.0fs after the start command "
+                        "(%s, largest frame expected %d bytes, buffer %d). "
+                        "Giving up so the slot is free for the next attempt",
+                        FIRST_FRAME_TIMEOUT,
+                        ", ".join(f"{fp.err(c)} x{n}" for c, n in sorted(outcomes.items())),
+                        biggest_expected,
+                        FRAME_BUFFER_BYTES,
+                    )
+                    return
+                if ret in (fp.AV_ER_DATA_NOREADY, fp.AV_ER_LOSED_THIS_FRAME):
+                    # Sleeping matters: without it this loop hammers the SDK on
+                    # the same channel the controls use, and they crawl.
+                    time.sleep(0.005)
+                elif ret != fp.AV_ER_INCOMPLETE_FRAME:
                     _LOGGER.info("video ended: %s", fp.err(ret))
                     return
         finally:
             self._reader_active.clear()
+            if outcomes and not seen_frame:
+                _LOGGER.info(
+                    "video produced no frames: %s",
+                    ", ".join(f"{fp.err(c)} x{n}" for c, n in sorted(outcomes.items())),
+                )
 
     def close_stream(self) -> None:
         """Stop video, leaving the session up for the controls."""
