@@ -42,6 +42,7 @@ class FakeWorker:
         self.state: dict[str, Any] = {"camera_on": True, "volume": 50}
         self.session_mode: str | None = "LAN"
         self.streaming = False
+        self.needs_login = False
         self.frames: list[bytes] = []
         self.busy = False
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
@@ -308,5 +309,6 @@ def test_status_reports_the_session_path() -> None:
         body = await (await client.get("/api/status", headers=AUTH)).json()
         assert body["session_mode"] == "relay"
         assert body["streaming"] is False
+        assert body["needs_login"] is False
 
     _run(scenario)

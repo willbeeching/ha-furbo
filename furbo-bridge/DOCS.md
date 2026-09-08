@@ -107,6 +107,13 @@ ports also works.
   up as `P2P`, a direct path that is nearly as quick as `LAN`. Or carry the
   search broadcast across with a UDP broadcast relay. Still seeing `relay`
   after either change means UDP between the two hosts is being dropped.
+- **A dead cloud token recovers on its own, usually.** Anything can invalidate
+  it: the phone app signing in, a password change, or the token ageing out.
+  The add-on logs in again with the device identity it already used, which the
+  cloud normally accepts without a code. When it does ask for a code, the
+  add-on says so, reports `needs_login` on `GET /api/status`, and backs off
+  instead of retrying into the rate limiter. Recover by setting a fresh
+  `mfa_code` with `reset_session` on, then turning `reset_session` back off.
 - **The full poll waits on replies, not on a timer.** Each of the thirteen
   settings reads is awaited individually and moves on the moment the camera
   answers, so the sweep costs one round trip per setting. It used to sleep a

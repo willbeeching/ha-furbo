@@ -84,6 +84,11 @@ STREAM_QUEUE_MAX = 512
 FRAME_BUFFER_BYTES = 2 * 1024 * 1024
 # How long a reconnect waits for the frame reader to leave the SDK.
 READER_EXIT_TIMEOUT = 3.0
+# Backoff after the cloud refuses to log us in. Furbo rate-limits repeated
+# attempts (80001, 80002), so retrying on the poll interval makes recovery
+# slower rather than faster.
+LOGIN_BACKOFF_START = 60.0
+LOGIN_BACKOFF_MAX = 900.0
 NIGHT_MODES = ("auto", "on", "off")
 BARK_LEVELS = ("off", "low", "medium", "high")
 PAN_DIRECTIONS = ("left", "right")
@@ -175,12 +180,20 @@ class P2PWorker:
         self.updated_at: float | None = None
         self.last_error: str | None = None
         self.last_full_refresh: float = 0.0
+        # Set when the cloud wants a person: a verification code, or credentials
+        # it will not accept. Retrying on the usual interval only burns rate
+        # limit, so attempts back off until someone fixes the options.
+        self.needs_login = False
+        self._login_retry_at = 0.0
+        self._login_backoff = LOGIN_BACKOFF_START
 
     # -- session -----------------------------------------------------------
 
     def _ensure(self) -> fp.FurboP2P:
         if self._p2p is not None and self._p2p.alive():
             return self._p2p
+        if self.needs_login and time.monotonic() < self._login_retry_at:
+            raise BridgeUnavailable(self.last_error or "waiting for a new login")
         self._drop()
         try:
             creds = asyncio.run(fp.fetch_p2p_credentials(self._args.device))
@@ -198,6 +211,8 @@ class P2PWorker:
                 raise
         except SystemExit as exc:
             self.last_error = str(exc)
+            if "log in" in str(exc) or "login" in str(exc):
+                self._hold_off_login()
             raise BridgeUnavailable(str(exc)) from None
         self.device = {
             "id": creds["uid"],
@@ -207,6 +222,8 @@ class P2PWorker:
         }
         self._p2p = p2p
         self.last_error = None
+        self.needs_login = False
+        self._login_backoff = LOGIN_BACKOFF_START
         self.last_full_refresh = 0.0
         _LOGGER.info("P2P session established to %s over %s", creds["name"], p2p.mode or "unknown")
         if p2p.mode == "relay":
@@ -247,6 +264,16 @@ class P2PWorker:
     def close(self) -> None:
         with self._lock:
             self._drop()
+
+    def _hold_off_login(self) -> None:
+        """Stop retrying a login the cloud is refusing, and say so once."""
+        if not self.needs_login:
+            _LOGGER.error(
+                "cloud login needed: %s (retrying in %.0fs)", self.last_error, self._login_backoff
+            )
+        self.needs_login = True
+        self._login_retry_at = time.monotonic() + self._login_backoff
+        self._login_backoff = min(self._login_backoff * 2, LOGIN_BACKOFF_MAX)
 
     # -- operations ----------------------------------------------------------
 
@@ -546,6 +573,7 @@ def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> 
             "device": worker.device,
             "session_mode": worker.session_mode,
             "streaming": worker.streaming,
+            "needs_login": worker.needs_login,
             "state": {**worker.state, "quality": read_quality()},
         }
 

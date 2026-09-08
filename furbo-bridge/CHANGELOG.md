@@ -3,6 +3,19 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.1.0-beta.5
+
+- The add-on now keeps the device identity it logs in with. Furbo recognises a
+  client by its MobileId, and a new one was minted on every login, so each
+  login looked like a new phone signing in and earned a fresh emailed code.
+- When the cloud rejects the stored token, the add-on logs in again by itself
+  and carries on. It used to sit in a thirty-second failure loop until someone
+  noticed.
+- A login the cloud will not complete without a verification code is reported
+  once and then backed off, up to fifteen minutes between attempts, rather
+  than retrying into Furbo's rate limiter. `GET /api/status` reports this as
+  `needs_login`.
+
 ## 1.1.0-beta.4
 
 - Fixed the reply matching added in beta.3. A V3 camera answers some commands

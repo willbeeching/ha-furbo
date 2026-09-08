@@ -399,3 +399,49 @@ def test_apply_ignores_a_toggle_with_no_config(monkeypatch: pytest.MonkeyPatch) 
     fake = FakeP2P(state={"schedule": "not-a-config", "auto_calm": "not-a-config"})
     worker = _worker_with(monkeypatch, fake)
     assert worker.apply({"schedule_enabled": True}) == {}
+
+
+# --- cloud login recovery ---------------------------------------------------
+
+
+def _unavailable_worker(monkeypatch: pytest.MonkeyPatch, message: str) -> fb.P2PWorker:
+    """A worker whose session cannot be built, for the given reason."""
+    args = argparse.Namespace(
+        device=None, lib=None, region="us", tutk_log=False, tcp_relay=False, timeout=10
+    )
+    worker = fb.P2PWorker(args)
+
+    def boom(_device: Any) -> dict[str, Any]:
+        raise SystemExit(message)
+
+    monkeypatch.setattr(fb.fp, "fetch_p2p_credentials", boom)
+    monkeypatch.setattr(fb.asyncio, "run", lambda coro: coro)
+    return worker
+
+
+def test_login_failure_backs_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refused login is not retried on the poll interval."""
+    worker = _unavailable_worker(monkeypatch, "Cloud rejected the token. Run: login")
+    with pytest.raises(fb.BridgeUnavailable):
+        worker.refresh()
+    assert worker.needs_login is True
+    first_deadline = worker._login_retry_at
+    assert first_deadline > 0
+
+    # The next poll is refused locally: the cloud is not asked again.
+    calls: list[int] = []
+    monkeypatch.setattr(fb.fp, "fetch_p2p_credentials", lambda _d: calls.append(1) or {})
+    with pytest.raises(fb.BridgeUnavailable):
+        worker.refresh()
+    assert calls == []
+    # And the wait doubles rather than staying put.
+    assert worker._login_backoff > fb.LOGIN_BACKOFF_START
+
+
+def test_other_failures_do_not_set_needs_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A connection problem is not a login problem, and keeps retrying."""
+    worker = _unavailable_worker(monkeypatch, "IOTC_Connect_ByUIDEx failed: -13")
+    with pytest.raises(fb.BridgeUnavailable):
+        worker.refresh()
+    assert worker.needs_login is False
+    assert worker._login_retry_at == 0.0

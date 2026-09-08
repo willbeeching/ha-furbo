@@ -234,3 +234,29 @@ def test_await_reply_accepts_the_request_opcode_as_the_reply() -> None:
     op = fp.CMD3["GET_TOSS_PROFILE"]
     p2p = _waiter([(op, bytes([0, 0]))])
     assert p2p.await_reply(op, 5.0) is True
+
+
+# --- device identity --------------------------------------------------------
+
+
+def test_login_reuses_the_stored_device_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """A second login keeps the MobileId the first one used.
+
+    Furbo identifies a client by MobileId, so minting a new one per login makes
+    every login look like a new phone and earns a verification code every time.
+    """
+    session = tmp_path / "furbo_session.json"
+    session.write_text('{"account_id": "A", "cognito_token": "T", "mobile_id": "keep-me"}')
+    monkeypatch.setattr(fp, "SESSION_FILE", session)
+    assert fp._stored_mobile_id() == "keep-me"
+
+
+def test_stored_device_id_absent_or_unreadable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """No session, or a corrupt one, means a fresh id rather than a crash."""
+    missing = tmp_path / "none.json"
+    monkeypatch.setattr(fp, "SESSION_FILE", missing)
+    assert fp._stored_mobile_id() is None
+    missing.write_text("{not json")
+    assert fp._stored_mobile_id() is None

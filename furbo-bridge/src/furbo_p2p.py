@@ -394,6 +394,23 @@ def _load_session() -> dict:
     return json.loads(SESSION_FILE.read_text())
 
 
+def _stored_mobile_id() -> str | None:
+    """The device id this bridge last logged in with, if there is one.
+
+    Furbo treats MobileId as the identity of the client. Minting a new one per
+    login makes every login look like a new phone, which is what makes the
+    cloud email a verification code every time, so it is kept and reused.
+    """
+    try:
+        return json.loads(SESSION_FILE.read_text()).get("mobile_id")
+    except (OSError, ValueError):
+        return None
+
+
+class MfaRequired(Exception):
+    """The cloud wants an emailed code, which only a person can supply."""
+
+
 def _cloud_fail(exc: FurboError) -> SystemExit:
     if exc.code == 12002:
         return SystemExit(f"Cloud rejected the token ({exc}). Run: furbo_p2p.py login")
@@ -437,7 +454,7 @@ async def cloud_login(code: str | None = None, send_only: bool = False) -> dict:
             enc, mobile_id, candidate = pending["enc"], pending["mobile_id"], pending["candidate"]
         else:
             enc = encrypt_password(password)
-            mobile_id = new_mobile_id()
+            mobile_id = _stored_mobile_id() or new_mobile_id()
             candidate = await client.start_login(email, enc, mobile_id)
             if candidate:
                 candidate = await client.send_mfa_code(candidate)
@@ -458,6 +475,7 @@ async def cloud_login(code: str | None = None, send_only: bool = False) -> dict:
     session = {
         "account_id": client.account_id,
         "cognito_token": client.cognito_token,
+        "mobile_id": mobile_id,
         "devices": devices,
     }
     SESSION_FILE.write_text(json.dumps(session, indent=2))
@@ -523,6 +541,37 @@ async def cloud_status(days: int) -> None:
             print(f"  {date}: none")
 
 
+async def silent_relogin() -> dict:
+    """Log in again with the stored device id, keeping the same session file.
+
+    Raises MfaRequired when the cloud wants an emailed code, which nothing here
+    can answer, and SystemExit when there are no credentials to try.
+    """
+    import aiohttp
+
+    env = _env_file()
+    email = os.environ.get("FURBO_EMAIL") or env.get("FURBO_EMAIL")
+    password = os.environ.get("FURBO_PASSWORD") or env.get("FURBO_PASSWORD")
+    if not email or not password:
+        raise SystemExit("no stored credentials to log in with")
+    mobile_id = _stored_mobile_id() or new_mobile_id()
+    async with aiohttp.ClientSession() as http:
+        client = FurboClient(http)
+        candidate = await client.start_login(email, encrypt_password(password), mobile_id)
+        if candidate:
+            raise MfaRequired("the cloud wants a verification code")
+        devices = await client.get_devices()
+    session = {
+        "account_id": client.account_id,
+        "cognito_token": client.cognito_token,
+        "mobile_id": mobile_id,
+        "devices": devices,
+    }
+    SESSION_FILE.write_text(json.dumps(session, indent=2))
+    log(f"logged in again, {len(devices)} device(s)")
+    return session
+
+
 async def fetch_p2p_credentials(device_id: str | None) -> dict:
     """Uid, auth key and a fresh P2P password for one device.
 
@@ -551,7 +600,25 @@ async def fetch_p2p_credentials(device_id: str | None) -> dict:
         try:
             p2p = await client.get_p2p_connection(device["Id"])
         except FurboError as exc:
-            raise _cloud_fail(exc) from exc
+            if exc.code != 12002:
+                raise _cloud_fail(exc) from exc
+            # The stored token is dead. Anything can kill it: the phone app
+            # signing in, a password change, or the token simply ageing out.
+            # Logging in again with the same device id usually goes through
+            # without a code, so try that before giving up on a person.
+            log("cloud rejected the stored token; logging in again")
+            try:
+                session = await silent_relogin()
+            except MfaRequired as mfa:
+                raise SystemExit(
+                    f"Cloud rejected the token and {mfa}. Set a fresh mfa_code "
+                    "and reset_session in the add-on options, then restart it."
+                ) from None
+            client = FurboClient(http, session["account_id"], session["cognito_token"])
+            try:
+                p2p = await client.get_p2p_connection(device["Id"])
+            except FurboError as retry_exc:
+                raise _cloud_fail(retry_exc) from retry_exc
     return {
         "name": device["DeviceName"],
         "device_id": str(device["Id"]),
