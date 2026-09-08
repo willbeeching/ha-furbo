@@ -3,6 +3,16 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.1.0-beta.7
+
+- Fixed the slow settings poll, this time from the evidence rather than a
+  guess. Sending a command cleared the receive queue immediately afterwards,
+  and because the send call blocks long enough for the camera to answer, that
+  cleanup was swallowing the command's own reply. The value still reached the
+  camera state, so nothing looked broken, but the code waiting for that reply
+  waited out its full timeout. The queue is now cleared before the command
+  goes out.
+
 ## 1.1.0-beta.6
 
 - The device identity now lives in its own file, so turning on

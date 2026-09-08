@@ -290,3 +290,33 @@ def test_device_id_falls_back_to_an_older_session(
 def test_reply_ceiling_is_no_worse_than_the_wait_it_replaced() -> None:
     """An unmatched reply must not cost more than the old fixed sleep."""
     assert fp.REPLY_TIMEOUT <= 0.4
+
+
+def test_send_drains_before_transmitting() -> None:
+    """The queue is cleared before the command goes out, never after.
+
+    avSendIOCtrl blocks long enough for the camera to answer, so a drain after
+    it swallows this command's own reply: the reply reaches state, but whoever
+    is waiting for it waits out the whole timeout.
+    """
+    order: list[str] = []
+    p2p = _decoder()
+    p2p.av_chan = 0
+
+    class Lib:
+        def avSendIOCtrl(self, *_args: Any) -> int:
+            order.append("send")
+            return 0
+
+    p2p.lib = Lib()
+    # One stale message is queued; draining it must happen before the send.
+    queued: list[tuple[int, bytes]] = [(0x10001, b"\x00")]
+
+    def poll(_timeout_ms: int = 10) -> tuple[int, bytes] | None:
+        order.append("poll")
+        return queued.pop(0) if queued else None
+
+    p2p.poll = poll  # type: ignore[method-assign]
+    p2p.send(fp.CMD3["GET_VOLUME"], b"\0\0\0\0")
+    # Drained until empty, then transmitted, and nothing polled afterwards.
+    assert order == ["poll", "poll", "send"], order

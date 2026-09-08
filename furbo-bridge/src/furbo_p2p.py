@@ -762,13 +762,18 @@ class FurboP2P:
 
     def send(self, opcode: int, data: bytes = b"\0\0\0\0") -> None:
         name = self._name(opcode)
+        # Clear anything already queued BEFORE transmitting, never after.
+        # avSendIOCtrl blocks long enough for the camera to answer, so a drain
+        # placed after it consumes this command's own reply: the reply is
+        # decoded into state, but a caller waiting for it never sees it and
+        # sits out its timeout instead.
+        while self.poll(0) is not None:
+            pass
         ret = self.lib.avSendIOCtrl(c_int(self.av_chan), c_uint(opcode), data, c_int(len(data)))
         if ret < 0:
             log(f"send {name} failed: {err(ret)}")
         else:
             log(f"sent {name} {data[:32].hex()}")
-        while self.poll(0) is not None:
-            pass
 
     def poll(self, timeout_ms: int = 10) -> tuple[int, bytes] | None:
         opcode = c_uint()
