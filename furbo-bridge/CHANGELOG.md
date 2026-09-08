@@ -3,6 +3,33 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.1.0
+
+Live video is served from the single P2P session the add-on already holds,
+rather than a second one that fought with it for the camera's credential.
+Settings reads and writes are several times quicker, and a cloud token the
+camera's servers reject is recovered without anyone having to intervene.
+
+Everything below was released as a beta on the way here and is included.
+
+- Video comes from the bridge's own session. go2rtc used to open a second
+  one, and because the camera's P2P credential is reissued on every cloud
+  fetch, the two invalidated each other's key and both failed to
+  authenticate, which could wedge video and controls for hours.
+- Changing a setting no longer re-reads every setting afterwards, and the
+  full poll waits on each reply instead of a fixed delay. A write went from
+  about thirteen seconds to two, a full poll from ten to two.
+- A rejected cloud token is retried with a fresh login using the device
+  identity the bridge already registered, which the cloud normally accepts
+  without emailing a code. When it does ask for one, the add-on says so once
+  and backs off rather than retrying into the rate limiter.
+- The device identity is kept separately from the session, so clearing a dead
+  token no longer changes who the bridge claims to be.
+- Video that never arrives is given up on and reported, instead of holding
+  the single stream slot while every retry is turned away.
+- The add-on tells the camera to stop video before shutting down.
+- `GET /api/status` reports `session_mode` and `needs_login`.
+
 ## 1.1.0-beta.12
 
 - The add-on now tells the camera to stop video before it shuts down, and
