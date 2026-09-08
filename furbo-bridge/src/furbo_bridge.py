@@ -89,6 +89,9 @@ READER_EXIT_TIMEOUT = 3.0
 # holding the single stream slot, so every retry gets a busy response and the
 # failure looks like a hang rather than a refusal.
 FIRST_FRAME_TIMEOUT = 8.0
+# A moment between telling the camera to stop video and asking it to start
+# again, so it has released the old stream before the new request lands.
+STREAM_RESTART_SETTLE = 0.3
 # Backoff after the cloud refuses to log us in. Furbo rate-limits repeated
 # attempts (80001, 80002), so retrying on the poll interval makes recovery
 # slower rather than faster.
@@ -241,6 +244,7 @@ class P2PWorker:
         # Stop the frame reader and let it leave the SDK before the channel is
         # closed; tearing it down mid-call would take the process with it.
         self._stream_stop.set()
+        was_streaming = self._streaming
         self._streaming = False
         deadline = time.monotonic() + READER_EXIT_TIMEOUT
         while self._reader_active.is_set() and time.monotonic() < deadline:
@@ -248,6 +252,13 @@ class P2PWorker:
         if self._reader_active.is_set():
             _LOGGER.warning("frame reader did not stop in time; closing anyway")
         if self._p2p is not None:
+            if was_streaming:
+                # Tell the camera video is over before this client disappears.
+                # Without it the camera holds the stream for a client that has
+                # gone and refuses to start one for the next, silently, until
+                # its own timeout expires.
+                with contextlib.suppress(Exception):
+                    self._p2p.send(fp.IPCAM_STOP, struct.pack("<i", 0))
             # Closing an already-dead session can raise from the SDK; ignore it.
             with contextlib.suppress(Exception):
                 self._p2p.close()
@@ -468,6 +479,11 @@ class P2PWorker:
                 raise StreamBusy("a viewer is already streaming")
             p2p = self._ensure()
             number = (fp.QUALITY_V3 if p2p.proto == "v3" else fp.QUALITY)[quality]
+            # Clear any stream the camera still believes it is serving. After an
+            # unclean exit it holds one for the client that went away, and a
+            # start request arriving on top of that returns no data at all.
+            p2p.send(fp.IPCAM_STOP, struct.pack("<i", 0))
+            time.sleep(STREAM_RESTART_SETTLE)
             p2p.send(fp.IPCAM_START, struct.pack("<i", number))
             self._stream_stop.clear()
             self._streaming = True

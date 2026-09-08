@@ -3,6 +3,16 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.1.0-beta.12
+
+- The add-on now tells the camera to stop video before it shuts down, and
+  clears any stream the camera still believes it is serving before starting a
+  new one. Shutting down closed the session without stopping the stream, so
+  the camera went on holding it for a client that had gone and answered the
+  next start request with no data at all until its own timeout expired. That
+  is why video came back on its own a few minutes after a restart, and why
+  restarting repeatedly kept it broken.
+
 ## 1.1.0-beta.11
 
 - The camera's video status notification is decoded and logged in full. It is

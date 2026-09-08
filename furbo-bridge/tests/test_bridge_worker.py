@@ -252,11 +252,20 @@ def test_full_sweep_returns_when_due(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_open_stream_starts_video_at_the_requested_quality(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Video starts on the session already held, with no second connection."""
+    """Video starts on the session already held, with no second connection.
+
+    A stop goes first: after an unclean exit the camera is still serving the
+    stream to a client that has gone, and a start on top of that returns no
+    data at all.
+    """
+    monkeypatch.setattr(fb, "STREAM_RESTART_SETTLE", 0)
     fake = FakeP2P()
     worker = _worker_with(monkeypatch, fake)
     worker.open_stream("720p")
-    assert fake.sends == [(fp.IPCAM_START, struct.pack("<i", fp.QUALITY_V3["720p"]))]
+    assert fake.sends == [
+        (fp.IPCAM_STOP, struct.pack("<i", 0)),
+        (fp.IPCAM_START, struct.pack("<i", fp.QUALITY_V3["720p"])),
+    ]
     assert worker.streaming is True
 
 
@@ -558,3 +567,35 @@ def test_a_successful_read_of_nothing_is_not_a_frame(
     worker._p2p = fake
     worker.open_stream("1080p")
     assert list(worker.iter_frames()) == []
+
+
+def test_dropping_a_streaming_session_tells_the_camera_to_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shutting down mid-stream must not leave the camera serving a ghost.
+
+    _drop closes the session without going through close_stream, so without
+    this the camera holds the video for a client that has gone and refuses the
+    next one until its own timeout expires.
+    """
+    monkeypatch.setattr(fb, "STREAM_RESTART_SETTLE", 0)
+    fake = FakeP2P()
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+    fake.sends.clear()
+    worker.close()
+    assert fake.sends == [(fp.IPCAM_STOP, struct.pack("<i", 0))]
+    assert fake.closed is True
+
+
+def test_dropping_an_idle_session_sends_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No stream, no stop: a session that was not streaming is just closed."""
+    fake = FakeP2P()
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.close()
+    assert fake.sends == []
+    assert fake.closed is True
