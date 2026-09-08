@@ -3,6 +3,16 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.1.0-beta.10
+
+- Fixed video. Frames were being sliced to the length the SDK call returns,
+  but this build reports the frame length separately and returns zero on
+  success, so every frame came out empty. The stream carried no bytes while
+  reporting no error, and because an empty read still counted as a frame, the
+  checks added in beta.8 and beta.9 stayed silent. The frame length now comes
+  from the SDK's own field, and a successful read of nothing is treated as
+  what it is.
+
 ## 1.1.0-beta.9
 
 - The give-up added in beta.8 only covered one of the ways a frame can fail to

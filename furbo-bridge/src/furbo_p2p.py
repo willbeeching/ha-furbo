@@ -1016,6 +1016,14 @@ class FurboP2P:
     # --- video ---
 
     def recv_frame(self, buf, info: FrameInfo):
+        """Read one frame. Returns (status, size, expected).
+
+        The frame length belongs to pnActualFrameSize. Some SDK builds also
+        return it, others return 0 on success, so slicing the buffer by the
+        return value alone yields empty frames on the builds that do not: the
+        caller sees a successful read of nothing and a stream that carries no
+        bytes while reporting no error.
+        """
         out_size = c_int32()
         expected = c_int32()
         info_size = c_int32()
@@ -1031,7 +1039,8 @@ class FurboP2P:
             byref(info_size),
             byref(frame_no),
         )
-        return ret, expected.value
+        size = out_size.value or (ret if ret > 0 else 0)
+        return ret, size, expected.value
 
     def alive(self) -> bool:
         """Whether the IOTC session still checks out (used by the HTTP bridge)."""
@@ -1347,14 +1356,14 @@ def cmd_stream(args) -> int:
         last_report = started
         while True:
             p2p.poll(0)
-            ret, expected = p2p.recv_frame(buf, info)
+            ret, size, expected = p2p.recv_frame(buf, info)
             if ret >= 0:
-                out.write(buf.raw[:ret])
+                out.write(buf.raw[:size])
                 out.flush()
                 frames += 1
                 if frames == 1:
                     log(
-                        f"first frame: codec={info.codec_id} key={info.is_keyframe} fps={info.framerate} bytes={ret}"
+                        f"first frame: codec={info.codec_id} key={info.is_keyframe} fps={info.framerate} bytes={size}"
                     )
                 if time.time() - last_report > 5:
                     log(f"{frames} frames, {frames / (time.time() - started):.1f} fps")

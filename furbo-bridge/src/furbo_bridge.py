@@ -493,10 +493,10 @@ class P2PWorker:
         biggest_expected = 0
         try:
             while not self._stream_stop.is_set():
-                ret, expected = p2p.recv_frame(buf, info)
-                if ret >= 0:
+                ret, size, expected = p2p.recv_frame(buf, info)
+                if ret >= 0 and size > 0:
                     seen_frame = True
-                    yield buf.raw[:ret]
+                    yield buf.raw[:size]
                     continue
                 outcomes[ret] = outcomes.get(ret, 0) + 1
                 biggest_expected = max(biggest_expected, expected)
@@ -514,7 +514,7 @@ class P2PWorker:
                         FRAME_BUFFER_BYTES,
                     )
                     return
-                if ret in (fp.AV_ER_DATA_NOREADY, fp.AV_ER_LOSED_THIS_FRAME):
+                if ret >= 0 or ret in (fp.AV_ER_DATA_NOREADY, fp.AV_ER_LOSED_THIS_FRAME):
                     # Sleeping matters: without it this loop hammers the SDK on
                     # the same channel the controls use, and they crawl.
                     time.sleep(0.005)

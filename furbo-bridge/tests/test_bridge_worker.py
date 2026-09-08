@@ -28,13 +28,13 @@ class FakeP2P:
         self.frames: list[bytes] = []
         self.query_calls = 0
 
-    def recv_frame(self, buf: Any, _info: Any) -> tuple[int, int]:
+    def recv_frame(self, buf: Any, _info: Any) -> tuple[int, int, int]:
         if self.frames:
             data = self.frames.pop(0)
             buf[0 : len(data)] = data
-            return len(data), 0
+            return len(data), len(data), 0
         # Nothing left: report the session going away so the loop ends.
-        return -20015, 0
+        return -20015, 0, 0
 
     def alive(self) -> bool:
         return True
@@ -458,7 +458,7 @@ def test_reader_gives_up_when_no_first_frame_arrives(
     monkeypatch.setattr(fb, "FIRST_FRAME_TIMEOUT", 0.05)
     fake = FakeP2P()
     # Always "no data": the camera never sends a frame.
-    monkeypatch.setattr(fake, "recv_frame", lambda _buf, _info: (fb.fp.AV_ER_DATA_NOREADY, 0))
+    monkeypatch.setattr(fake, "recv_frame", lambda _buf, _info: (fb.fp.AV_ER_DATA_NOREADY, 0, 0))
     worker = _worker_with(monkeypatch, fake)
     worker._p2p = fake
     worker.open_stream("1080p")
@@ -474,9 +474,9 @@ def test_reader_keeps_waiting_once_frames_are_flowing(
     """The give-up only applies before the first frame, not to a gap after it."""
     monkeypatch.setattr(fb, "FIRST_FRAME_TIMEOUT", 0.05)
     fake = FakeP2P()
-    replies = [(4, 0), (fb.fp.AV_ER_DATA_NOREADY, 0), (4, 0), (-20015, 0)]
+    replies = [(4, 4, 0), (fb.fp.AV_ER_DATA_NOREADY, 0, 0), (4, 4, 0), (-20015, 0, 0)]
 
-    def recv(buf: Any, _info: Any) -> tuple[int, int]:
+    def recv(buf: Any, _info: Any) -> tuple[int, int, int]:
         ret = replies.pop(0)
         if ret[0] > 0:
             buf[0:4] = b"abcd"
@@ -501,7 +501,7 @@ def test_reader_gives_up_on_frames_that_never_complete(
     monkeypatch.setattr(fb, "FIRST_FRAME_TIMEOUT", 0.05)
     fake = FakeP2P()
     monkeypatch.setattr(
-        fake, "recv_frame", lambda _buf, _info: (fb.fp.AV_ER_INCOMPLETE_FRAME, 4_000_000)
+        fake, "recv_frame", lambda _buf, _info: (fb.fp.AV_ER_INCOMPLETE_FRAME, 0, 4_000_000)
     )
     worker = _worker_with(monkeypatch, fake)
     worker._p2p = fake
@@ -513,7 +513,47 @@ def test_reader_reports_a_lost_frame_stream(monkeypatch: pytest.MonkeyPatch) -> 
     """A stream of lost frames ends rather than running until the viewer leaves."""
     monkeypatch.setattr(fb, "FIRST_FRAME_TIMEOUT", 0.05)
     fake = FakeP2P()
-    monkeypatch.setattr(fake, "recv_frame", lambda _buf, _info: (fb.fp.AV_ER_LOSED_THIS_FRAME, 0))
+    monkeypatch.setattr(
+        fake, "recv_frame", lambda _buf, _info: (fb.fp.AV_ER_LOSED_THIS_FRAME, 0, 0)
+    )
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+    assert list(worker.iter_frames()) == []
+
+
+def test_frame_size_comes_from_the_sdk_not_the_return_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A build that returns 0 on success still yields the whole frame.
+
+    Slicing by the return value gave empty frames: the reader counted them as
+    real, so the give-up never fired and the viewer got a stream carrying no
+    bytes with nothing logged.
+    """
+    fake = FakeP2P()
+    replies = [(0, 4, 0), (-20015, 0, 0)]
+
+    def recv(buf: Any, _info: Any) -> tuple[int, int, int]:
+        entry = replies.pop(0)
+        if entry[1]:
+            buf[0:4] = b"abcd"
+        return entry
+
+    monkeypatch.setattr(fake, "recv_frame", recv)
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+    assert list(worker.iter_frames()) == [b"abcd"]
+
+
+def test_a_successful_read_of_nothing_is_not_a_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero-length reads must not suppress the give-up."""
+    monkeypatch.setattr(fb, "FIRST_FRAME_TIMEOUT", 0.05)
+    fake = FakeP2P()
+    monkeypatch.setattr(fake, "recv_frame", lambda _buf, _info: (0, 0, 0))
     worker = _worker_with(monkeypatch, fake)
     worker._p2p = fake
     worker.open_stream("1080p")
