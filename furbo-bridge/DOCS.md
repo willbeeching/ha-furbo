@@ -107,6 +107,17 @@ ports also works.
   up as `P2P`, a direct path that is nearly as quick as `LAN`. Or carry the
   search broadcast across with a UDP broadcast relay. Still seeing `relay`
   after either change means UDP between the two hosts is being dropped.
+- **One add-on, every camera.** With `device_id` blank the bridge serves every
+  camera on the account, each with its own P2P session, controls and video
+  slot, so watching one does not stop another. Set `device_id` to a single id,
+  or a comma-separated list, to serve only some of them. `GET /api/cameras`
+  lists what is served and names each camera's stream.
+- **The API works two ways.** Every operation exists at
+  `/api/cameras/<device_id>/...` and unscoped at `/api/...`, where it acts on
+  the first camera. The unscoped paths are what a single-camera bridge has
+  always exposed, so an older integration keeps working. Each camera's video
+  is published by go2rtc as `furbo_<device_id>`, and the first camera also
+  keeps the plain `furbo` name.
 - **A dead cloud token recovers on its own, usually.** Anything can invalidate
   it: the phone app signing in, a password change, or the token ageing out.
   The add-on logs in again with the device identity it already used, which the

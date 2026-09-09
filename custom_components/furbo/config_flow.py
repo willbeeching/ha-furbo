@@ -372,7 +372,7 @@ class FurboOptionsFlow(OptionsFlow):
         # this camera has not already been configured by hand.
         discovered = await self._async_discovered_bridge()
         suggested_stream = self._stream_urls.get(device_id) or (
-            discovered.stream_url if discovered else ""
+            discovered.stream_url_for(device_id) if discovered else ""
         )
         suggested_bridge = bridge_conf.get(CONF_BRIDGE_URL) or (
             discovered.bridge_url if discovered else ""

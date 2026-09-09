@@ -19,6 +19,7 @@ from custom_components.furbo.discovery import (
 
 ADDONS_URL = "http://supervisor/addons"
 INFO_URL = "http://supervisor/addons/abc123_furbo_bridge/info"
+CAMERAS_URL = "http://abc123-furbo-bridge:8791/api/cameras"
 
 
 def _addons(*addons: dict[str, Any]) -> dict[str, Any]:
@@ -55,6 +56,7 @@ async def test_discovers_started_addon_with_token(
         INFO_URL,
         json=_info(hostname="abc123-furbo-bridge", options={"api_token": "s3cret"}),
     )
+    aioclient_mock.get(CAMERAS_URL, json={"primary": "1", "cameras": []})
 
     found = await async_discover_bridge(hass)
     assert found is not None
@@ -154,3 +156,135 @@ async def test_invalid_json_returns_none(
     monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
     aioclient_mock.get(ADDONS_URL, text="<<not json>>")
     assert await async_discover_bridge(hass) is None
+
+
+async def test_each_camera_gets_its_own_stream(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With several cameras the add-on names a stream for each."""
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+    aioclient_mock.get(
+        ADDONS_URL, json=_addons({"slug": "abc123_furbo_bridge", "state": "started"})
+    )
+    aioclient_mock.get(
+        INFO_URL,
+        json=_info(hostname="abc123-furbo-bridge", options={"api_token": "s3cret"}),
+    )
+    aioclient_mock.get(
+        CAMERAS_URL,
+        json={
+            "primary": "111",
+            "cameras": [
+                {"device_id": "111", "stream": "furbo_111"},
+                {"device_id": "222", "stream": "furbo_222"},
+            ],
+        },
+    )
+
+    found = await async_discover_bridge(hass)
+    assert found is not None
+    auth = f"furbo:{rtsp_password('s3cret')}@abc123-furbo-bridge:8554"
+    assert found.stream_url_for("111") == f"rtsp://{auth}/furbo_111"
+    assert found.stream_url_for("222") == f"rtsp://{auth}/furbo_222"
+    # A camera the bridge does not serve falls back rather than inventing a name.
+    assert found.stream_url_for("999") == f"rtsp://{auth}/furbo"
+
+
+async def test_older_addon_without_a_camera_list(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An add-on that predates multiple cameras has no such endpoint.
+
+    Every camera then points at the single stream it does publish, so updating
+    the integration ahead of the add-on does not break the existing one.
+    """
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+    aioclient_mock.get(
+        ADDONS_URL, json=_addons({"slug": "abc123_furbo_bridge", "state": "started"})
+    )
+    aioclient_mock.get(
+        INFO_URL, json=_info(hostname="abc123-furbo-bridge", options={"api_token": "s"})
+    )
+    aioclient_mock.get(CAMERAS_URL, status=404)
+
+    found = await async_discover_bridge(hass)
+    assert found is not None
+    assert found.streams == {}
+    assert found.stream_url_for("111").endswith("/furbo")
+
+
+async def test_unreachable_camera_list_falls_back(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bridge that cannot be reached still yields usable URLs.
+
+    Discovery only fills in suggestions, so a stopped or slow add-on must not
+    stop the options flow from offering something sensible.
+    """
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+    aioclient_mock.get(
+        ADDONS_URL, json=_addons({"slug": "abc123_furbo_bridge", "state": "started"})
+    )
+    aioclient_mock.get(
+        INFO_URL, json=_info(hostname="abc123-furbo-bridge", options={"api_token": "s"})
+    )
+    aioclient_mock.get(CAMERAS_URL, exc=TimeoutError())
+
+    found = await async_discover_bridge(hass)
+    assert found is not None
+    assert found.streams == {}
+
+
+async def test_a_malformed_camera_list_is_ignored(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entries without a device id or stream name are dropped, not guessed at."""
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+    aioclient_mock.get(
+        ADDONS_URL, json=_addons({"slug": "abc123_furbo_bridge", "state": "started"})
+    )
+    aioclient_mock.get(
+        INFO_URL, json=_info(hostname="abc123-furbo-bridge", options={"api_token": "s"})
+    )
+    aioclient_mock.get(
+        CAMERAS_URL,
+        json={
+            "cameras": [
+                {"device_id": "1", "stream": "furbo_1"},
+                {"stream": "no device id"},
+                "junk",
+            ]
+        },
+    )
+
+    found = await async_discover_bridge(hass)
+    assert found is not None
+    assert found.streams == {"1": "furbo_1"}
+
+
+async def test_camera_list_that_is_not_a_document(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A body that is not a camera list yields no streams rather than raising."""
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+    aioclient_mock.get(
+        ADDONS_URL, json=_addons({"slug": "abc123_furbo_bridge", "state": "started"})
+    )
+    aioclient_mock.get(
+        INFO_URL, json=_info(hostname="abc123-furbo-bridge", options={"api_token": "s"})
+    )
+    aioclient_mock.get(CAMERAS_URL, json=["not", "a", "document"])
+
+    found = await async_discover_bridge(hass)
+    assert found is not None
+    assert found.streams == {}

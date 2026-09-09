@@ -506,6 +506,14 @@ async def test_options_flow_prefills_discovered_bridge(
             "data": {"hostname": "abc-furbo-bridge", "options": {"api_token": "tok"}}
         },
     )
+    # The add-on names a stream per camera, so the flow can offer the right one.
+    aioclient_mock.get(
+        "http://abc-furbo-bridge:8791/api/cameras",
+        json={
+            "primary": "cam-1",
+            "cameras": [{"device_id": "cam-1", "stream": "furbo_cam-1"}],
+        },
+    )
     await setup_integration(hass, mock_config_entry)
 
     result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)

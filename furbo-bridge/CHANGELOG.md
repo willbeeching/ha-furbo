@@ -3,6 +3,19 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.0
+
+- An account with more than one Furbo is supported. The add-on used to refuse
+  to guess between cameras and ask for a `device_id`, which left a second
+  camera unreachable; with no `device_id` it now serves them all, and setting
+  one still pins it to a single camera (or to a comma-separated few).
+- Each camera has its own session, its own controls and its own video slot, so
+  watching one does not stop another, and a camera that is slow or logged out
+  does not hold up the rest.
+- Nothing changes for an account with one camera. The stream keeps its name
+  and the API keeps its existing paths, so an existing setup carries on
+  untouched after the update.
+
 ## 1.1.0
 
 Live video is served from the single P2P session the add-on already holds,

@@ -12,7 +12,8 @@ returns ``None`` and the flow falls back to manual entry.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 import hashlib
 import logging
 import os
@@ -34,6 +35,9 @@ RTSP_PORT = 8554
 # api_token (never the token itself), so a leaked stream URL cannot drive the
 # control API. Keep this derivation in step with furbo-bridge/run.sh.
 RTSP_USERNAME = "furbo"
+# The stream a bridge publishes for its first (or only) camera. Cameras beyond
+# the first have a stream of their own, which the add-on names in /api/cameras.
+LEGACY_STREAM = "furbo"
 _RTSP_SECRET_PREFIX = "furbo-rtsp:"
 _TIMEOUT = aiohttp.ClientTimeout(total=10)
 
@@ -51,22 +55,31 @@ class DiscoveredBridge:
     slug: str
     host: str
     token: str | None
+    # Cloud device id -> go2rtc stream name, as the add-on reports it. Empty
+    # for an add-on that predates multiple cameras, or one that could not be
+    # reached; every camera then falls back to the single stream it publishes.
+    streams: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def bridge_url(self) -> str:
         """The add-on's HTTP API base URL."""
         return f"http://{self.host}:{BRIDGE_PORT}"
 
-    @property
-    def stream_url(self) -> str:
-        """The add-on's go2rtc RTSP URL, with credentials when a token is set.
+    def stream_url_for(self, device_id: str | None = None) -> str:
+        """Return one camera's go2rtc RTSP URL, with credentials when set.
 
         The add-on requires RTSP authentication for non-loopback clients, so a
         credential derived from the token (not the token itself) is carried as
         the RTSP password.
         """
         auth = f"{RTSP_USERNAME}:{rtsp_password(self.token)}@" if self.token else ""
-        return f"rtsp://{auth}{self.host}:{RTSP_PORT}/furbo"
+        name = self.streams.get(device_id or "", LEGACY_STREAM)
+        return f"rtsp://{auth}{self.host}:{RTSP_PORT}/{name}"
+
+    @property
+    def stream_url(self) -> str:
+        """The stream a bridge serving a single camera publishes."""
+        return self.stream_url_for()
 
 
 async def _get(session: aiohttp.ClientSession, path: str, token: str) -> Any:
@@ -78,6 +91,39 @@ async def _get(session: aiohttp.ClientSession, path: str, token: str) -> Any:
         if resp.status != 200:
             return None
         return await resp.json()
+
+
+async def _stream_names(
+    session: aiohttp.ClientSession, host: str, token: str | None
+) -> dict[str, str]:
+    """Ask the add-on which stream belongs to which camera.
+
+    An add-on that serves a single camera has no such endpoint, so a 404 (or
+    any other failure) simply means every camera falls back to the one stream
+    it does publish.
+    """
+    if not token:
+        return {}
+    try:
+        async with session.get(
+            f"http://{host}:{BRIDGE_PORT}/api/cameras",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=_TIMEOUT,
+        ) as resp:
+            if resp.status != 200:
+                return {}
+            body = await resp.json()
+    except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+        _LOGGER.debug("Furbo Bridge camera list unavailable: %s", err)
+        return {}
+    cameras = body.get("cameras") if isinstance(body, dict) else None
+    if not isinstance(cameras, list):
+        return {}
+    return {
+        str(c["device_id"]): str(c["stream"])
+        for c in cameras
+        if isinstance(c, dict) and c.get("device_id") and c.get("stream")
+    }
 
 
 async def async_discover_bridge(hass: HomeAssistant) -> DiscoveredBridge | None:
@@ -118,7 +164,10 @@ async def async_discover_bridge(hass: HomeAssistant) -> DiscoveredBridge | None:
         if isinstance(options, dict):
             value = options.get("api_token")
             api_token = value if isinstance(value, str) and value else None
-        return DiscoveredBridge(slug=slug, host=str(host), token=api_token)
+        streams = await _stream_names(session, str(host), api_token)
+        return DiscoveredBridge(
+            slug=slug, host=str(host), token=api_token, streams=streams
+        )
     except (aiohttp.ClientError, TimeoutError, ValueError, KeyError) as err:
         _LOGGER.debug("Furbo Bridge add-on discovery failed: %s", err)
         return None

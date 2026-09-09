@@ -109,6 +109,13 @@ camera (volume, night mode, alert settings) stays as you set it.
 Developed and verified on a **Furbo 360 (`FB0030`)**. Other Furbo models on the
 same account API are expected to work but are unverified.
 
+**More than one camera** on the account works: the integration creates a device
+and entities for each, and one Furbo Bridge add-on serves them all, holding a
+separate session per camera. Leave the add-on's `device_id` blank for every
+camera, or set it (a single id, or several separated by commas) to serve only
+some. Multi-camera support has been built and tested against the add-on's own
+test suite, but not yet against two physical cameras, so reports are welcome.
+
 ## Support
 
 This was reverse-engineered and vibe-coded over many late nights, and the AI tokens don't pay for
