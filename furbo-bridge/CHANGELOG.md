@@ -3,84 +3,53 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
-## 1.2.0-beta.6
+## 1.2.0
 
-- A login the cloud refuses no longer escapes as a server error with a
-  traceback. A camera reconnecting handled only the "needs an emailed code"
-  case, so every other refusal went unhandled: the log filled with
-  tracebacks, `GET /api/status` never said `needs_login`, and the add-on
-  asked the cloud again on every single video request. A burst of refused
-  logins is what gets an account locked out.
-- Those now stop the add-on asking until someone fixes it, and say what to
-  fix: check the email and password, then set a fresh `mfa_code` with
-  `reset_session` on. A cloud that simply could not be reached is still
-  retried as before.
+**Several cameras on one account.** The add-on used to refuse to guess between
+cameras and ask for a `device_id`, which left a second camera unreachable.
+With `device_id` blank it now serves every camera on the account, each with
+its own session, controls and video slot, so watching one does not stop
+another and a camera that is slow or logged out does not hold up the rest.
+Set `device_id` to pin it to one camera, or to a comma-separated few.
+`GET /api/cameras` lists what is served. Every operation also exists at
+`/api/cameras/<device_id>/...`, and each camera's video is published as
+`furbo_<device_id>`.
 
-## 1.2.0-beta.5
+Nothing changes for an account with one camera: the stream keeps its name,
+the API keeps its existing paths, and an existing setup carries on untouched.
 
-- A cloud outage while renewing the token is reported as an outage. It used
-  to escape as a server error, which the integration read as a definite
-  refusal and answered by asking someone to sign in, for something that would
-  have worked a minute later.
-- A renewal that genuinely needs a person (an emailed code, or an email and
-  password the cloud refuses) says so distinctly, so it is acted on at once
-  rather than waited out.
+**No more daily sign-in prompt.** Furbo's login hands out a token that lasts
+about a day with nothing to renew it from, so the integration had to ask you
+for an emailed code roughly every day. The add-on keeps the account password
+and can log in unattended, so it now serves the account's current token on
+`GET /api/cloud-token`, checking it with the cloud first and logging in again
+if it has died. The integration takes that instead of prompting you. It
+refuses a token for a different Furbo account, so a bridge signed in
+elsewhere cannot quietly repoint it. Needs the matching integration update.
 
-## 1.2.0-beta.4
+**Logins cannot run away with themselves.** Only one runs at a time, a caller
+that finds another has already refreshed the token uses that session, and one
+waiting behind another gives up after about a minute rather than being held
+forever. A login the cloud refuses stops the add-on asking until someone
+fixes it and says what to fix, instead of being retried on every video
+request: a burst of refused logins is what gets an account locked out. A
+cloud that could not be reached is still retried.
 
-- A login waiting behind another one gives up after about a minute and says
-  to try again, rather than holding the caller indefinitely. The HTTP API
-  waits on the same lock as the cameras, and a request held there never
-  answers, which the integration read as a failed recovery.
+**Talkback is off in this version.** It opened a second P2P session to the
+camera while the microphone was open, and because the camera reissues its P2P
+credential on every fetch, that session and the bridge's own could invalidate
+each other and take video and controls with them. It returns once it runs
+over the shared session and that has been tested against real hardware.
+Removing it takes away the one competing session we know about, not every way
+a session can be invalidated.
 
-## 1.2.0-beta.3
-
-- The token handed to the integration is checked with the cloud first, and
-  renewed if it has died. The add-on only used to log in again when a camera
-  reconnected, so a camera that stayed connected for days could leave a dead
-  token in the session file and hand that over.
-- Only one login runs at a time. Each camera reconnects in a thread of its
-  own and the HTTP API in the event loop, so a dead token is noticed in
-  several places at once, and a burst of logins is what the cloud's rate
-  limiter answers with a lockout. A caller that finds someone else has
-  already logged in uses that session instead of logging in again.
-
-## 1.2.0-beta.3
-
-- The add-on hands its cloud token to the integration. Furbo's login gives out
-  a short-lived token and nothing to renew it with, so the integration was
-  asking you to sign in again about once a day. The add-on keeps the account
-  password and logs in again by itself, and now serves the token it holds on
-  `GET /api/cloud-token`, so the integration takes a current one instead of
-  putting up a reauth prompt. Needs the matching integration update.
-
-## 1.2.0-beta.1
-
-- An account with more than one Furbo is supported. The add-on used to refuse
-  to guess between cameras and ask for a `device_id`, which left a second
-  camera unreachable; with no `device_id` it now serves them all, and setting
-  one still pins it to a single camera (or to a comma-separated few).
-- Each camera has its own session, its own controls and its own video slot, so
-  watching one does not stop another, and a camera that is slow or logged out
-  does not hold up the rest.
-- Nothing changes for an account with one camera. The stream keeps its name
-  and the API keeps its existing paths, so an existing setup carries on
-  untouched after the update.
-- The camera SDK is started and stopped once for the whole add-on rather than
-  once per camera. It is global to the process, so a second camera used to
-  fail to start it, and whichever camera reconnected first shut it down for
-  the others.
-- Talkback is not wired up in this version. It opened a second P2P session to
-  the camera while the microphone was open, and because the camera reissues
-  its P2P credential on every fetch, that session and the bridge's own could
-  invalidate each other and take video and controls with them. It returns once
-  it runs over the shared session and that has been tested on real hardware.
-  This removes the one competing session we know about, not every way a
-  session can be invalidated.
-- A video stream now always ends. When a viewer fell too far behind, the
-  reader's end-of-stream signal could be discarded, leaving the request
-  waiting for a frame that would never arrive and holding that camera's video
-  slot open.
+**Also fixed.** The camera SDK is started and stopped once for the whole
+add-on rather than once per camera: it is global to the process, so a second
+camera used to fail to start it, and whichever camera reconnected first shut
+it down for the others. A video stream now always ends — when a viewer fell
+too far behind, the reader's end-of-stream signal could be discarded, leaving
+the request waiting for a frame that would never arrive and holding that
+camera's video slot open.
 
 ## 1.1.0
 
