@@ -15,6 +15,14 @@ that ships to users gets an entry here.
 - Nothing changes for an account with one camera. The stream keeps its name
   and the API keeps its existing paths, so an existing setup carries on
   untouched after the update.
+- The camera SDK is started and stopped once for the whole add-on rather than
+  once per camera. It is global to the process, so a second camera used to
+  fail to start it, and whichever camera reconnected first shut it down for
+  the others.
+- A video stream now always ends. When a viewer fell too far behind, the
+  reader's end-of-stream signal could be discarded, leaving the request
+  waiting for a frame that would never arrive and holding that camera's video
+  slot open.
 
 ## 1.1.0
 

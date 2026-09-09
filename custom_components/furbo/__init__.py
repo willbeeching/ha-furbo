@@ -178,6 +178,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
                 async_get_clientsession(hass),
                 bridge_conf[CONF_BRIDGE_URL],
                 bridge_conf.get(CONF_BRIDGE_TOKEN),
+                device_id=device_id,
             )
             bridge = FurboBridgeCoordinator(
                 hass, entry, device_id, bridge_client, coordinator
@@ -187,7 +188,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
 
         stream = configured_streams.get(device_id)
         if not stream and auto_bind is not None:
-            stream = auto_bind.stream_url
+            # One bridge serves several cameras, each on its own stream.
+            stream = auto_bind.stream_url_for(device_id)
         if stream:
             stream_urls[device_id] = stream
 

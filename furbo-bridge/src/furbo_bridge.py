@@ -826,31 +826,21 @@ def create_app(
         await response.prepare(request)
 
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=STREAM_QUEUE_MAX)
-        dropped = 0
-
-        def offer(frame: bytes | None) -> None:
-            # Runs on the event loop thread, so touching `dropped` is safe and
-            # a full queue is handled here rather than raising into the loop.
-            nonlocal dropped
-            if frame is not None and queue.full():
-                dropped += 1
-                return
-            queue.put_nowait(frame)
+        frames = FrameQueue()
 
         def pump() -> None:
             # Runs on its own thread so the single control executor stays free.
             try:
                 for frame in worker.iter_frames():
-                    loop.call_soon_threadsafe(offer, frame)
+                    loop.call_soon_threadsafe(frames.offer, frame)
             finally:
-                loop.call_soon_threadsafe(offer, None)
+                loop.call_soon_threadsafe(frames.offer, None)
 
         reader = threading.Thread(target=pump, name=f"furbo-video-{worker.key}", daemon=True)
         reader.start()
         try:
             while True:
-                frame = await queue.get()
+                frame = await frames.get()
                 if frame is None:
                     break
                 await response.write(frame)
@@ -859,8 +849,8 @@ def create_app(
         finally:
             await run(worker, worker.close_stream)
             reader.join(timeout=5)
-            if dropped:
-                _LOGGER.warning("dropped %d frames: the viewer could not keep up", dropped)
+            if frames.dropped:
+                _LOGGER.warning("dropped %d frames: the viewer could not keep up", frames.dropped)
         return response
 
     app = web.Application(middlewares=[auth_and_errors])
@@ -879,6 +869,37 @@ def create_app(
         routes.append(method(f"/api/cameras/{{device_id}}/{path}", handler))
     app.add_routes(routes)
     return app
+
+
+class FrameQueue:
+    """Frames on their way from the reader thread to one viewer's response.
+
+    Bounded, and drops frames when the viewer cannot keep up. The end-of-stream
+    marker is never dropped: losing it leaves the response waiting for a frame
+    that will never come, holding the camera's single video slot until the
+    viewer disconnects. A viewer too slow to keep up is exactly when the reader
+    gives up, so the full queue is the case that has to deliver it.
+    """
+
+    def __init__(self, maxsize: int = STREAM_QUEUE_MAX) -> None:
+        self._queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=maxsize)
+        self.dropped = 0
+
+    def offer(self, frame: bytes | None) -> None:
+        """Add a frame, or the end-of-stream marker. Never raises."""
+        if frame is None:
+            while self._queue.full():
+                self._queue.get_nowait()
+                self.dropped += 1
+            self._queue.put_nowait(None)
+            return
+        if self._queue.full():
+            self.dropped += 1
+            return
+        self._queue.put_nowait(frame)
+
+    async def get(self) -> bytes | None:
+        return await self._queue.get()
 
 
 def stream_name(device_id: str) -> str:
@@ -987,6 +1008,9 @@ async def serve(args: argparse.Namespace) -> None:
         )
         for executor in executors.values():
             executor.shutdown(wait=False)
+        # Every session is closed; the SDK itself is process-wide, so it comes
+        # down here rather than when any one camera closes.
+        fp.deinitialize_sdk()
 
 
 def add_arguments(sp: argparse.ArgumentParser) -> None:

@@ -198,3 +198,83 @@ async def test_non_json_200(
     with pytest.raises(FurboBridgeError) as err:
         await _client(hass).async_get_status()
     assert BODY_MARKER not in str(err.value)
+
+
+# --- one bridge, several cameras ---------------------------------------------
+
+CAMERAS = {
+    "primary": "cam-a",
+    "cameras": [
+        {"device_id": "cam-a", "stream": "furbo_cam-a"},
+        {"device_id": "cam-b", "stream": "furbo_cam-b"},
+    ],
+}
+
+
+async def test_requests_name_the_camera(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Each camera's controls reach that camera, not the bridge's first one.
+
+    Without this every camera talked to the unscoped paths, so a second camera
+    received the primary's state and its own identity check rejected it.
+    """
+    aioclient_mock.get(f"{BASE}/api/cameras", json=CAMERAS)
+    aioclient_mock.get(f"{BASE}/api/cameras/cam-b/status", json=FULL_STATUS)
+    aioclient_mock.post(f"{BASE}/api/cameras/cam-b/toss", json={"ok": True})
+    client = FurboBridgeClient(
+        async_get_clientsession(hass), BASE + "/", "tok", device_id="cam-b"
+    )
+    assert (await client.async_get_status()).volume == 40
+    await client.async_toss()
+    paths = [str(call[1].path) for call in aioclient_mock.mock_calls]
+    assert "/api/cameras/cam-b/status" in paths
+    assert "/api/cameras/cam-b/toss" in paths
+    assert "/api/status" not in paths
+
+
+async def test_the_camera_list_is_only_asked_for_once(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Whether the bridge knows about cameras is settled once, not per call."""
+    aioclient_mock.get(f"{BASE}/api/cameras", json=CAMERAS)
+    aioclient_mock.get(f"{BASE}/api/cameras/cam-a/status", json=FULL_STATUS)
+    client = FurboBridgeClient(
+        async_get_clientsession(hass), BASE + "/", "tok", device_id="cam-a"
+    )
+    await client.async_get_status()
+    await client.async_get_status()
+    lists = [c for c in aioclient_mock.mock_calls if str(c[1].path) == "/api/cameras"]
+    assert len(lists) == 1
+
+
+async def test_an_older_bridge_uses_the_unscoped_paths(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A bridge serving one camera has no per-camera paths.
+
+    The integration can be updated ahead of the add-on, so it must fall back
+    rather than 404 against the bridge someone is already running.
+    """
+    aioclient_mock.get(f"{BASE}/api/cameras", status=404)
+    aioclient_mock.get(f"{BASE}/api/status", json=FULL_STATUS)
+    aioclient_mock.post(f"{BASE}/api/toss", json={"ok": True})
+    client = FurboBridgeClient(
+        async_get_clientsession(hass), BASE + "/", "tok", device_id="cam-a"
+    )
+    assert (await client.async_get_status()).volume == 40
+    await client.async_toss()
+    paths = [str(call[1].path) for call in aioclient_mock.mock_calls]
+    assert "/api/status" in paths
+    assert "/api/toss" in paths
+
+
+async def test_a_client_without_a_camera_stays_unscoped(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """With no camera named, nothing is probed and the plain paths are used."""
+    aioclient_mock.get(f"{BASE}/api/status", json=FULL_STATUS)
+    client = FurboBridgeClient(async_get_clientsession(hass), BASE + "/", "tok")
+    await client.async_get_status()
+    paths = [str(call[1].path) for call in aioclient_mock.mock_calls]
+    assert paths == ["/api/status"]

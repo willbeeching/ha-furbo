@@ -362,3 +362,122 @@ def test_session_devices_lists_the_account_cameras(
         {"device_id": "1", "name": "Hallway", "product": "FB0030"},
         {"device_id": "2", "name": "Kitchen", "product": ""},
     ]
+
+
+# --- the SDK is process-wide, not per session --------------------------------
+
+
+class FakeSDK:
+    """A stand-in TUTK library with the vendor's global-state behaviour.
+
+    Initialising twice fails, and deinitialising affects every session, which
+    is exactly what breaks when each camera owns the library.
+    """
+
+    def __init__(self) -> None:
+        self.initialized = False
+        self.calls: list[str] = []
+
+    def IOTC_Get_Version_String(self) -> bytes:
+        return b"4.2.1"
+
+    def TUTK_SDK_Set_License_Key(self, _key: Any) -> int:
+        return 0
+
+    def IOTC_Initialize2(self, _port: Any) -> int:
+        self.calls.append("IOTC_Initialize2")
+        if self.initialized:
+            return -3  # IOTC_ER_ALREADY_INITIALIZED
+        self.initialized = True
+        return 0
+
+    def avInitialize(self, _n: Any) -> int:
+        self.calls.append("avInitialize")
+        return 0
+
+    def avDeInitialize(self) -> int:
+        self.calls.append("avDeInitialize")
+        self.initialized = False
+        return 0
+
+    def IOTC_DeInitialize(self) -> int:
+        self.calls.append("IOTC_DeInitialize")
+        return 0
+
+    def avSendIOCtrlExit(self, _c: Any) -> int:
+        return 0
+
+    def avClientStop(self, _c: Any) -> int:
+        return 0
+
+    def IOTC_Connect_Stop_BySID(self, _s: Any) -> int:
+        return 0
+
+    def IOTC_Session_Close(self, _s: Any) -> int:
+        return 0
+
+
+def _session(lib: FakeSDK) -> fp.FurboP2P:
+    """A FurboP2P bound to a fake library, with no real .so loaded."""
+    obj = fp.FurboP2P.__new__(fp.FurboP2P)
+    obj.lib = lib
+    obj.region = None
+    obj.log_path = None
+    obj.tcp_relay = False
+    obj.session_id = 1
+    obj.av_chan = 1
+    obj.talk_av = -1
+    obj.talk_channel = -1
+    obj.state = {}
+    return obj
+
+
+@pytest.fixture(autouse=False)
+def _fresh_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fp, "_sdk_ready", False)
+    monkeypatch.setattr(fp, "_sdk_lib", None)
+
+
+def test_a_second_camera_does_not_initialise_the_sdk_again(
+    _fresh_sdk: None,
+) -> None:
+    """Two cameras share one process, and the SDK is global to it.
+
+    Initialising per session made the second camera fail outright with the
+    library's "already initialized" error.
+    """
+    lib = FakeSDK()
+    first, second = _session(lib), _session(lib)
+    first.initialize()
+    second.initialize()  # must not raise
+    assert lib.calls.count("IOTC_Initialize2") == 1
+    assert lib.calls.count("avInitialize") == 1
+
+
+def test_closing_one_camera_leaves_the_sdk_up_for_the_others(
+    _fresh_sdk: None,
+) -> None:
+    """One camera reconnecting must not tear down another camera's SDK."""
+    lib = FakeSDK()
+    first, second = _session(lib), _session(lib)
+    first.initialize()
+    second.initialize()
+    first.close()
+    assert "avDeInitialize" not in lib.calls
+    assert "IOTC_DeInitialize" not in lib.calls
+    assert lib.initialized is True
+    # The reconnecting camera can start a session again without reinitialising.
+    first.initialize()
+    assert lib.calls.count("IOTC_Initialize2") == 1
+
+
+def test_the_sdk_comes_down_once_at_shutdown(_fresh_sdk: None) -> None:
+    """Deinitialising is the process's job, and only needs doing once."""
+    lib = FakeSDK()
+    session = _session(lib)
+    session.initialize()
+    fp.deinitialize_sdk()
+    assert lib.calls.count("avDeInitialize") == 1
+    assert lib.calls.count("IOTC_DeInitialize") == 1
+    fp.deinitialize_sdk()  # idempotent
+    assert lib.calls.count("IOTC_DeInitialize") == 1

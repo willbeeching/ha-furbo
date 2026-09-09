@@ -124,16 +124,58 @@ class FurboBridgeClient:
         token: str | None = None,
         *,
         timeout: int = DEFAULT_TIMEOUT,
+        device_id: str | None = None,
     ) -> None:
-        """Bind to a session, the bridge's base URL and an optional token."""
+        """Bind to a session, the bridge's base URL, a token and one camera.
+
+        One bridge can serve several cameras, so requests name the camera they
+        are about. A bridge that predates that has no such paths, which is
+        settled once on the first request rather than guessed at per call.
+        """
         self._session = session
         self._url = url.rstrip("/")
         self._headers = {"Authorization": f"Bearer {token}"} if token else {}
         self._timeout = aiohttp.ClientTimeout(total=timeout)
+        self._device_id = device_id
+        # None until the first request settles whether this bridge knows about
+        # cameras individually.
+        self._scoped: bool | None = None
 
-    async def _request(
+    async def _knows_cameras(self) -> bool:
+        """Whether this bridge serves per-camera paths, asked once."""
+        if self._scoped is None:
+            try:
+                await self._request("GET", "/api/cameras", None, scoped=False)
+            except FurboBridgeError as err:
+                # A bridge serving a single camera has no such endpoint. Any
+                # other failure is left to the real request to report.
+                self._scoped = err.status not in (404, 405)
+            else:
+                self._scoped = True
+        return self._scoped
+
+    async def _camera_request(
         self, method: str, path: str, body: dict[str, Any] | None
     ) -> Any:
+        """Make a request about this client's camera."""
+        if self._device_id and await self._knows_cameras():
+            # /api/status becomes /api/cameras/<id>/status.
+            suffix = path.removeprefix("/api")
+            return await self._request(
+                method, f"/api/cameras/{self._device_id}{suffix}", body, scoped=False
+            )
+        return await self._request(method, path, body, scoped=False)
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None,
+        *,
+        scoped: bool = True,
+    ) -> Any:
+        if scoped:
+            return await self._camera_request(method, path, body)
         try:
             async with self._session.request(
                 method,

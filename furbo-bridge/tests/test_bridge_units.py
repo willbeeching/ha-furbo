@@ -155,3 +155,38 @@ def test_go2rtc_config_needs_a_camera() -> None:
     """Writing a config with no cameras would leave go2rtc serving nothing."""
     with pytest.raises(SystemExit):
         fb.render_go2rtc_config(TEMPLATE, [])
+
+
+# --- the frame queue ---------------------------------------------------------
+
+
+def test_end_of_stream_survives_a_full_queue() -> None:
+    """The marker must land even when the viewer has fallen behind.
+
+    Dropping it left the response waiting for a frame that would never come,
+    holding the camera's single video slot until the viewer disconnected. A
+    viewer too slow to keep up is exactly when the reader gives up, so a full
+    queue is the case that has to deliver it.
+    """
+    frames = fb.FrameQueue(maxsize=2)
+    frames.offer(b"a")
+    frames.offer(b"b")
+    frames.offer(b"c")  # no room: dropped
+    frames.offer(None)  # must arrive anyway
+    drained = []
+    while True:
+        item = frames._queue.get_nowait()
+        drained.append(item)
+        if item is None:
+            break
+    assert drained[-1] is None
+    assert frames.dropped >= 1
+
+
+def test_frames_are_dropped_rather_than_queued_without_limit() -> None:
+    """A viewer that cannot keep up loses frames, it does not grow the queue."""
+    frames = fb.FrameQueue(maxsize=2)
+    for _ in range(10):
+        frames.offer(b"x")
+    assert frames.dropped == 8
+    assert frames._queue.qsize() == 2

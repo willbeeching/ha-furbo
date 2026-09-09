@@ -59,7 +59,9 @@ from pathlib import Path
 import random
 import struct
 import sys
+import threading
 import time
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from furbo_cloud import FurboClient, FurboError, encrypt_password, new_mobile_id
@@ -389,6 +391,29 @@ class FrameInfo(Structure):
     ]
 
 
+# The TUTK library is initialised once per process, not once per session: a
+# bridge serving several cameras holds a session each, and the initialise and
+# deinitialise calls are global to the library.
+_SDK_LOCK = threading.Lock()
+_sdk_ready = False
+# The library the process initialised, kept so it can be shut down without a
+# session to reach it through.
+_sdk_lib: Any = None
+
+
+def deinitialize_sdk() -> None:
+    """Shut the SDK down. For process exit, after every session is closed."""
+    global _sdk_ready, _sdk_lib
+    with _SDK_LOCK:
+        if not _sdk_ready or _sdk_lib is None:
+            return
+        _sdk_lib.avDeInitialize()
+        _sdk_lib.IOTC_DeInitialize()
+        _sdk_ready = False
+        _sdk_lib = None
+        log("SDK shut down")
+
+
 # --- cloud side -------------------------------------------------------------
 
 
@@ -700,27 +725,41 @@ class FurboP2P:
         self.state: dict = {}
 
     def initialize(self) -> None:
-        lib = self.lib
-        log("TUTK", lib.IOTC_Get_Version_String().decode())
-        ret = lib.TUTK_SDK_Set_License_Key(c_char_p(FURBO_LICENSE_KEY))
-        if ret < 0:
-            raise SystemExit(f"license key rejected: {err(ret)}")
-        if self.region:
-            ret = lib.TUTK_SDK_Set_Region_Code(c_char_p(self.region.encode()))
+        """Bring the SDK up, once for the whole process.
+
+        IOTC_Initialize2, avInitialize and their deinitialisers are
+        process-wide, not per session. A bridge serving several cameras holds
+        several sessions in one process, so initialising per session fails on
+        the second camera, and deinitialising when one session closes would
+        take the SDK out from under every other camera.
+        """
+        global _sdk_ready, _sdk_lib
+        with _SDK_LOCK:
+            if _sdk_ready:
+                return
+            lib = self.lib
+            log("TUTK", lib.IOTC_Get_Version_String().decode())
+            ret = lib.TUTK_SDK_Set_License_Key(c_char_p(FURBO_LICENSE_KEY))
             if ret < 0:
-                raise SystemExit(f"region {self.region!r} rejected: {err(ret)}")
-        if self.log_path:
-            lib.IOTC_Set_Log_Path(c_char_p(self.log_path.encode()), c_int(0))
-        if self.tcp_relay:
-            log("TCP relay only:", lib.IOTC_TCPRelayOnly_TurnOn())
-        port = random.randint(10000, 19999)  # the app picks 10000 + now % 10000
-        ret = lib.IOTC_Initialize2(c_uint16(port))
-        if ret < 0:
-            raise SystemExit(f"IOTC_Initialize2 failed: {err(ret)}")
-        ret = lib.avInitialize(c_int(10))
-        if ret < 0:
-            raise SystemExit(f"avInitialize failed: {err(ret)}")
-        log(f"SDK initialised on udp/{port}")
+                raise SystemExit(f"license key rejected: {err(ret)}")
+            if self.region:
+                ret = lib.TUTK_SDK_Set_Region_Code(c_char_p(self.region.encode()))
+                if ret < 0:
+                    raise SystemExit(f"region {self.region!r} rejected: {err(ret)}")
+            if self.log_path:
+                lib.IOTC_Set_Log_Path(c_char_p(self.log_path.encode()), c_int(0))
+            if self.tcp_relay:
+                log("TCP relay only:", lib.IOTC_TCPRelayOnly_TurnOn())
+            port = random.randint(10000, 19999)  # the app picks 10000 + now % 10000
+            ret = lib.IOTC_Initialize2(c_uint16(port))
+            if ret < 0:
+                raise SystemExit(f"IOTC_Initialize2 failed: {err(ret)}")
+            ret = lib.avInitialize(c_int(10))
+            if ret < 0:
+                raise SystemExit(f"avInitialize failed: {err(ret)}")
+            _sdk_ready = True
+            _sdk_lib = lib
+            log(f"SDK initialised on udp/{port}")
 
     def connect(self, creds: dict, timeout: int) -> None:
         lib = self.lib
@@ -1162,17 +1201,23 @@ class FurboP2P:
         self.talk_channel = -1
 
     def close(self) -> None:
+        """Close this session only.
+
+        Deliberately does not deinitialise the SDK: that is process-wide, and
+        another camera in this process is very likely still using it. See
+        deinitialize_sdk, which the process calls once on the way out.
+        """
         lib = self.lib
         if getattr(self, "talk_av", -1) >= 0 or getattr(self, "talk_channel", -1) >= 0:
             self.stop_talk()
         if self.av_chan >= 0:
             lib.avSendIOCtrlExit(c_int(self.av_chan))
             lib.avClientStop(c_int(self.av_chan))
+            self.av_chan = -1
         if self.session_id >= 0:
             lib.IOTC_Connect_Stop_BySID(c_int(self.session_id))
             lib.IOTC_Session_Close(c_int(self.session_id))
-        lib.avDeInitialize()
-        lib.IOTC_DeInitialize()
+            self.session_id = -1
         log("closed")
 
 
