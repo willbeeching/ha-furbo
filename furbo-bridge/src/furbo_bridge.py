@@ -882,12 +882,49 @@ def create_app(
 
 
 def stream_name(device_id: str) -> str:
-    """The go2rtc stream for one camera.
-
-    The primary keeps the plain name a single-camera bridge has always used, so
-    an existing stream URL in someone's options still resolves.
-    """
+    """The go2rtc stream for one camera."""
     return f"furbo_{device_id}"
+
+
+# The primary camera also answers on the plain name a single-camera bridge has
+# always published, so a stream URL already saved in someone's options keeps
+# working after they gain a second camera.
+LEGACY_STREAM = "furbo"
+
+
+def render_go2rtc_config(template: str, device_ids: list[str]) -> str:
+    """The go2rtc config for these cameras, built from the shipped template.
+
+    The template holds everything that does not depend on which cameras exist
+    (listeners, credentials, logging) and a `streams:` line to append to. Each
+    camera gets a video stream and a talkback stream of its own, both told
+    which camera they are for.
+    """
+    if not device_ids:
+        raise SystemExit("no cameras to write a go2rtc config for")
+    lines = [template.rstrip("\n"), ""]
+    for index, device_id in enumerate(device_ids):
+        names = [stream_name(device_id)]
+        if index == 0:
+            names.append(LEGACY_STREAM)
+        for name in names:
+            lines.append(f"  {name}:")
+            lines.append(
+                f'    - "exec:/app/stream.sh {{output}} {device_id}#killsignal=15#killtimeout=8"'
+            )
+            lines.append(
+                f'    - "exec:/app/talk.sh {device_id}#backchannel=1#killsignal=15#killtimeout=5"'
+            )
+    return "\n".join(lines) + "\n"
+
+
+def write_go2rtc_config(args: argparse.Namespace) -> int:
+    """Write the go2rtc config for the cameras this bridge will serve."""
+    device_ids = [w.device_id or "default" for w in build_workers(args)]
+    template = Path(args.template).read_text()
+    Path(args.output).write_text(render_go2rtc_config(template, device_ids))
+    _LOGGER.info("wrote %s for %d camera(s)", args.output, len(device_ids))
+    return 0
 
 
 async def _refresh_loop(worker: P2PWorker, executor: ThreadPoolExecutor, interval: float) -> None:

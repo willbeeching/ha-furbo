@@ -99,8 +99,13 @@ fi
 # --- run go2rtc (video) and the HTTP bridge (state + control) -----------------
 # go2rtc's own API is bound to loopback (see go2rtc.yaml); only RTSP/WebRTC and
 # the token-protected HTTP API below are reachable off the host.
+# One video stream per camera on the account, so the config depends on what
+# the login found and cannot be shipped static in the image.
+echo "[furbo] writing the go2rtc config for this account's cameras" >&2
+"$PY" /app/furbo_p2p.py go2rtc-config --output "$DATA/go2rtc.yaml"
+
 echo "[furbo] starting go2rtc (RTSP :8554, WebRTC :8555, API on loopback)" >&2
-"$GO2RTC" -config /app/go2rtc.yaml &
+"$GO2RTC" -config "$DATA/go2rtc.yaml" &
 GO2RTC_PID=$!
 
 echo "[furbo] starting HTTP API on :8791 (bearer auth required)" >&2

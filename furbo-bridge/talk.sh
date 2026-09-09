@@ -11,4 +11,4 @@
 # process group when it stops.
 exec ffmpeg -hide_banner -loglevel error -f alaw -ar 8000 -ac 1 -i - \
     -ar 16000 -ac 1 -f mulaw - \
-  | python3 /app/furbo_p2p.py talk --frame 320
+  | python3 /app/furbo_p2p.py talk --frame 320 ${1:+--device "$1"}

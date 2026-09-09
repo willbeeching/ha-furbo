@@ -1500,6 +1500,12 @@ def main() -> int:
     import furbo_bridge
 
     furbo_bridge.add_arguments(sv)
+    gc = sub.add_parser(
+        "go2rtc-config", help="write the go2rtc config for the cameras this bridge serves"
+    )
+    gc.add_argument("--device", default=os.environ.get("FURBO_DEVICE") or None)
+    gc.add_argument("--template", default="/app/go2rtc.yaml")
+    gc.add_argument("--output", default="/data/go2rtc.yaml")
     args = p.parse_args()
 
     if args.cmd == "login":
@@ -1514,6 +1520,10 @@ def main() -> int:
         return cmd_p2p_set(args)
     if args.cmd == "talk":
         return cmd_talk(args)
+    if args.cmd == "go2rtc-config":
+        import furbo_bridge
+
+        return furbo_bridge.write_go2rtc_config(args)
     if args.cmd == "serve":
         try:
             asyncio.run(furbo_bridge.serve(args))

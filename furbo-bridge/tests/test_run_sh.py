@@ -152,3 +152,17 @@ def test_rtsp_password_matches_integration_derivation(tmp_path: Path) -> None:
     )
     expected = hashlib.sha256(b"furbo-rtsp:tok").hexdigest()[:32]
     assert shell.stdout.strip() == expected
+
+
+def test_go2rtc_config_is_written_before_go2rtc_starts(tmp_path: Path) -> None:
+    """The streams depend on which cameras the account has, so they cannot be
+    shipped static in the image: run.sh generates the config each start."""
+    result, data, py_log, _sess = _run(
+        tmp_path, {**BASE, "email": "e", "password": "p"}, session=True
+    )
+    assert result.returncode == 0, result.stderr
+    log = py_log.read_text()
+    assert "go2rtc-config" in log
+    # And before the bridge itself, so go2rtc never reads a stale config.
+    assert log.index("go2rtc-config") < log.index("serve")
+    assert f"--output {data}/go2rtc.yaml" in log

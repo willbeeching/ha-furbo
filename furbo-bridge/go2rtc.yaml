@@ -4,13 +4,6 @@
 # is watching and stops it when idle. /app/stream.sh does not open its own P2P
 # session — it reads H.264 from the bridge's single session over
 # GET /api/stream, so the camera only ever has one session and one credential.
-streams:
-  furbo:
-    - "exec:/app/stream.sh {output}#killsignal=15#killtimeout=8"
-    # Talkback: go2rtc pipes the client microphone here (negotiated as PCMA,
-    # G.711 A-law 8 kHz) and talk.sh forwards it to the camera speaker. This is
-    # one-way; the camera's own audio is not carried in the stream above.
-    - "exec:/app/talk.sh#backchannel=1#killsignal=15#killtimeout=5"
 
 # The go2rtc API (config, stream list, snapshots) is for the bridge's own use;
 # it needs no network exposure, so bind it to loopback. RTSP/WebRTC below stay
@@ -34,3 +27,13 @@ webrtc:
 
 log:
   level: ${GO2RTC_LOG}
+
+# The streams below are generated at startup, one pair per camera on the
+# account, by `furbo_p2p.py go2rtc-config`. Each camera gets a video stream
+# named furbo_<device_id>, and the first also answers on the plain name
+# `furbo` that a single-camera bridge has always published.
+#
+# Talkback: go2rtc pipes the client microphone into talk.sh (negotiated as
+# PCMA, G.711 A-law 8 kHz) which forwards it to that camera's speaker. It is
+# one-way; the camera's own audio is not carried in the video stream.
+streams:
