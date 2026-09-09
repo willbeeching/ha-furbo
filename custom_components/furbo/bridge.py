@@ -141,30 +141,44 @@ class FurboBridgeClient:
         # cameras individually.
         self._scoped: bool | None = None
 
-    async def _knows_cameras(self) -> bool:
-        """Whether this bridge serves per-camera paths, asked once."""
-        if self._scoped is None:
-            try:
-                await self._request("GET", "/api/cameras", None, scoped=False)
-            except FurboBridgeError as err:
-                # A bridge serving a single camera has no such endpoint. Any
-                # other failure is left to the real request to report.
-                self._scoped = err.status not in (404, 405)
-            else:
-                self._scoped = True
-        return self._scoped
+    async def _knows_cameras(self) -> bool | None:
+        """Whether this bridge serves per-camera paths; None while unknown.
+
+        Only a definite answer is remembered. A bridge that is down or erroring
+        when first asked says nothing about its age, and caching a guess there
+        would leave the client talking to the wrong paths for the life of the
+        config entry.
+        """
+        if self._scoped is not None:
+            return self._scoped
+        try:
+            await self._request("GET", "/api/cameras", None, scoped=False)
+        except FurboBridgeError as err:
+            if err.status in (404, 405):
+                # Definite: a bridge that serves a single camera.
+                self._scoped = False
+                return False
+            return None
+        self._scoped = True
+        return True
 
     async def _camera_request(
         self, method: str, path: str, body: dict[str, Any] | None
     ) -> Any:
         """Make a request about this client's camera."""
-        if self._device_id and await self._knows_cameras():
-            # /api/status becomes /api/cameras/<id>/status.
-            suffix = path.removeprefix("/api")
-            return await self._request(
-                method, f"/api/cameras/{self._device_id}{suffix}", body, scoped=False
-            )
-        return await self._request(method, path, body, scoped=False)
+        if not self._device_id:
+            return await self._request(method, path, body, scoped=False)
+        if await self._knows_cameras() is False:
+            return await self._request(method, path, body, scoped=False)
+        # Known to serve cameras, or not yet known because the bridge could not
+        # be reached. Naming the camera is right in the first case and safe in
+        # the second: an older bridge answers 404, where the unscoped path
+        # would quietly act on whichever camera it serves first. Tossing a
+        # treat from the wrong camera is worse than an error.
+        suffix = path.removeprefix("/api")
+        return await self._request(
+            method, f"/api/cameras/{self._device_id}{suffix}", body, scoped=False
+        )
 
     async def _request(
         self,

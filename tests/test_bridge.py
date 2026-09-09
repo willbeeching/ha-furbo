@@ -278,3 +278,67 @@ async def test_a_client_without_a_camera_stays_unscoped(
     await client.async_get_status()
     paths = [str(call[1].path) for call in aioclient_mock.mock_calls]
     assert paths == ["/api/status"]
+
+
+async def test_a_bridge_offline_at_startup_recovers(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A bridge that is down when first asked must not be misremembered.
+
+    Caching a guess from a transport failure left the client using paths the
+    bridge does not have for the life of the config entry: an older bridge that
+    came up later answered 404 to everything until the integration reloaded.
+    """
+    client = FurboBridgeClient(
+        async_get_clientsession(hass), BASE + "/", "tok", device_id="cam-a"
+    )
+    # Down at startup: the capability question is left unanswered.
+    aioclient_mock.get(f"{BASE}/api/cameras", exc=aiohttp.ClientError("offline"))
+    aioclient_mock.get(f"{BASE}/api/cameras/cam-a/status", exc=aiohttp.ClientError("x"))
+    with pytest.raises(FurboBridgeUnavailable):
+        await client.async_get_status()
+
+    # It comes back, and it turns out to be an older single-camera bridge.
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(f"{BASE}/api/cameras", status=404)
+    aioclient_mock.get(f"{BASE}/api/status", json=FULL_STATUS)
+    assert (await client.async_get_status()).volume == 40
+    assert "/api/status" in [str(c[1].path) for c in aioclient_mock.mock_calls]
+
+
+async def test_a_server_error_on_the_probe_is_not_remembered(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Only 404 and 405 say the bridge is an older one; 500 says nothing."""
+    client = FurboBridgeClient(
+        async_get_clientsession(hass), BASE + "/", "tok", device_id="cam-a"
+    )
+    aioclient_mock.get(f"{BASE}/api/cameras", status=500)
+    aioclient_mock.get(f"{BASE}/api/cameras/cam-a/status", json=FULL_STATUS)
+    await client.async_get_status()
+
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(f"{BASE}/api/cameras", status=404)
+    aioclient_mock.get(f"{BASE}/api/status", json=FULL_STATUS)
+    await client.async_get_status()
+    assert "/api/status" in [str(c[1].path) for c in aioclient_mock.mock_calls]
+
+
+async def test_an_unknown_bridge_still_names_its_camera(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """While the bridge's age is unknown, requests still name the camera.
+
+    The unscoped path acts on whichever camera the bridge serves first, so
+    guessing it for a second camera could toss a treat from the wrong one. An
+    error is the better failure.
+    """
+    client = FurboBridgeClient(
+        async_get_clientsession(hass), BASE + "/", "tok", device_id="cam-b"
+    )
+    aioclient_mock.get(f"{BASE}/api/cameras", exc=TimeoutError())
+    aioclient_mock.post(f"{BASE}/api/cameras/cam-b/toss", json={"ok": True})
+    await client.async_toss()
+    assert "/api/cameras/cam-b/toss" in [
+        str(c[1].path) for c in aioclient_mock.mock_calls
+    ]
