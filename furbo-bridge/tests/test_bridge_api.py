@@ -29,13 +29,14 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 class FakeWorker:
     """A stand-in P2P worker that records control calls instead of acting."""
 
-    def __init__(self) -> None:
+    def __init__(self, device_id: str = "12345") -> None:
+        self.key = device_id
         self.connected = True
         self.updated_at = 123.0
         self.last_error: str | None = None
         self.device = {
             "id": "UID",
-            "device_id": "12345",
+            "device_id": device_id,
             "name": "Furbo",
             "product": "FB0030",
         }
@@ -78,23 +79,31 @@ class FakeWorker:
 
 
 @asynccontextmanager
-async def _client(token: str | None = TOKEN):
-    """Yield a TestClient wrapping the real app around a FakeWorker."""
-    worker = FakeWorker()
-    executor = ThreadPoolExecutor(max_workers=1)
-    app = fb.create_app(worker, token, executor)
+async def _client(token: str | None = TOKEN, extra: list[str] | None = None):
+    """Yield a TestClient wrapping the real app around FakeWorkers.
+
+    The first worker is the primary, which answers the unscoped paths.
+    """
+    workers = [FakeWorker()] + [FakeWorker(device_id) for device_id in extra or []]
+    executors = {w.key: ThreadPoolExecutor(max_workers=1) for w in workers}
+    app = fb.create_app(fb.CameraRegistry(workers), token, executors)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
-        yield client, worker
+        yield client, workers[0] if not extra else workers
     finally:
         await client.close()
-        executor.shutdown(wait=False)
+        for executor in executors.values():
+            executor.shutdown(wait=False)
 
 
-def _run(coro_fn: Callable[[Any, Any], Awaitable[None]], token: str | None = TOKEN) -> None:
+def _run(
+    coro_fn: Callable[[Any, Any], Awaitable[None]],
+    token: str | None = TOKEN,
+    extra: list[str] | None = None,
+) -> None:
     async def inner() -> None:
-        async with _client(token) as (client, worker):
+        async with _client(token, extra) as (client, worker):
             await coro_fn(client, worker)
 
     asyncio.run(inner())
@@ -264,7 +273,7 @@ def test_stream_serves_frames_from_the_single_session() -> None:
 
 def test_stream_uses_the_configured_quality() -> None:
     """Video starts at whatever the quality file currently holds."""
-    fb.write_quality("720p")
+    fb.write_quality("12345", "720p")
     try:
         calls: dict[str, Any] = {}
 
@@ -276,7 +285,7 @@ def test_stream_uses_the_configured_quality() -> None:
         _run(scenario)
         assert ("open_stream", ("720p",)) in calls["all"]
     finally:
-        fb.write_quality("1080p")
+        fb.write_quality("12345", "1080p")
 
 
 def test_stream_requires_the_token() -> None:
@@ -312,3 +321,72 @@ def test_status_reports_the_session_path() -> None:
         assert body["needs_login"] is False
 
     _run(scenario)
+
+
+# --- more than one camera ----------------------------------------------------
+
+
+def test_cameras_are_listed() -> None:
+    """A client discovers the rest of the account's cameras from the bridge."""
+
+    async def scenario(client: Any, workers: Any) -> None:
+        body = await (await client.get("/api/cameras", headers=AUTH)).json()
+        assert body["primary"] == "12345"
+        assert [c["device_id"] for c in body["cameras"]] == ["12345", "67890"]
+        assert body["cameras"][1]["stream"] == "furbo_67890"
+
+    _run(scenario, extra=["67890"])
+
+
+def test_unscoped_paths_answer_for_the_primary() -> None:
+    """An integration that predates multiple cameras keeps working unchanged."""
+
+    async def scenario(client: Any, workers: Any) -> None:
+        body = await (await client.get("/api/status", headers=AUTH)).json()
+        assert body["device"]["device_id"] == "12345"
+        await client.post("/api/toss", headers=AUTH, json={})
+        assert ("toss", ()) in workers[0].calls
+        assert workers[1].calls == []
+
+    _run(scenario, extra=["67890"])
+
+
+def test_commands_reach_the_camera_they_name() -> None:
+    """A scoped request acts on that camera and no other."""
+
+    async def scenario(client: Any, workers: Any) -> None:
+        await client.post("/api/cameras/67890/toss", headers=AUTH, json={})
+        await client.post(
+            "/api/cameras/67890/pan", headers=AUTH, json={"direction": "left", "degrees": 30}
+        )
+        assert ("toss", ()) in workers[1].calls
+        assert ("pan", ("left", 30)) in workers[1].calls
+        assert workers[0].calls == []
+
+    _run(scenario, extra=["67890"])
+
+
+def test_an_unknown_camera_is_a_404() -> None:
+    """Naming a camera the bridge does not serve is not a server error."""
+
+    async def scenario(client: Any, workers: Any) -> None:
+        resp = await client.get("/api/cameras/nope/status", headers=AUTH)
+        assert resp.status == 404
+        assert (await resp.json())["error"] == "unknown_camera"
+
+    _run(scenario, extra=["67890"])
+
+
+def test_one_camera_streaming_does_not_block_another() -> None:
+    """The single video slot is per camera, not per bridge."""
+
+    async def scenario(client: Any, workers: Any) -> None:
+        workers[0].busy = True  # the primary is already being watched
+        workers[1].frames = [b"frame"]
+        first = await client.get("/api/stream", headers=AUTH)
+        assert first.status == 409
+        second = await client.get("/api/cameras/67890/stream", headers=AUTH)
+        assert second.status == 200
+        assert await second.read() == b"frame"
+
+    _run(scenario, extra=["67890"])

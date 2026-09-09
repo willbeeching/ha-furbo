@@ -601,6 +601,24 @@ async def silent_relogin() -> dict:
     return session
 
 
+def session_devices() -> list[dict[str, str]]:
+    """The cameras the stored session knows about, without calling the cloud.
+
+    Used at startup to decide which cameras to serve, so a bridge can bring up
+    one session per camera before anything asks for video.
+    """
+    devices = _load_session().get("devices") or []
+    return [
+        {
+            "device_id": str(d["Id"]),
+            "name": d.get("DeviceName") or str(d["Id"]),
+            "product": d.get("ProductId") or "",
+        }
+        for d in devices
+        if d.get("Id") is not None
+    ]
+
+
 async def fetch_p2p_credentials(device_id: str | None) -> dict:
     """Uid, auth key and a fresh P2P password for one device.
 
@@ -1421,8 +1439,9 @@ def main() -> int:
         sp.add_argument(
             "--device",
             default=os.environ.get("FURBO_DEVICE") or None,
-            help="cloud device id; required when the account has more than one "
-            "camera (defaults to $FURBO_DEVICE)",
+            help="cloud device id (defaults to $FURBO_DEVICE). The bridge "
+            "serves every camera on the account when this is not set, and "
+            "accepts a comma-separated list to serve only some of them.",
         )
         sp.add_argument("--timeout", type=int, default=10, help="connect timeout in seconds")
         sp.add_argument("--tutk-log", help="write the SDK's own debug log here")

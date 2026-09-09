@@ -110,13 +110,12 @@ def test_apply_tracking_zoom_voice_treat(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_apply_quality_is_not_a_p2p_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    qfile = tmp_path / "quality"
-    monkeypatch.setattr(fb, "QUALITY_FILE", qfile)
+    monkeypatch.setattr(fb, "QUALITY_FILE", tmp_path / "quality")
     fake = FakeP2P()
     worker = _worker_with(monkeypatch, fake)
     worker.apply({"quality": "720p"})
-    # Quality is written to the file, no opcode is sent for it.
-    assert qfile.read_text().strip() == "720p"
+    # Quality is written to this camera's own file, no opcode is sent for it.
+    assert fb.read_quality(worker.key) == "720p"
     assert fake.sends == []
 
 
@@ -599,3 +598,62 @@ def test_dropping_an_idle_session_sends_nothing(
     worker.close()
     assert fake.sends == []
     assert fake.closed is True
+
+
+# --- choosing which cameras to serve -----------------------------------------
+
+
+def _args() -> argparse.Namespace:
+    return argparse.Namespace(
+        device=None, lib=None, region="us", tutk_log=False, tcp_relay=False, timeout=10
+    )
+
+
+def test_every_camera_is_served_when_none_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unconfigured bridge serves the whole account.
+
+    It used to refuse to guess between them, which left a two-camera account
+    with nothing at all.
+    """
+    monkeypatch.setattr(
+        fb.fp,
+        "session_devices",
+        lambda: [{"device_id": "1", "name": "Hallway"}, {"device_id": "2", "name": "Kitchen"}],
+    )
+    workers = fb.build_workers(_args())
+    assert [w.device_id for w in workers] == ["1", "2"]
+
+
+def test_a_named_subset_is_served(monkeypatch: pytest.MonkeyPatch) -> None:
+    """device_id still pins the bridge, and takes a list."""
+    monkeypatch.setattr(
+        fb.fp,
+        "session_devices",
+        lambda: [{"device_id": "1"}, {"device_id": "2"}, {"device_id": "3"}],
+    )
+    args = _args()
+    args.device = "3, 1"
+    assert [w.device_id for w in fb.build_workers(args)] == ["3", "1"]
+
+
+def test_an_unknown_device_id_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A typo names the cameras that do exist rather than serving the wrong one."""
+    monkeypatch.setattr(fb.fp, "session_devices", lambda: [{"device_id": "1"}])
+    args = _args()
+    args.device = "9"
+    with pytest.raises(SystemExit) as err:
+        fb.build_workers(args)
+    assert "9" in str(err.value)
+    assert "available: 1" in str(err.value)
+
+
+def test_the_registry_routes_by_device_id() -> None:
+    """The primary answers for no name; a stranger is an UnknownCamera."""
+    args = _args()
+    first, second = fb.P2PWorker(args, "1"), fb.P2PWorker(args, "2")
+    registry = fb.CameraRegistry([first, second])
+    assert registry.get(None) is first
+    assert registry.get("2") is second
+    assert len(registry) == 2
+    with pytest.raises(fb.UnknownCamera):
+        registry.get("3")

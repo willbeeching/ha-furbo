@@ -346,3 +346,19 @@ def test_av_status_notification_is_kept_whole() -> None:
         "stream": 0,
         "status": -1,
     }
+
+
+def test_session_devices_lists_the_account_cameras(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """The bridge decides which cameras to serve without calling the cloud."""
+    session = tmp_path / "furbo_session.json"
+    session.write_text(
+        '{"devices": [{"Id": 1, "DeviceName": "Hallway", "ProductId": "FB0030"},'
+        ' {"Id": 2, "DeviceName": "Kitchen"}, {"DeviceName": "no id"}]}'
+    )
+    monkeypatch.setattr(fp, "SESSION_FILE", session)
+    assert fp.session_devices() == [
+        {"device_id": "1", "name": "Hallway", "product": "FB0030"},
+        {"device_id": "2", "name": "Kitchen", "product": ""},
+    ]

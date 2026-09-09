@@ -83,10 +83,26 @@ def test_quality_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     qfile = tmp_path / "quality"
     monkeypatch.setattr(fb, "QUALITY_FILE", qfile)
     # Unset / missing file falls back to 1080p.
-    assert fb.read_quality() == "1080p"
-    fb.write_quality("360p")
-    assert qfile.read_text().strip() == "360p"
-    assert fb.read_quality() == "360p"
+    assert fb.read_quality("cam1") == "1080p"
+    fb.write_quality("cam1", "360p")
+    assert fb.read_quality("cam1") == "360p"
+    # Each camera keeps its own choice.
+    fb.write_quality("cam2", "720p")
+    assert fb.read_quality("cam1") == "360p"
+    assert fb.read_quality("cam2") == "720p"
     # An unexpected value on disk falls back to the default.
-    qfile.write_text("garbage")
-    assert fb.read_quality() == "1080p"
+    (tmp_path / "quality.cam1").write_text("garbage")
+    assert fb.read_quality("cam1") == "1080p"
+
+
+def test_quality_falls_back_to_the_single_camera_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bridge that served one camera keeps the quality its user chose."""
+    qfile = tmp_path / "quality"
+    monkeypatch.setattr(fb, "QUALITY_FILE", qfile)
+    qfile.write_text("720p\n")
+    assert fb.read_quality("cam1") == "720p"
+    # Once that camera has its own choice, the shared file is no longer used.
+    fb.write_quality("cam1", "360p")
+    assert fb.read_quality("cam1") == "360p"

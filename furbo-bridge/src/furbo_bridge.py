@@ -108,18 +108,30 @@ VIDEO_QUALITIES = ("1080p", "720p", "360p")
 QUALITY_FILE = Path(os.environ.get("FURBO_QUALITY_FILE", "/data/quality"))
 
 
-def read_quality() -> str:
-    """Return the configured stream quality, defaulting to 1080p."""
-    try:
-        value = QUALITY_FILE.read_text().strip()
-    except OSError:
-        value = ""
-    return value if value in VIDEO_QUALITIES else "1080p"
+def _quality_file(device_id: str) -> Path:
+    """Where one camera's chosen quality lives."""
+    return QUALITY_FILE.with_name(f"{QUALITY_FILE.name}.{device_id}")
 
 
-def write_quality(quality: str) -> None:
-    """Persist the stream quality for the next go2rtc stream start."""
-    QUALITY_FILE.write_text(quality + "\n")
+def read_quality(device_id: str) -> str:
+    """Return the camera's stream quality, defaulting to 1080p.
+
+    The unsuffixed file is read as a fallback so a bridge that served one
+    camera before keeps the quality its user chose.
+    """
+    for path in (_quality_file(device_id), QUALITY_FILE):
+        try:
+            value = path.read_text().strip()
+        except OSError:
+            continue
+        if value in VIDEO_QUALITIES:
+            return value
+    return "1080p"
+
+
+def write_quality(device_id: str, quality: str) -> None:
+    """Persist one camera's stream quality for its next go2rtc stream start."""
+    _quality_file(device_id).write_text(quality + "\n")
 
 
 class StreamBusy(Exception):
@@ -128,6 +140,10 @@ class StreamBusy(Exception):
 
 class BridgeUnavailable(Exception):
     """The P2P session is not available; the reason is safe to show."""
+
+
+class UnknownCamera(Exception):
+    """The request named a camera this bridge does not serve."""
 
 
 def normalise_state(raw: dict[str, Any]) -> dict[str, Any]:
@@ -168,10 +184,17 @@ def normalise_state(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 class P2PWorker:
-    """Owns the one P2P session. Every method runs on the worker thread."""
+    """Owns one camera's P2P session. Every method runs on the worker thread.
 
-    def __init__(self, args: argparse.Namespace) -> None:
+    One per camera: a session, a lock and a single video slot each, so a camera
+    that is slow, wedged or logged out cannot hold up the others.
+    """
+
+    def __init__(self, args: argparse.Namespace, device_id: str | None = None) -> None:
         self._args = args
+        # None means "the account's only camera", which is what a bridge
+        # serving a single camera has always passed to the cloud.
+        self.device_id = device_id
         self._p2p: fp.FurboP2P | None = None
         self._lock = threading.Lock()
         # Set while a viewer is reading frames. The reader runs on its own
@@ -195,6 +218,15 @@ class P2PWorker:
         self._login_retry_at = 0.0
         self._login_backoff = LOGIN_BACKOFF_START
 
+    @property
+    def key(self) -> str:
+        """A stable name for this camera's own files and go2rtc stream.
+
+        The cloud device id once connected, the configured one before that, and
+        "default" for a bridge that was never told which camera it serves.
+        """
+        return self.device.get("device_id") or self.device_id or "default"
+
     # -- session -----------------------------------------------------------
 
     def _ensure(self) -> fp.FurboP2P:
@@ -204,7 +236,7 @@ class P2PWorker:
             raise BridgeUnavailable(self.last_error or "waiting for a new login")
         self._drop()
         try:
-            creds = asyncio.run(fp.fetch_p2p_credentials(self._args.device))
+            creds = asyncio.run(fp.fetch_p2p_credentials(self.device_id))
             p2p = fp.FurboP2P(
                 self._args.lib, self._args.region, self._args.tutk_log, self._args.tcp_relay
             )
@@ -341,7 +373,7 @@ class P2PWorker:
         with self._lock:
             if "quality" in settings:
                 # Stream quality is a bridge/go2rtc concern, not a P2P command.
-                write_quality(settings.pop("quality"))
+                write_quality(self.key, settings.pop("quality"))
             p2p = self._ensure()
             cmd = fp.CMD3 if p2p.proto == "v3" else fp.CMD
             # Setting name -> the opcode written for it, so a refusal can be
@@ -559,6 +591,62 @@ class P2PWorker:
             _LOGGER.info("video stopped")
 
 
+class CameraRegistry:
+    """The cameras this bridge serves, each with its own worker.
+
+    The first camera is the primary: it answers the unscoped API paths that a
+    bridge serving one camera has always exposed, so an integration that has
+    not learned about the scoped paths keeps working.
+    """
+
+    def __init__(self, workers: list[P2PWorker]) -> None:
+        if not workers:
+            raise SystemExit("no cameras to serve")
+        self._workers = {w.key: w for w in workers}
+        self.primary = workers[0]
+
+    def __iter__(self) -> Iterator[P2PWorker]:
+        return iter(self._workers.values())
+
+    def __len__(self) -> int:
+        return len(self._workers)
+
+    def get(self, device_id: str | None) -> P2PWorker:
+        """The worker for a camera, or the primary when none is named."""
+        if device_id is None:
+            return self.primary
+        worker = self._workers.get(device_id)
+        if worker is None:
+            raise UnknownCamera(device_id)
+        return worker
+
+
+def build_workers(args: argparse.Namespace) -> list[P2PWorker]:
+    """One worker per camera this bridge should serve.
+
+    With no --device the account's cameras are all served, which is what an
+    unconfigured add-on now does instead of refusing to guess between them.
+    """
+    # --device stays a single string for the other subcommands; here it also
+    # accepts a comma-separated list, so the add-on's device_id option can pin
+    # a subset without a new option.
+    wanted = [d.strip() for d in (args.device or "").split(",") if d.strip()]
+    known = {d["device_id"]: d for d in fp.session_devices()}
+    if wanted:
+        missing = [d for d in wanted if d not in known]
+        if missing:
+            available = ", ".join(known) or "none"
+            raise SystemExit(
+                f"device_id not found on this account: {', '.join(missing)}; available: {available}"
+            )
+        chosen = wanted
+    else:
+        chosen = list(known)
+    if not chosen:
+        raise SystemExit("the account has no cameras")
+    return [P2PWorker(args, device_id) for device_id in chosen]
+
+
 # --- HTTP ------------------------------------------------------------------
 
 
@@ -612,10 +700,20 @@ def _parse_settings(body: Any) -> dict[str, Any]:
     return out
 
 
-def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> web.Application:
-    """Build the aiohttp application around a worker (real or fake)."""
+def create_app(
+    cameras: CameraRegistry,
+    token: str | None,
+    executors: dict[str, ThreadPoolExecutor],
+) -> web.Application:
+    """Build the aiohttp application around the cameras this bridge serves.
 
-    def status_document() -> dict[str, Any]:
+    Every operation exists twice: under /api/cameras/{device_id}/... naming a
+    camera, and unscoped at /api/... for the primary one. The unscoped paths
+    are what a bridge serving a single camera has always exposed, so an
+    integration that predates multiple cameras keeps working unchanged.
+    """
+
+    def status_document(worker: Any) -> dict[str, Any]:
         return {
             "connected": worker.connected,
             "updated_at": worker.updated_at,
@@ -624,12 +722,16 @@ def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> 
             "session_mode": worker.session_mode,
             "streaming": worker.streaming,
             "needs_login": worker.needs_login,
-            "state": {**worker.state, "quality": read_quality()},
+            "state": {**worker.state, "quality": read_quality(worker.key)},
         }
 
-    async def run(fn: Any, *args: Any) -> Any:
+    def target(request: web.Request) -> Any:
+        """The camera this request is about: named in the path, or the primary."""
+        return cameras.get(request.match_info.get("device_id"))
+
+    async def run(worker: Any, fn: Any, *args: Any) -> Any:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(executor, fn, *args)
+        return await loop.run_in_executor(executors[worker.key], fn, *args)
 
     async def read_json(request: web.Request) -> Any:
         if request.content_length in (None, 0):
@@ -653,20 +755,44 @@ def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> 
             return await handler(request)
         except ValueError as exc:
             return _bad_request(str(exc))
+        except UnknownCamera as exc:
+            return web.json_response(
+                {"error": "unknown_camera", "detail": f"no camera {exc}"}, status=404
+            )
         except StreamBusy as exc:
             return web.json_response({"error": "stream_busy", "detail": str(exc)}, status=409)
         except BridgeUnavailable as exc:
             return web.json_response({"error": "p2p_unavailable", "detail": str(exc)}, status=503)
 
+    async def get_cameras(request: web.Request) -> web.Response:
+        """Every camera this bridge serves, so a client can find the rest."""
+        return web.json_response(
+            {
+                "primary": cameras.primary.key,
+                "cameras": [
+                    {
+                        "device_id": w.key,
+                        "name": w.device.get("name") or w.key,
+                        "product": w.device.get("product") or "",
+                        "stream": stream_name(w.key),
+                        "connected": w.connected,
+                    }
+                    for w in cameras
+                ],
+            }
+        )
+
     async def get_status(request: web.Request) -> web.Response:
-        return web.json_response(status_document())
+        return web.json_response(status_document(target(request)))
 
     async def post_settings(request: web.Request) -> web.Response:
+        worker = target(request)
         settings = _parse_settings(await read_json(request))
-        await run(worker.apply, settings)
-        return web.json_response(status_document())
+        await run(worker, worker.apply, settings)
+        return web.json_response(status_document(worker))
 
     async def post_pan(request: web.Request) -> web.Response:
+        worker = target(request)
         body = await read_json(request)
         if not isinstance(body, dict):
             raise ValueError("body must be an object")
@@ -676,21 +802,24 @@ def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> 
         degrees = body.get("degrees", 60)
         if isinstance(degrees, bool) or not isinstance(degrees, int) or not 1 <= degrees <= 180:
             raise ValueError("degrees must be an integer from 1 to 180")
-        await run(worker.pan, direction, degrees)
+        await run(worker, worker.pan, direction, degrees)
         return web.json_response({"ok": True})
 
     async def post_toss(request: web.Request) -> web.Response:
-        await run(worker.toss)
+        worker = target(request)
+        await run(worker, worker.toss)
         return web.json_response({"ok": True})
 
     async def post_treat_sound(request: web.Request) -> web.Response:
-        await run(worker.treat_sound)
+        worker = target(request)
+        await run(worker, worker.treat_sound)
         return web.json_response({"ok": True})
 
     async def get_stream(request: web.Request) -> web.StreamResponse:
         """Serve H.264 from the live session for as long as the viewer stays."""
-        quality = read_quality()
-        await run(worker.open_stream, quality)
+        worker = target(request)
+        quality = read_quality(worker.key)
+        await run(worker, worker.open_stream, quality)
         response = web.StreamResponse(
             status=200, headers={"Content-Type": "video/H264", "Cache-Control": "no-store"}
         )
@@ -717,7 +846,7 @@ def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> 
             finally:
                 loop.call_soon_threadsafe(offer, None)
 
-        reader = threading.Thread(target=pump, name="furbo-video", daemon=True)
+        reader = threading.Thread(target=pump, name=f"furbo-video-{worker.key}", daemon=True)
         reader.start()
         try:
             while True:
@@ -728,24 +857,37 @@ def create_app(worker: Any, token: str | None, executor: ThreadPoolExecutor) -> 
         except (ConnectionResetError, asyncio.CancelledError):
             pass
         finally:
-            await run(worker.close_stream)
+            await run(worker, worker.close_stream)
             reader.join(timeout=5)
             if dropped:
                 _LOGGER.warning("dropped %d frames: the viewer could not keep up", dropped)
         return response
 
     app = web.Application(middlewares=[auth_and_errors])
-    app.add_routes(
-        [
-            web.get("/api/status", get_status),
-            web.get("/api/stream", get_stream),
-            web.post("/api/settings", post_settings),
-            web.post("/api/pan", post_pan),
-            web.post("/api/toss", post_toss),
-            web.post("/api/treat-sound", post_treat_sound),
-        ]
-    )
+    routes = [web.get("/api/cameras", get_cameras)]
+    # Each operation twice: unscoped for the primary camera (what a
+    # single-camera bridge has always served) and scoped by device id.
+    for path, method, handler in (
+        ("status", web.get, get_status),
+        ("stream", web.get, get_stream),
+        ("settings", web.post, post_settings),
+        ("pan", web.post, post_pan),
+        ("toss", web.post, post_toss),
+        ("treat-sound", web.post, post_treat_sound),
+    ):
+        routes.append(method(f"/api/{path}", handler))
+        routes.append(method(f"/api/cameras/{{device_id}}/{path}", handler))
+    app.add_routes(routes)
     return app
+
+
+def stream_name(device_id: str) -> str:
+    """The go2rtc stream for one camera.
+
+    The primary keeps the plain name a single-camera bridge has always used, so
+    an existing stream URL in someone's options still resolves.
+    """
+    return f"furbo_{device_id}"
 
 
 async def _refresh_loop(worker: P2PWorker, executor: ThreadPoolExecutor, interval: float) -> None:
@@ -767,10 +909,17 @@ async def serve(args: argparse.Namespace) -> None:
         # The API exposes camera video and physical controls; never run it
         # unauthenticated on the network.
         raise SystemExit("a --token is required; refusing to serve without one")
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="p2p")
-    worker = P2PWorker(args)
-    app = create_app(worker, args.token, executor)
-    refresher = asyncio.create_task(_refresh_loop(worker, executor, args.interval))
+    cameras = CameraRegistry(build_workers(args))
+    # One thread per camera. The worker serialises its own session with a lock,
+    # so a shared pool would only queue one camera's slow poll behind another's.
+    executors = {
+        w.key: ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"p2p-{w.key}") for w in cameras
+    }
+    app = create_app(cameras, args.token, executors)
+    refreshers = [
+        asyncio.create_task(_refresh_loop(w, executors[w.key], args.interval)) for w in cameras
+    ]
+    _LOGGER.info("serving %d camera(s): %s", len(cameras), ", ".join(w.key for w in cameras))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, args.host, args.port)
@@ -788,12 +937,19 @@ async def serve(args: argparse.Namespace) -> None:
 
     try:
         await stop.wait()
-        _LOGGER.info("stopping: closing the P2P session")
+        _LOGGER.info("stopping: closing %d P2P session(s)", len(cameras))
     finally:
-        refresher.cancel()
+        for task in refreshers:
+            task.cancel()
         await runner.cleanup()
-        await asyncio.get_running_loop().run_in_executor(executor, worker.close)
-        executor.shutdown(wait=False)
+        loop = asyncio.get_running_loop()
+        # Close every camera, even if one of them fails on the way out.
+        await asyncio.gather(
+            *(loop.run_in_executor(executors[w.key], w.close) for w in cameras),
+            return_exceptions=True,
+        )
+        for executor in executors.values():
+            executor.shutdown(wait=False)
 
 
 def add_arguments(sp: argparse.ArgumentParser) -> None:
