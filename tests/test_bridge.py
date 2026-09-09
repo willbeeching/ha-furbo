@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import aiohttp
+from aiohttp import web
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import pytest
@@ -407,3 +409,51 @@ async def test_cloud_token_with_the_wrong_bridge_token(
     aioclient_mock.get(f"{BASE}/api/cloud-token", status=401, json={"error": "x"})
     with pytest.raises(FurboBridgeAuthError):
         await _client(hass).async_get_cloud_token()
+
+
+async def test_a_slow_renewal_is_waited_for(
+    hass: HomeAssistant, aiohttp_server: Any, socket_enabled: None
+) -> None:
+    """Renewing the cloud token gets longer than a status read.
+
+    The bridge checks the token with the cloud and may log in before it can
+    answer, which is bounded by its own 20-second cloud timeout per call, not
+    by how long a read of state it already holds takes. Served by a real
+    server: only a live request applies the timeout.
+    """
+
+    async def slowly(request: web.Request) -> web.Response:
+        await asyncio.sleep(0.3)
+        return web.json_response({"account_id": "ACC1", "cognito_token": "T1"})
+
+    app = web.Application()
+    app.router.add_get("/api/cloud-token", slowly)
+    server = await aiohttp_server(app)
+    async with aiohttp.ClientSession() as session:
+        client = FurboBridgeClient(session, str(server.make_url("/")), "tok", timeout=1)
+        # A read of cached state would have given up long before this answered.
+        client._timeout = aiohttp.ClientTimeout(total=0.05)
+        assert await client.async_get_cloud_token() == ("ACC1", "T1")
+
+
+async def test_a_renewal_that_never_answers_is_unavailable(
+    hass: HomeAssistant, aiohttp_server: Any, socket_enabled: None
+) -> None:
+    """A bridge that hangs is reported as unreachable, not as a bad answer.
+
+    The coordinator waits and retries on that, rather than asking someone to
+    sign in again.
+    """
+
+    async def never(request: web.Request) -> web.Response:
+        await asyncio.sleep(30)
+        raise AssertionError("should not get here")
+
+    app = web.Application()
+    app.router.add_get("/api/cloud-token", never)
+    server = await aiohttp_server(app)
+    async with aiohttp.ClientSession() as session:
+        client = FurboBridgeClient(session, str(server.make_url("/")), "tok")
+        client._renewal_timeout = aiohttp.ClientTimeout(total=0.1)
+        with pytest.raises(FurboBridgeUnavailable):
+            await client.async_get_cloud_token()

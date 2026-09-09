@@ -146,7 +146,13 @@ ports also works.
   in a thread of its own, so a dead token is noticed in several places at the
   same moment. Logins are serialized, and a caller that finds another has
   already replaced the token uses that one rather than asking the cloud for a
-  second, which is what the rate limiter answers with a lockout.
+  second, which is what the rate limiter answers with a lockout. A caller left
+  waiting for about a minute is told to come back instead of being held.
+- **Renewal is slower than a status read.** Checking the token, and logging in
+  when it has died, is up to three cloud calls at twenty seconds each, so
+  `GET /api/cloud-token` can take far longer than the rest of the API. The
+  integration allows for that and treats a renewal it did not get in time as
+  something to retry on the next poll, not as a reason to ask for a sign-in.
 - **The full poll waits on replies, not on a timer.** Each of the thirteen
   settings reads is awaited individually and moves on the moment the camera
   answers, so the sweep costs one round trip per setting. It used to sleep a

@@ -11,6 +11,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.furbo.api import FurboAuthError, FurboConnectionError
+from custom_components.furbo.bridge import FurboBridgeUnavailable
 from custom_components.furbo.const import (
     CONF_BRIDGE_TOKEN,
     CONF_BRIDGE_URL,
@@ -338,3 +339,37 @@ async def test_migration_downgrade_rejected(
     assert not await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.MIGRATION_ERROR
+
+
+async def test_setup_with_a_slow_bridge_retries_rather_than_prompting(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """A restart with a dead token and a slow add-on waits for the add-on.
+
+    Home Assistant retries a config entry that is not ready; it cannot retry a
+    reauth prompt, which sits there until someone answers it.
+    """
+    mock_bridge.async_get_cloud_token.side_effect = FurboBridgeUnavailable("timeout")
+    mock_client.get_account_info.side_effect = FurboAuthError("expired")
+    await setup_integration(
+        hass,
+        mock_config_entry,
+        options={
+            CONF_BRIDGES: {
+                c.DEVICE_ID: {
+                    CONF_BRIDGE_URL: "http://bridge:8791",
+                    CONF_BRIDGE_TOKEN: "tok",
+                }
+            }
+        },
+    )
+
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+    assert not [
+        flow
+        for flow in hass.config_entries.flow.async_progress()
+        if flow["context"].get("source") == SOURCE_REAUTH
+    ]

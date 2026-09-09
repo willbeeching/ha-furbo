@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from enum import Enum
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -16,7 +17,12 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import FurboAuthError, FurboClient, FurboError
-from .bridge import BridgeState, FurboBridgeClient, FurboBridgeError
+from .bridge import (
+    BridgeState,
+    FurboBridgeClient,
+    FurboBridgeError,
+    FurboBridgeUnavailable,
+)
 from .const import (
     BRIDGE_SCAN_INTERVAL,
     CONF_COGNITO_TOKEN,
@@ -33,6 +39,24 @@ if TYPE_CHECKING:
     from . import FurboConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+
+# How many polls in a row may end with the bridge unable to supply a token
+# before the user is asked to sign in. Renewal is slow (the bridge may log in
+# to the cloud first) and the add-on restarts on its own account, so a few
+# missed attempts say nothing about whether recovery will work; a bridge that
+# is gone for good must not leave the entry stuck without a way back.
+MAX_RENEWAL_ATTEMPTS = 3
+
+
+class _Renewal(Enum):
+    """What came of asking the bridge for a current cloud token."""
+
+    TAKEN = "taken"
+    # The bridge cannot help: there is none, it is signed in elsewhere, or it
+    # offered the token the cloud had just refused.
+    REFUSED = "refused"
+    # It might help, but could not answer this time.
+    UNAVAILABLE = "unavailable"
 
 
 @dataclass(slots=True)
@@ -93,6 +117,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         # password and logs in again by itself, so it can hand over a current
         # cloud token when this one is rejected.
         self.token_source: Callable[[], Awaitable[tuple[str, str]]] | None = None
+        self._renewals_missed = 0
         self.hub_device_id: str | None = None
         self._tzinfo: ZoneInfo | None = None
         self._timezone_name: str | None = None
@@ -127,7 +152,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         try:
             return await self.client.get_account_info()
         except FurboAuthError:
-            if not await self._async_replace_token():
+            if not await self._async_recover_token():
                 raise
         return await self.client.get_account_info()
 
@@ -152,8 +177,30 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
             return "age unknown"
         return f"issued {(time.time() - issued) / 3600:.1f}h ago"
 
-    async def _async_replace_token(self) -> bool:
-        """Take a current cloud token from the bridge. True if one was given.
+    async def _async_recover_token(self) -> bool:
+        """Whether the refused call is worth trying again with a new token.
+
+        A bridge that could not answer raises UpdateFailed instead, for a few
+        polls: renewal takes as long as a cloud login, and a sign-in prompt
+        put in front of someone whose add-on was merely slow is one they
+        cannot tell from a real one.
+        """
+        outcome = await self._async_replace_token()
+        if outcome is _Renewal.TAKEN:
+            return True
+        if (
+            outcome is _Renewal.UNAVAILABLE
+            and self._renewals_missed < MAX_RENEWAL_ATTEMPTS
+        ):
+            self._renewals_missed += 1
+            raise UpdateFailed(
+                "the Furbo Bridge add-on could not supply a cloud token "
+                f"(attempt {self._renewals_missed} of {MAX_RENEWAL_ATTEMPTS})"
+            )
+        return False
+
+    async def _async_replace_token(self) -> _Renewal:
+        """Take a current cloud token from the bridge.
 
         The cloud issues a short-lived token and nothing to refresh it with,
         and this integration does not store the account password, so without
@@ -165,12 +212,16 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         """
         _LOGGER.debug("Cloud rejected the token (%s)", self._token_age())
         if self.token_source is None:
-            return False
+            return _Renewal.REFUSED
         try:
             account_id, token = await self.token_source()
+        except FurboBridgeUnavailable as err:
+            # Unreachable, still starting, or renewing and slow about it.
+            _LOGGER.debug("The bridge could not supply a cloud token yet: %s", err)
+            return _Renewal.UNAVAILABLE
         except FurboBridgeError as err:
             _LOGGER.debug("No cloud token from the bridge: %s", err)
-            return False
+            return _Renewal.REFUSED
         if account_id != self.client.account_id:
             # A bridge signed in to a different Furbo account. Its token would
             # authenticate, and every poll after it would read another
@@ -181,10 +232,10 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
                 "account, so its cloud token was not used. Point the bridge at "
                 "this account, or sign in to Furbo again to restore this one"
             )
-            return False
+            return _Renewal.REFUSED
         if token == self.client.cognito_token:
             # The bridge is offering the same token that was just refused.
-            return False
+            return _Renewal.REFUSED
         self.client.cognito_token = token
         self.hass.config_entries.async_update_entry(
             self.config_entry,
@@ -194,15 +245,16 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
                 CONF_TOKEN_ISSUED_AT: time.time(),
             },
         )
+        self._renewals_missed = 0
         _LOGGER.info("Took a fresh cloud token from the Furbo Bridge add-on")
-        return True
+        return _Renewal.TAKEN
 
     async def _async_update_data(self) -> FurboData:
         """Fetch the account, replacing a refused token once if we can."""
         try:
             return await self._async_fetch()
         except ConfigEntryAuthFailed:
-            if not await self._async_replace_token():
+            if not await self._async_recover_token():
                 raise
         return await self._async_fetch()
 

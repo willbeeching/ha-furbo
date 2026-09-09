@@ -599,6 +599,10 @@ async def cloud_status(days: int) -> None:
 # a dead token is noticed in several places at the same moment, and a burst of
 # logins is what the cloud's rate limiter (80002) answers with a lockout.
 _LOGIN_LOCK = threading.Lock()
+# Long enough for the login in front to finish (three cloud calls, each capped
+# at 20 seconds) and short enough that a caller is told to come back rather
+# than held forever.
+_LOGIN_WAIT = 65.0
 
 
 async def silent_relogin(stale_token: str | None = None) -> dict:
@@ -610,7 +614,9 @@ async def silent_relogin(stale_token: str | None = None) -> dict:
     Raises MfaRequired when the cloud wants an emailed code, which nothing here
     can answer, and SystemExit when there are no credentials to try.
     """
-    with _LOGIN_LOCK:
+    if not _LOGIN_LOCK.acquire(timeout=_LOGIN_WAIT):
+        raise SystemExit("a login is already running; try again shortly")
+    try:
         if stale_token is not None:
             current = _session_or_none()
             token = (current or {}).get("cognito_token")
@@ -618,6 +624,8 @@ async def silent_relogin(stale_token: str | None = None) -> dict:
                 log("another login has already refreshed the session")
                 return current
         return await _login_again()
+    finally:
+        _LOGIN_LOCK.release()
 
 
 def _session_or_none() -> dict | None:

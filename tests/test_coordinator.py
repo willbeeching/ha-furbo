@@ -6,7 +6,7 @@ import logging
 import time
 from unittest.mock import AsyncMock
 
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
@@ -18,7 +18,7 @@ from custom_components.furbo.api import (
     FurboConnectionError,
     FurboError,
 )
-from custom_components.furbo.bridge import FurboBridgeError
+from custom_components.furbo.bridge import FurboBridgeError, FurboBridgeUnavailable
 from custom_components.furbo.const import (
     CONF_ACCOUNT_ID,
     CONF_BRIDGE_TOKEN,
@@ -27,6 +27,7 @@ from custom_components.furbo.const import (
     CONF_COGNITO_TOKEN,
     CONF_TOKEN_ISSUED_AT,
 )
+from custom_components.furbo.coordinator import MAX_RENEWAL_ATTEMPTS
 
 from . import const as c
 from .conftest import setup_integration
@@ -237,15 +238,89 @@ async def test_expired_token_without_a_bridge_still_reauths(
         await coordinator._async_update_data()
 
 
-async def test_unreachable_bridge_still_reauths(
+async def test_a_bridge_that_refuses_still_reauths(
     hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
 ) -> None:
-    """A bridge that cannot answer does not swallow the reauth."""
+    """A bridge that answers but cannot help does not swallow the reauth."""
     await setup_integration(hass, mock_config_entry)
     coordinator = mock_config_entry.runtime_data.coordinator
-    coordinator.token_source = AsyncMock(side_effect=FurboBridgeError("down"))
+    coordinator.token_source = AsyncMock(side_effect=FurboBridgeError("no", status=404))
     mock_client.get_devices.side_effect = FurboAuthError("expired")
     with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+
+async def test_a_slow_bridge_defers_instead_of_prompting(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A renewal that times out waits for the next poll, not for a person.
+
+    Renewing takes as long as a cloud login, so a bridge that is slow or
+    restarting is not evidence that recovery has failed; a sign-in prompt
+    raised there is one nobody can tell from a real one.
+    """
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    coordinator.token_source = AsyncMock(
+        side_effect=FurboBridgeUnavailable("Bridge unreachable: TimeoutError")
+    )
+    mock_client.get_devices.side_effect = FurboAuthError("expired")
+
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+    # And the entities go unavailable rather than the entry asking for a login.
+    assert not [
+        flow
+        for flow in hass.config_entries.flow.async_progress()
+        if flow["context"].get("source") == SOURCE_REAUTH
+    ]
+
+
+async def test_a_bridge_that_stays_slow_gives_up(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Waiting is bounded: an add-on that is gone must not strand the entry."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    coordinator.token_source = AsyncMock(side_effect=FurboBridgeUnavailable("down"))
+    mock_client.get_devices.side_effect = FurboAuthError("expired")
+
+    for _ in range(MAX_RENEWAL_ATTEMPTS):
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+
+async def test_the_wait_starts_over_after_a_recovery(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A bridge that answers once has its full allowance again."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    mock_client.get_devices.side_effect = FurboAuthError("expired")
+    coordinator.token_source = AsyncMock(side_effect=FurboBridgeUnavailable("down"))
+    for _ in range(MAX_RENEWAL_ATTEMPTS):
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    attempts = 0
+
+    def _devices() -> list[dict[str, object]]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise FurboAuthError("expired")
+        return [dict(c.DEVICE)]
+
+    mock_client.get_devices.side_effect = _devices
+    coordinator.token_source = AsyncMock(return_value=(c.ACCOUNT_ID, "FRESH-TOKEN"))
+    await coordinator._async_update_data()
+
+    mock_client.get_devices.side_effect = FurboAuthError("expired again")
+    coordinator.token_source = AsyncMock(side_effect=FurboBridgeUnavailable("down"))
+    with pytest.raises(UpdateFailed):
         await coordinator._async_update_data()
 
 

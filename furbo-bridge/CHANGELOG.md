@@ -3,6 +3,13 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.0-beta.4
+
+- A login waiting behind another one gives up after about a minute and says
+  to try again, rather than holding the caller indefinitely. The HTTP API
+  waits on the same lock as the cameras, and a request held there never
+  answers, which the integration read as a failed recovery.
+
 ## 1.2.0-beta.3
 
 - The token handed to the integration is checked with the cloud first, and

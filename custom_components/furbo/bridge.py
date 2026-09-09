@@ -18,6 +18,11 @@ from typing import Any
 import aiohttp
 
 DEFAULT_TIMEOUT = 10
+# Renewing the cloud token is the one call that is not a quick read of state
+# the bridge already holds: it checks the token with the cloud, may log in
+# again, and may wait behind another camera's login, each step bounded by the
+# bridge's own 20-second cloud timeout. Ten seconds fails it every time.
+RENEWAL_TIMEOUT = 90
 
 NIGHT_MODES = ("auto", "on", "off")
 BARK_LEVELS = ("off", "low", "medium", "high")
@@ -136,6 +141,7 @@ class FurboBridgeClient:
         self._url = url.rstrip("/")
         self._headers = {"Authorization": f"Bearer {token}"} if token else {}
         self._timeout = aiohttp.ClientTimeout(total=timeout)
+        self._renewal_timeout = aiohttp.ClientTimeout(total=RENEWAL_TIMEOUT)
         self._device_id = device_id
         # None until the first request settles whether this bridge knows about
         # cameras individually.
@@ -187,6 +193,7 @@ class FurboBridgeClient:
         body: dict[str, Any] | None,
         *,
         scoped: bool = True,
+        budget: aiohttp.ClientTimeout | None = None,
     ) -> Any:
         if scoped:
             return await self._camera_request(method, path, body)
@@ -196,7 +203,7 @@ class FurboBridgeClient:
                 f"{self._url}{path}",
                 json=body,
                 headers=self._headers,
-                timeout=self._timeout,
+                timeout=budget or self._timeout,
             ) as resp:
                 status = resp.status
                 if status == 200:
@@ -223,8 +230,17 @@ class FurboBridgeClient:
         The add-on holds the account password and logs in again by itself, so
         it always has a current one. The integration does not, by design, and
         the cloud's token is short lived with nothing to refresh it.
+
+        Given its own timeout: the bridge may have to log in before it can
+        answer, which takes far longer than reading state it already holds.
         """
-        body = await self._request("GET", "/api/cloud-token", None, scoped=False)
+        body = await self._request(
+            "GET",
+            "/api/cloud-token",
+            None,
+            scoped=False,
+            budget=self._renewal_timeout,
+        )
         if not isinstance(body, dict):
             raise FurboBridgeError("Malformed bridge response from /api/cloud-token")
         account_id = body.get("account_id")

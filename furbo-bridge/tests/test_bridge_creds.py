@@ -182,3 +182,28 @@ def test_relogin_happens_when_the_token_is_still_the_dead_one(
 
     monkeypatch.setattr(fp, "_login_again", _login)
     assert asyncio.run(fp.silent_relogin("OLD"))["cognito_token"] == "NEW"
+
+
+def test_relogin_gives_up_rather_than_waiting_forever(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """A login stuck in front of this one is answered with 'come back later'.
+
+    The HTTP API waits on the same lock as the cameras, and a caller held
+    there indefinitely is a request that never answers.
+    """
+    session = tmp_path / "furbo_session.json"
+    session.write_text(json.dumps({"account_id": "A1", "cognito_token": "OLD"}))
+    monkeypatch.setattr(fp, "SESSION_FILE", session)
+    monkeypatch.setattr(fp, "_LOGIN_WAIT", 0.05)
+
+    fp._LOGIN_LOCK.acquire()
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            asyncio.run(fp.silent_relogin("OLD"))
+    finally:
+        fp._LOGIN_LOCK.release()
+    assert "already running" in str(excinfo.value)
+    # And the lock is free again for the next caller.
+    assert fp._LOGIN_LOCK.acquire(timeout=0.1)
+    fp._LOGIN_LOCK.release()
