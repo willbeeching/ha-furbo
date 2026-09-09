@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.furbo.api import FurboAuthError, FurboConnectionError
@@ -14,12 +15,13 @@ from custom_components.furbo.const import (
     CONF_BRIDGE_TOKEN,
     CONF_BRIDGE_URL,
     CONF_BRIDGES,
+    CONF_COGNITO_TOKEN,
     CONF_EVENTS_ENABLED,
     CONF_SCAN_INTERVAL,
     CONF_STREAM_URLS,
     DOMAIN,
 )
-from custom_components.furbo.discovery import rtsp_password
+from custom_components.furbo.discovery import DiscoveredBridge, rtsp_password
 
 from . import const as c
 from .conftest import setup_integration
@@ -84,6 +86,83 @@ async def test_options_change_reloads(
     account = hass.states.get("sensor.furbo_account_notable_events_today")
     assert account is None or account.state == "unavailable"
     assert hass.states.get("sensor.test_camera_subscription_days_left").state == "24"
+
+
+async def test_new_cloud_token_does_not_reload(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Storing a fresh cloud token leaves the loaded entry alone.
+
+    The coordinator writes the token it took from the add-on into entry.data
+    mid-poll; reloading there would tear the coordinator down underneath
+    itself, and nothing set up from the entry depends on the token.
+    """
+    await setup_integration(hass, mock_config_entry)
+    runtime = mock_config_entry.runtime_data
+
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        data={**mock_config_entry.data, CONF_COGNITO_TOKEN: "FRESH-TOKEN"},
+    )
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert mock_config_entry.runtime_data is runtime
+
+
+async def test_configured_bridge_supplies_the_token_source(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """A configured bridge is wired up as the coordinator's token source."""
+    await setup_integration(
+        hass,
+        mock_config_entry,
+        options={
+            CONF_BRIDGES: {
+                c.DEVICE_ID: {
+                    CONF_BRIDGE_URL: "http://bridge:8791",
+                    CONF_BRIDGE_TOKEN: "tok",
+                }
+            }
+        },
+    )
+    coordinator = mock_config_entry.runtime_data.coordinator
+    assert coordinator.token_source is mock_bridge.async_get_cloud_token
+
+
+async def test_discovered_addon_supplies_the_token_source(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no bridge configured, the discovered add-on is asked instead.
+
+    It has to be in place before the first poll: a restart after the token has
+    died overnight fails on that very first call.
+    """
+    monkeypatch.setattr(
+        "custom_components.furbo.async_discover_bridge",
+        AsyncMock(
+            return_value=DiscoveredBridge(
+                slug="abc_furbo_bridge", host="abc-furbo-bridge", token="tok"
+            )
+        ),
+    )
+    mock_client.get_devices.side_effect = [
+        FurboAuthError("expired"),
+        [dict(c.DEVICE)],
+    ]
+    mock_bridge.async_get_cloud_token.return_value = (c.ACCOUNT_ID, "FRESH-TOKEN")
+
+    await setup_integration(hass, mock_config_entry)
+
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert mock_config_entry.data[CONF_COGNITO_TOKEN] == "FRESH-TOKEN"
 
 
 async def test_multiple_entries(hass: HomeAssistant, mock_client: AsyncMock) -> None:

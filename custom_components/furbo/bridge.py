@@ -217,6 +217,24 @@ class FurboBridgeClient:
             raise FurboBridgeUnavailable(message, status)
         raise FurboBridgeError(message, status)
 
+    async def async_get_cloud_token(self) -> tuple[str, str]:
+        """Return the account id and cloud token the bridge is logged in with.
+
+        The add-on holds the account password and logs in again by itself, so
+        it always has a current one. The integration does not, by design, and
+        the cloud's token is short lived with nothing to refresh it.
+        """
+        body = await self._request("GET", "/api/cloud-token", None, scoped=False)
+        if not isinstance(body, dict):
+            raise FurboBridgeError("Malformed bridge response from /api/cloud-token")
+        account_id = body.get("account_id")
+        token = body.get("cognito_token")
+        if not isinstance(account_id, str) or not isinstance(token, str):
+            raise FurboBridgeError("Bridge returned no usable cloud credentials")
+        if not account_id or not token:
+            raise FurboBridgeError("Bridge returned empty cloud credentials")
+        return account_id, token
+
     async def async_get_status(self) -> BridgeState:
         """Return the bridge's cached view of the camera."""
         return parse_state(await self._request("GET", "/api/status", None))

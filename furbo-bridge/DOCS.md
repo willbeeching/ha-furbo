@@ -132,6 +132,13 @@ ports also works.
   add-on says so, reports `needs_login` on `GET /api/status`, and backs off
   instead of retrying into the rate limiter. Recover by setting a fresh
   `mfa_code` with `reset_session` on, then turning `reset_session` back off.
+- **The integration borrows this add-on's cloud token.** Furbo's login returns
+  a token that lasts about a day and nothing to renew it with, so an
+  integration on its own has to ask you to sign in again. The add-on holds the
+  password, so it can log in again unattended, and serves the token it is
+  using on `GET /api/cloud-token`. When the cloud refuses the integration's
+  token it takes the add-on's and carries on, and only asks for a sign-in when
+  there is no add-on to ask or the add-on is locked out too.
 - **The full poll waits on replies, not on a timer.** Each of the thirteen
   settings reads is awaited individually and moves on the moment the camera
   answers, so the sweep costs one round trip per setting. It used to sleep a

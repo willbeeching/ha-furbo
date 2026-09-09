@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -17,8 +19,11 @@ from .api import FurboAuthError, FurboClient, FurboError
 from .bridge import BridgeState, FurboBridgeClient, FurboBridgeError
 from .const import (
     BRIDGE_SCAN_INTERVAL,
+    CONF_ACCOUNT_ID,
+    CONF_COGNITO_TOKEN,
     CONF_EVENTS_ENABLED,
     CONF_SCAN_INTERVAL,
+    CONF_TOKEN_ISSUED_AT,
     DEFAULT_EVENTS_ENABLED,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -85,6 +90,10 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
             update_interval=interval,
         )
         self.client = client
+        # Set once the bridges are built: the add-on holds the account
+        # password and logs in again by itself, so it can hand over a current
+        # cloud token when this one is rejected.
+        self.token_source: Callable[[], Awaitable[tuple[str, str]]] | None = None
         self.hub_device_id: str | None = None
         self._tzinfo: ZoneInfo | None = None
         self._timezone_name: str | None = None
@@ -99,7 +108,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
     async def _async_setup(self) -> None:
         """One-off setup: learn the account timezone for event timestamps."""
         try:
-            info = await self.client.get_account_info()
+            info = await self._async_account_info()
         except FurboAuthError as err:
             raise ConfigEntryAuthFailed from err
         except FurboError as err:
@@ -110,6 +119,18 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
                 self._tzinfo = ZoneInfo(self._timezone_name)
             except (ZoneInfoNotFoundError, ValueError):
                 self._tzinfo = None
+
+    async def _async_account_info(self) -> dict[str, Any]:
+        """Read the account, replacing a refused token once if we can.
+
+        A restart after the token has died overnight lands here first.
+        """
+        try:
+            return await self.client.get_account_info()
+        except FurboAuthError:
+            if not await self._async_replace_token():
+                raise
+        return await self.client.get_account_info()
 
     def _today(self) -> date:
         """Return today's date in the account's timezone."""
@@ -125,7 +146,55 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         tz = self._tzinfo or dt_util.get_default_time_zone()
         return naive.replace(tzinfo=tz)
 
+    def _token_age(self) -> str:
+        """How old the stored cloud token is, for the log when it is refused."""
+        issued = self.config_entry.data.get(CONF_TOKEN_ISSUED_AT)
+        if not isinstance(issued, (int, float)):
+            return "age unknown"
+        return f"issued {(time.time() - issued) / 3600:.1f}h ago"
+
+    async def _async_replace_token(self) -> bool:
+        """Take a current cloud token from the bridge. True if one was given.
+
+        The cloud issues a short-lived token and nothing to refresh it with,
+        and this integration does not store the account password, so without
+        the add-on the only way back is a person entering an emailed code.
+        """
+        _LOGGER.debug("Cloud rejected the token (%s)", self._token_age())
+        if self.token_source is None:
+            return False
+        try:
+            account_id, token = await self.token_source()
+        except FurboBridgeError as err:
+            _LOGGER.debug("No cloud token from the bridge: %s", err)
+            return False
+        if token == self.client.cognito_token:
+            # The bridge is offering the same token that was just refused.
+            return False
+        self.client.account_id = account_id
+        self.client.cognito_token = token
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            data={
+                **self.config_entry.data,
+                CONF_ACCOUNT_ID: account_id,
+                CONF_COGNITO_TOKEN: token,
+                CONF_TOKEN_ISSUED_AT: time.time(),
+            },
+        )
+        _LOGGER.info("Took a fresh cloud token from the Furbo Bridge add-on")
+        return True
+
     async def _async_update_data(self) -> FurboData:
+        """Fetch the account, replacing a refused token once if we can."""
+        try:
+            return await self._async_fetch()
+        except ConfigEntryAuthFailed:
+            if not await self._async_replace_token():
+                raise
+        return await self._async_fetch()
+
+    async def _async_fetch(self) -> FurboData:
         """Fetch devices, alerts, subscription and (optionally) the calendar."""
         try:
             device_list = await self.client.get_devices()

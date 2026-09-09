@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import logging
+import time
 from typing import Any
 
 from homeassistant.config_entries import (
@@ -47,6 +48,7 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_STREAM_URL,
     CONF_STREAM_URLS,
+    CONF_TOKEN_ISSUED_AT,
     CONFIG_ENTRY_VERSION,
     DEFAULT_EVENTS_ENABLED,
     DEFAULT_SCAN_INTERVAL,
@@ -182,6 +184,9 @@ class FurboConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_ACCOUNT_ID: self._client.account_id,
             CONF_COGNITO_TOKEN: self._client.cognito_token,
             CONF_MOBILE_ID: self._mobile_id,
+            # Only for the log line when the cloud later refuses the token:
+            # how long it lasted is the one thing we cannot read off it.
+            CONF_TOKEN_ISSUED_AT: time.time(),
         }
         await self.async_set_unique_id(self._client.account_id)
 

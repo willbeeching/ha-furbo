@@ -14,6 +14,9 @@ CONFIG_ENTRY_VERSION: Final = 3
 CONF_ACCOUNT_ID: Final = "account_id"
 CONF_COGNITO_TOKEN: Final = "cognito_token"
 CONF_MOBILE_ID: Final = "mobile_id"
+# When the stored cloud token was issued, so its age can be reported when the
+# cloud rejects it. The token is short lived and carries no expiry of its own.
+CONF_TOKEN_ISSUED_AT: Final = "token_issued_at"
 
 # Options keys.
 CONF_SCAN_INTERVAL: Final = "scan_interval"

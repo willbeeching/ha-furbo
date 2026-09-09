@@ -390,3 +390,50 @@ def test_one_camera_streaming_does_not_block_another() -> None:
         assert await second.read() == b"frame"
 
     _run(scenario, extra=["67890"])
+
+
+def with_session(session: dict[str, Any], scenario: Any) -> None:
+    """Run a scenario with the bridge's stored cloud session stubbed."""
+
+    def credentials() -> dict[str, str]:
+        if not session.get("account_id") or not session.get("cognito_token"):
+            raise SystemExit("no cloud session yet")
+        return {
+            "account_id": session["account_id"],
+            "cognito_token": session["cognito_token"],
+        }
+
+    original = fb.fp.session_credentials
+    fb.fp.session_credentials = credentials  # type: ignore[assignment]
+    try:
+        _run(scenario)
+    finally:
+        fb.fp.session_credentials = original  # type: ignore[assignment]
+
+
+def test_cloud_token_is_served_behind_the_token() -> None:
+    """The integration can take a current cloud session from the bridge.
+
+    The cloud's token is short lived and has nothing to refresh it, and the
+    integration deliberately does not store the account password, so without
+    this it needs a person to enter an emailed code roughly daily.
+    """
+
+    async def scenario(client: Any, worker: Any) -> None:
+        resp = await client.get("/api/cloud-token", headers=AUTH)
+        assert resp.status == 200
+        assert await resp.json() == {"account_id": "A1", "cognito_token": "T1"}
+        # And it is not readable without the bearer token.
+        assert (await client.get("/api/cloud-token")).status == 401
+
+    with_session({"account_id": "A1", "cognito_token": "T1"}, scenario)
+
+
+def test_cloud_token_before_a_login_is_unavailable() -> None:
+    """With no session yet there is nothing to hand over."""
+
+    async def scenario(client: Any, worker: Any) -> None:
+        resp = await client.get("/api/cloud-token", headers=AUTH)
+        assert resp.status == 503
+
+    with_session({}, scenario)

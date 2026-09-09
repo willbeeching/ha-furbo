@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 import logging
 from typing import Any
@@ -28,7 +28,12 @@ from .const import (
     MANUFACTURER,
 )
 from .coordinator import FurboBridgeCoordinator, FurboCoordinator
-from .discovery import RTSP_USERNAME, async_discover_bridge, rtsp_password
+from .discovery import (
+    RTSP_USERNAME,
+    DiscoveredBridge,
+    async_discover_bridge,
+    rtsp_password,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +57,9 @@ class FurboRuntimeData:
     bridges: dict[str, FurboBridgeCoordinator] = field(default_factory=dict)
     # Per-camera live-stream URL (configured, or the discovered add-on's).
     stream_urls: dict[str, str] = field(default_factory=dict)
+    # The options this runtime was built from, so the update listener can tell
+    # an options change (rebuild) from a data change (nothing to rebuild).
+    options: dict[str, Any] = field(default_factory=dict)
 
 
 type FurboConfigEntry = ConfigEntry[FurboRuntimeData]
@@ -116,6 +124,35 @@ async def async_migrate_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> b
     return True
 
 
+def _token_source(
+    hass: HomeAssistant,
+    entry: FurboConfigEntry,
+    discovered: DiscoveredBridge | None,
+) -> Callable[[], Awaitable[tuple[str, str]]] | None:
+    """Build a way to fetch a current cloud token from a bridge.
+
+    The cloud token is short lived and comes with nothing to refresh it with,
+    and this integration deliberately does not store the account password. The
+    add-on does, and logs in again by itself, so it can supply a current one.
+    Any bridge will do: the token belongs to the account, not to a camera, so
+    this asks the first configured one and falls back to the discovered add-on.
+    """
+    for conf in (entry.options.get(CONF_BRIDGES) or {}).values():
+        url = conf.get(CONF_BRIDGE_URL) if isinstance(conf, dict) else None
+        if not url:
+            continue
+        client = FurboBridgeClient(
+            async_get_clientsession(hass), url, conf.get(CONF_BRIDGE_TOKEN)
+        )
+        return client.async_get_cloud_token
+    if discovered is None:
+        return None
+    client = FurboBridgeClient(
+        async_get_clientsession(hass), discovered.bridge_url, discovered.token
+    )
+    return client.async_get_cloud_token
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> bool:
     """Set up Furbo from a config entry."""
     client = FurboClient(
@@ -124,6 +161,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
         cognito_token=entry.data[CONF_COGNITO_TOKEN],
     )
     coordinator = FurboCoordinator(hass, entry, client)
+    # Find the bridge before the first poll, not after it: a restart once the
+    # cloud token has expired overnight fails on that very first call, and the
+    # add-on is the only thing that can hand over a fresh token without asking
+    # a person for an emailed code.
+    discovered = await async_discover_bridge(hass)
+    coordinator.token_source = _token_source(hass, entry, discovered)
     await coordinator.async_config_entry_first_refresh()
 
     # Register the account hub device up front so cameras can reference it via
@@ -143,7 +186,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
     # Resolve each camera's bridge and stream. Explicit options win; otherwise
     # fall back to the Furbo Bridge add-on if it is running, so the camera and
     # its controls appear automatically with no manual configuration.
-    discovered = await async_discover_bridge(hass)
     configured_bridges: dict[str, dict[str, str]] = entry.options.get(CONF_BRIDGES, {})
     configured_streams: dict[str, str] = entry.options.get(CONF_STREAM_URLS, {})
 
@@ -194,7 +236,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
             stream_urls[device_id] = stream
 
     entry.runtime_data = FurboRuntimeData(
-        coordinator=coordinator, bridges=bridges, stream_urls=stream_urls
+        coordinator=coordinator,
+        bridges=bridges,
+        stream_urls=stream_urls,
+        options=dict(entry.options),
     )
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -207,5 +252,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> bo
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> None:
-    """Reload the entry when its options change."""
+    """Reload the entry when its options change.
+
+    The listener fires for any update, including the coordinator writing a
+    fresh cloud token into ``entry.data``. Nothing set up here depends on the
+    token, and reloading mid-poll would tear the coordinator down underneath
+    itself, so only an options change rebuilds the entry.
+    """
+    runtime = getattr(entry, "runtime_data", None)
+    if runtime is not None and runtime.options == dict(entry.options):
+        return
     await hass.config_entries.async_reload(entry.entry_id)

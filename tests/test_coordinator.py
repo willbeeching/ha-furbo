@@ -16,6 +16,12 @@ from custom_components.furbo.api import (
     FurboConnectionError,
     FurboError,
 )
+from custom_components.furbo.bridge import FurboBridgeError
+from custom_components.furbo.const import (
+    CONF_ACCOUNT_ID,
+    CONF_COGNITO_TOKEN,
+    CONF_TOKEN_ISSUED_AT,
+)
 
 from . import const as c
 from .conftest import setup_integration
@@ -184,3 +190,72 @@ async def test_calendar_auth_error_triggers_reauth(
     mock_client.get_notable_events.side_effect = FurboAuthError("bad token")
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_update_data()
+
+
+async def test_expired_token_replaced_from_the_bridge(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A refused token is swapped for the add-on's and the poll retried."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    coordinator.token_source = AsyncMock(return_value=("ACCOUNT-2", "FRESH-TOKEN"))
+
+    attempts = 0
+
+    def _devices() -> list[dict[str, object]]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise FurboAuthError("expired")
+        return [dict(c.DEVICE)]
+
+    mock_client.get_devices.side_effect = _devices
+    data = await coordinator._async_update_data()
+
+    assert attempts == 2
+    assert set(data.devices) == {c.DEVICE_ID}
+    assert mock_client.cognito_token == "FRESH-TOKEN"
+    assert mock_config_entry.data[CONF_COGNITO_TOKEN] == "FRESH-TOKEN"
+    assert mock_config_entry.data[CONF_ACCOUNT_ID] == "ACCOUNT-2"
+    assert isinstance(mock_config_entry.data[CONF_TOKEN_ISSUED_AT], float)
+
+
+async def test_expired_token_without_a_bridge_still_reauths(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """With no add-on to ask, an expired token still sends the user to reauth."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    assert coordinator.token_source is None
+    mock_client.get_devices.side_effect = FurboAuthError("expired")
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+
+async def test_unreachable_bridge_still_reauths(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A bridge that cannot answer does not swallow the reauth."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    coordinator.token_source = AsyncMock(side_effect=FurboBridgeError("down"))
+    mock_client.get_devices.side_effect = FurboAuthError("expired")
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+
+async def test_bridge_offering_the_same_token_still_reauths(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """The token just refused is not worth retrying with."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    coordinator.token_source = AsyncMock(
+        return_value=(c.ACCOUNT_ID, c.COGNITO_TOKEN),
+    )
+    mock_client.get_devices.side_effect = FurboAuthError("expired")
+    before = mock_client.get_devices.await_count
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+    # One attempt, not a second with the token the cloud had just refused.
+    assert mock_client.get_devices.await_count == before + 1

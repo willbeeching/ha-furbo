@@ -626,6 +626,22 @@ async def silent_relogin() -> dict:
     return session
 
 
+def session_credentials() -> dict[str, str]:
+    """The account id and cloud token this bridge is currently logged in with.
+
+    The cloud issues no refresh token and the one it does issue is short
+    lived, so a client that cannot log in for itself (the integration does not
+    store the account password, deliberately) can take a current one from here
+    instead of asking a person for a code every day.
+    """
+    session = _load_session()
+    account_id = session.get("account_id")
+    token = session.get("cognito_token")
+    if not account_id or not token:
+        raise SystemExit("no cloud session yet")
+    return {"account_id": str(account_id), "cognito_token": str(token)}
+
+
 def session_devices() -> list[dict[str, str]]:
     """The cameras the stored session knows about, without calling the cloud.
 

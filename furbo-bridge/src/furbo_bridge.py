@@ -764,6 +764,19 @@ def create_app(
         except BridgeUnavailable as exc:
             return web.json_response({"error": "p2p_unavailable", "detail": str(exc)}, status=503)
 
+    async def get_cloud_token(request: web.Request) -> web.Response:
+        """Hand out the account's current cloud credentials.
+
+        Behind the same bearer token as the controls, and never logged. The
+        cloud's token is short lived with nothing to refresh it, so a client
+        that cannot log in for itself would otherwise need a person to enter
+        an emailed code every day.
+        """
+        try:
+            return web.json_response(fp.session_credentials())
+        except SystemExit as exc:
+            raise BridgeUnavailable(str(exc)) from None
+
     async def get_cameras(request: web.Request) -> web.Response:
         """Every camera this bridge serves, so a client can find the rest."""
         return web.json_response(
@@ -854,7 +867,10 @@ def create_app(
         return response
 
     app = web.Application(middlewares=[auth_and_errors])
-    routes = [web.get("/api/cameras", get_cameras)]
+    routes = [
+        web.get("/api/cameras", get_cameras),
+        web.get("/api/cloud-token", get_cloud_token),
+    ]
     # Each operation twice: unscoped for the primary camera (what a
     # single-camera bridge has always served) and scoped by device id.
     for path, method, handler in (

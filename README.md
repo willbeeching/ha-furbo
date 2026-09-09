@@ -81,6 +81,12 @@ The integration finds the running add-on automatically: open the Furbo
 integration's **Configure** and the camera's stream URL, bridge URL and token
 are already filled in — just submit.
 
+Having the add-on also stops the daily sign-in prompt. Furbo's login hands out
+a token that lasts about a day, with nothing to renew it with, so the
+integration alone has to ask you for the emailed code again. The add-on keeps
+the password and logs in by itself, and the integration takes the token from
+it when the cloud rejects its own.
+
 ## Live video
 
 Furbo offers no RTSP or ONVIF stream. Its app receives video over a

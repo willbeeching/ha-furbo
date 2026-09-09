@@ -3,6 +3,15 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.0-beta.2
+
+- The add-on hands its cloud token to the integration. Furbo's login gives out
+  a short-lived token and nothing to renew it with, so the integration was
+  asking you to sign in again about once a day. The add-on keeps the account
+  password and logs in again by itself, and now serves the token it holds on
+  `GET /api/cloud-token`, so the integration takes a current one instead of
+  putting up a reauth prompt. Needs the matching integration update.
+
 ## 1.2.0-beta.1
 
 - An account with more than one Furbo is supported. The add-on used to refuse
