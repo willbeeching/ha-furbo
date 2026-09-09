@@ -3,7 +3,19 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
-## 1.2.0-beta.2
+## 1.2.0-beta.3
+
+- The token handed to the integration is checked with the cloud first, and
+  renewed if it has died. The add-on only used to log in again when a camera
+  reconnected, so a camera that stayed connected for days could leave a dead
+  token in the session file and hand that over.
+- Only one login runs at a time. Each camera reconnects in a thread of its
+  own and the HTTP API in the event loop, so a dead token is noticed in
+  several places at once, and a burst of logins is what the cloud's rate
+  limiter answers with a lockout. A caller that finds someone else has
+  already logged in uses that session instead of logging in again.
+
+## 1.2.0-beta.3
 
 - The add-on hands its cloud token to the integration. Furbo's login gives out
   a short-lived token and nothing to renew it with, so the integration was

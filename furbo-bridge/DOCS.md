@@ -136,9 +136,17 @@ ports also works.
   a token that lasts about a day and nothing to renew it with, so an
   integration on its own has to ask you to sign in again. The add-on holds the
   password, so it can log in again unattended, and serves the token it is
-  using on `GET /api/cloud-token`. When the cloud refuses the integration's
+  using on `GET /api/cloud-token`, checking it with the cloud first and
+  logging in again if it has died. When the cloud refuses the integration's
   token it takes the add-on's and carries on, and only asks for a sign-in when
-  there is no add-on to ask or the add-on is locked out too.
+  there is no add-on to ask or the add-on is locked out too. The integration
+  refuses a token for a different Furbo account, so a bridge signed in
+  elsewhere cannot quietly repoint it.
+- **One login at a time.** Every camera holds its own session and reconnects
+  in a thread of its own, so a dead token is noticed in several places at the
+  same moment. Logins are serialized, and a caller that finds another has
+  already replaced the token uses that one rather than asking the cloud for a
+  second, which is what the rate limiter answers with a lockout.
 - **The full poll waits on replies, not on a timer.** Each of the thirteen
   settings reads is awaited individually and moves on the moment the camera
   answers, so the sweep costs one round trip per setting. It used to sleep a

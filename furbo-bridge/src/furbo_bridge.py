@@ -770,12 +770,18 @@ def create_app(
         Behind the same bearer token as the controls, and never logged. The
         cloud's token is short lived with nothing to refresh it, so a client
         that cannot log in for itself would otherwise need a person to enter
-        an emailed code every day.
+        an emailed code every day. The token handed out has just been checked
+        with the cloud, and renewed if it had died.
         """
+        loop = asyncio.get_running_loop()
         try:
-            return web.json_response(fp.session_credentials())
+            # In a thread: this checks the token with the cloud and may log in
+            # again, which takes a lock the camera threads hold across their
+            # own logins.
+            creds = await loop.run_in_executor(None, fp.refreshed_credentials)
         except SystemExit as exc:
             raise BridgeUnavailable(str(exc)) from None
+        return web.json_response(creds)
 
     async def get_cameras(request: web.Request) -> web.Response:
         """Every camera this bridge serves, so a client can find the rest."""

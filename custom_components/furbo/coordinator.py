@@ -19,7 +19,6 @@ from .api import FurboAuthError, FurboClient, FurboError
 from .bridge import BridgeState, FurboBridgeClient, FurboBridgeError
 from .const import (
     BRIDGE_SCAN_INTERVAL,
-    CONF_ACCOUNT_ID,
     CONF_COGNITO_TOKEN,
     CONF_EVENTS_ENABLED,
     CONF_SCAN_INTERVAL,
@@ -159,6 +158,10 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         The cloud issues a short-lived token and nothing to refresh it with,
         and this integration does not store the account password, so without
         the add-on the only way back is a person entering an emailed code.
+
+        The bridge's token is only taken when it belongs to the account this
+        entry was set up with; a bridge signed in elsewhere is refused rather
+        than quietly repointing the entry at another account.
         """
         _LOGGER.debug("Cloud rejected the token (%s)", self._token_age())
         if self.token_source is None:
@@ -168,16 +171,25 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         except FurboBridgeError as err:
             _LOGGER.debug("No cloud token from the bridge: %s", err)
             return False
+        if account_id != self.client.account_id:
+            # A bridge signed in to a different Furbo account. Its token would
+            # authenticate, and every poll after it would read another
+            # account's cameras through entities, a unique id and a device
+            # registry that all belong to this one.
+            _LOGGER.warning(
+                "The Furbo Bridge add-on is signed in to a different Furbo "
+                "account, so its cloud token was not used. Point the bridge at "
+                "this account, or sign in to Furbo again to restore this one"
+            )
+            return False
         if token == self.client.cognito_token:
             # The bridge is offering the same token that was just refused.
             return False
-        self.client.account_id = account_id
         self.client.cognito_token = token
         self.hass.config_entries.async_update_entry(
             self.config_entry,
             data={
                 **self.config_entry.data,
-                CONF_ACCOUNT_ID: account_id,
                 CONF_COGNITO_TOKEN: token,
                 CONF_TOKEN_ISSUED_AT: time.time(),
             },

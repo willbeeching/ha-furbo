@@ -594,12 +594,42 @@ async def cloud_status(days: int) -> None:
             print(f"  {date}: none")
 
 
-async def silent_relogin() -> dict:
+# Every login goes through this, so two of them never run at once. Each camera
+# reconnects in a thread of its own and the HTTP API runs in the event loop, so
+# a dead token is noticed in several places at the same moment, and a burst of
+# logins is what the cloud's rate limiter (80002) answers with a lockout.
+_LOGIN_LOCK = threading.Lock()
+
+
+async def silent_relogin(stale_token: str | None = None) -> dict:
     """Log in again with the stored device id, keeping the same session file.
+
+    Pass the token that was refused to skip the login when someone else has
+    already replaced it: the caller then gets the session that is now stored.
 
     Raises MfaRequired when the cloud wants an emailed code, which nothing here
     can answer, and SystemExit when there are no credentials to try.
     """
+    with _LOGIN_LOCK:
+        if stale_token is not None:
+            current = _session_or_none()
+            token = (current or {}).get("cognito_token")
+            if current is not None and token and token != stale_token:
+                log("another login has already refreshed the session")
+                return current
+        return await _login_again()
+
+
+def _session_or_none() -> dict | None:
+    """The stored session, or None when there is not one to read."""
+    try:
+        return json.loads(SESSION_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+async def _login_again() -> dict:
+    """Log in with the stored credentials. Callers hold ``_LOGIN_LOCK``."""
     import aiohttp
 
     env = _env_file()
@@ -626,20 +656,54 @@ async def silent_relogin() -> dict:
     return session
 
 
-def session_credentials() -> dict[str, str]:
-    """The account id and cloud token this bridge is currently logged in with.
+async def current_credentials() -> dict[str, str]:
+    """The account id and a cloud token that the cloud has just accepted.
 
     The cloud issues no refresh token and the one it does issue is short
     lived, so a client that cannot log in for itself (the integration does not
     store the account password, deliberately) can take a current one from here
     instead of asking a person for a code every day.
+
+    The stored token is checked rather than trusted. Nothing else renews it on
+    a schedule: a camera whose P2P session stays up does not call the cloud
+    for days, so the token in the session file can be as dead as the caller's
+    own by the time it is asked for.
     """
+    import aiohttp
+
     session = _load_session()
     account_id = session.get("account_id")
     token = session.get("cognito_token")
     if not account_id or not token:
         raise SystemExit("no cloud session yet")
-    return {"account_id": str(account_id), "cognito_token": str(token)}
+    async with aiohttp.ClientSession() as http:
+        client = FurboClient(http, str(account_id), str(token))
+        try:
+            await client.get_account_info()
+        except FurboError as exc:
+            if exc.code != 12002:
+                raise _cloud_fail(exc) from exc
+            log("cloud rejected the stored token; logging in again")
+            try:
+                session = await silent_relogin(str(token))
+            except MfaRequired as mfa:
+                raise SystemExit(
+                    f"Cloud rejected the token and {mfa}. Set a fresh mfa_code "
+                    "and reset_session in the add-on options, then restart it."
+                ) from None
+    return {
+        "account_id": str(session["account_id"]),
+        "cognito_token": str(session["cognito_token"]),
+    }
+
+
+def refreshed_credentials() -> dict[str, str]:
+    """Blocking form of :func:`current_credentials`, to run in a thread.
+
+    The renewal it may do takes the process-wide login lock, which the camera
+    threads hold across their own logins, so it must not run on the event loop.
+    """
+    return asyncio.run(current_credentials())
 
 
 def session_devices() -> list[dict[str, str]]:
@@ -696,7 +760,7 @@ async def fetch_p2p_credentials(device_id: str | None) -> dict:
             # without a code, so try that before giving up on a person.
             log("cloud rejected the stored token; logging in again")
             try:
-                session = await silent_relogin()
+                session = await silent_relogin(str(session["cognito_token"]))
             except MfaRequired as mfa:
                 raise SystemExit(
                     f"Cloud rejected the token and {mfa}. Set a fresh mfa_code "

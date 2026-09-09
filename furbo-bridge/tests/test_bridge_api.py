@@ -393,7 +393,7 @@ def test_one_camera_streaming_does_not_block_another() -> None:
 
 
 def with_session(session: dict[str, Any], scenario: Any) -> None:
-    """Run a scenario with the bridge's stored cloud session stubbed."""
+    """Run a scenario with the bridge's cloud credentials stubbed."""
 
     def credentials() -> dict[str, str]:
         if not session.get("account_id") or not session.get("cognito_token"):
@@ -403,12 +403,12 @@ def with_session(session: dict[str, Any], scenario: Any) -> None:
             "cognito_token": session["cognito_token"],
         }
 
-    original = fb.fp.session_credentials
-    fb.fp.session_credentials = credentials  # type: ignore[assignment]
+    original = fb.fp.refreshed_credentials
+    fb.fp.refreshed_credentials = credentials  # type: ignore[assignment]
     try:
         _run(scenario)
     finally:
-        fb.fp.session_credentials = original  # type: ignore[assignment]
+        fb.fp.refreshed_credentials = original  # type: ignore[assignment]
 
 
 def test_cloud_token_is_served_behind_the_token() -> None:

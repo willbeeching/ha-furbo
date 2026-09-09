@@ -342,3 +342,68 @@ async def test_an_unknown_bridge_still_names_its_camera(
     assert "/api/cameras/cam-b/toss" in [
         str(c[1].path) for c in aioclient_mock.mock_calls
     ]
+
+
+async def test_cloud_token_is_read_and_sends_the_token(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """The account's current cloud credentials come back as a pair."""
+    aioclient_mock.get(
+        f"{BASE}/api/cloud-token",
+        json={"account_id": "ACC1", "cognito_token": "T1"},
+    )
+    assert await _client(hass).async_get_cloud_token() == ("ACC1", "T1")
+    assert aioclient_mock.mock_calls[0][3]["Authorization"] == "Bearer tok"
+
+
+async def test_cloud_token_is_never_camera_scoped(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """The token belongs to the account, so it is read from the plain path."""
+    aioclient_mock.get(
+        f"{BASE}/api/cloud-token",
+        json={"account_id": "ACC1", "cognito_token": "T1"},
+    )
+    client = FurboBridgeClient(
+        async_get_clientsession(hass), BASE + "/", "tok", device_id="cam-a"
+    )
+    await client.async_get_cloud_token()
+    assert [str(c[1].path) for c in aioclient_mock.mock_calls] == ["/api/cloud-token"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"account_id": "ACC1"},
+        {"cognito_token": "T1"},
+        {"account_id": "ACC1", "cognito_token": ""},
+        {"account_id": "", "cognito_token": "T1"},
+        {"account_id": 1, "cognito_token": "T1"},
+        ["ACC1", "T1"],
+    ],
+)
+async def test_cloud_token_rejects_a_useless_answer(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, body: Any
+) -> None:
+    """Half a credential is worse than none: it would look like a live token."""
+    aioclient_mock.get(f"{BASE}/api/cloud-token", json=body)
+    with pytest.raises(FurboBridgeError):
+        await _client(hass).async_get_cloud_token()
+
+
+async def test_cloud_token_before_the_addon_has_logged_in(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A bridge with no session yet answers 503, which is not an auth failure."""
+    aioclient_mock.get(f"{BASE}/api/cloud-token", status=503, json={"error": "x"})
+    with pytest.raises(FurboBridgeUnavailable):
+        await _client(hass).async_get_cloud_token()
+
+
+async def test_cloud_token_with_the_wrong_bridge_token(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A bridge token that does not match is an auth error, not a bad body."""
+    aioclient_mock.get(f"{BASE}/api/cloud-token", status=401, json={"error": "x"})
+    with pytest.raises(FurboBridgeAuthError):
+        await _client(hass).async_get_cloud_token()

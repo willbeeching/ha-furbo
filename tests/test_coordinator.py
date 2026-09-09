@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from unittest.mock import AsyncMock
 
 from homeassistant.config_entries import ConfigEntryState
@@ -19,6 +21,9 @@ from custom_components.furbo.api import (
 from custom_components.furbo.bridge import FurboBridgeError
 from custom_components.furbo.const import (
     CONF_ACCOUNT_ID,
+    CONF_BRIDGE_TOKEN,
+    CONF_BRIDGE_URL,
+    CONF_BRIDGES,
     CONF_COGNITO_TOKEN,
     CONF_TOKEN_ISSUED_AT,
 )
@@ -198,7 +203,7 @@ async def test_expired_token_replaced_from_the_bridge(
     """A refused token is swapped for the add-on's and the poll retried."""
     await setup_integration(hass, mock_config_entry)
     coordinator = mock_config_entry.runtime_data.coordinator
-    coordinator.token_source = AsyncMock(return_value=("ACCOUNT-2", "FRESH-TOKEN"))
+    coordinator.token_source = AsyncMock(return_value=(c.ACCOUNT_ID, "FRESH-TOKEN"))
 
     attempts = 0
 
@@ -216,7 +221,7 @@ async def test_expired_token_replaced_from_the_bridge(
     assert set(data.devices) == {c.DEVICE_ID}
     assert mock_client.cognito_token == "FRESH-TOKEN"
     assert mock_config_entry.data[CONF_COGNITO_TOKEN] == "FRESH-TOKEN"
-    assert mock_config_entry.data[CONF_ACCOUNT_ID] == "ACCOUNT-2"
+    assert mock_config_entry.data[CONF_ACCOUNT_ID] == c.ACCOUNT_ID
     assert isinstance(mock_config_entry.data[CONF_TOKEN_ISSUED_AT], float)
 
 
@@ -259,3 +264,73 @@ async def test_bridge_offering_the_same_token_still_reauths(
         await coordinator._async_update_data()
     # One attempt, not a second with the token the cloud had just refused.
     assert mock_client.get_devices.await_count == before + 1
+
+
+async def test_a_bridge_on_another_account_is_refused(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A token for a different Furbo account must never be adopted.
+
+    It would authenticate, and this entry would then be reading another
+    account's cameras behind a unique id, devices and entities that belong to
+    the account it was set up with.
+    """
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    coordinator.token_source = AsyncMock(return_value=("SOMEONE-ELSE", "THEIR-TOKEN"))
+    mock_client.get_devices.side_effect = FurboAuthError("expired")
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+    assert mock_client.cognito_token == c.COGNITO_TOKEN
+    assert mock_client.account_id == c.ACCOUNT_ID
+    assert mock_config_entry.data[CONF_COGNITO_TOKEN] == c.COGNITO_TOKEN
+    assert mock_config_entry.data[CONF_ACCOUNT_ID] == c.ACCOUNT_ID
+    assert "different Furbo account" in caplog.text
+
+
+async def test_setup_after_the_token_died_overnight(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    mock_bridge: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A restart with a dead token loads from the add-on's, not a reauth.
+
+    The very first call of a restart is the account read, before there is any
+    coordinator data to work from, which is why the bridge is resolved before
+    the first refresh rather than after it.
+    """
+    caplog.set_level(logging.DEBUG, logger="custom_components.furbo.coordinator")
+    mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        data={**mock_config_entry.data, CONF_TOKEN_ISSUED_AT: time.time() - 26 * 3600},
+        options={
+            CONF_BRIDGES: {
+                c.DEVICE_ID: {
+                    CONF_BRIDGE_URL: "http://bridge:8791",
+                    CONF_BRIDGE_TOKEN: "tok",
+                }
+            }
+        },
+    )
+    mock_bridge.async_get_cloud_token.return_value = (c.ACCOUNT_ID, "FRESH-TOKEN")
+    mock_client.get_account_info.side_effect = [
+        FurboAuthError("expired"),
+        c.ACCOUNT_INFO,
+    ]
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert mock_config_entry.data[CONF_COGNITO_TOKEN] == "FRESH-TOKEN"
+    # The log says how long the dead token had lasted, which is the only way
+    # to learn the cloud's actual token lifetime.
+    assert "issued 26.0h ago" in caplog.text
