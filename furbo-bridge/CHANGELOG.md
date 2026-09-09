@@ -3,7 +3,7 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
-## 1.2.0
+## 1.2.0-beta.1
 
 - An account with more than one Furbo is supported. The add-on used to refuse
   to guess between cameras and ask for a `device_id`, which left a second
