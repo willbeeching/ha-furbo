@@ -92,8 +92,15 @@ ports also works.
   because the camera's P2P credential is reissued on every cloud fetch, the two
   sessions invalidated each other's key and both failed to authenticate
   (`avClientStartEx -20011`), which could wedge video and controls for hours.
-  Talkback still opens its own short-lived session while the microphone is
-  open, so it remains the one place that can hit this; it is next to move.
+  Talkback did the same thing, opening its own session while the microphone
+  was open, so it is not wired up in this version. `talk.sh` is still in the
+  image and returns once it reads from the shared session and that has been
+  tested against a camera: microphone, video and controls at once, repeated
+  microphone start and stop without interrupting video, clean recovery across
+  a disconnect, and two cameras staying independent. Note what this does and
+  does not buy: it removes the one competing session we know about, not every
+  way a session can be invalidated. The cloud reissuing the credential can
+  still do it, which is why the bridge logs in again by itself.
 - **Spotting a bad connection:** `GET /api/status` reports `session_mode`.
   `LAN` or `P2P` is a direct path; `relay` means the traffic is going out to a
   Kalay relay, which makes commands slow and can stop video starting at all.

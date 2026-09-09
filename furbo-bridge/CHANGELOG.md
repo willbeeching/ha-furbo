@@ -19,6 +19,13 @@ that ships to users gets an entry here.
   once per camera. It is global to the process, so a second camera used to
   fail to start it, and whichever camera reconnected first shut it down for
   the others.
+- Talkback is not wired up in this version. It opened a second P2P session to
+  the camera while the microphone was open, and because the camera reissues
+  its P2P credential on every fetch, that session and the bridge's own could
+  invalidate each other and take video and controls with them. It returns once
+  it runs over the shared session and that has been tested on real hardware.
+  This removes the one competing session we know about, not every way a
+  session can be invalidated.
 - A video stream now always ends. When a viewer fell too far behind, the
   reader's end-of-stream signal could be discarded, leaving the request
   waiting for a frame that would never arrive and holding that camera's video

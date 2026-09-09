@@ -119,7 +119,6 @@ def test_go2rtc_config_has_a_stream_per_camera() -> None:
     assert "  furbo_111:" in config
     assert "  furbo_222:" in config
     assert "/app/stream.sh {output} 222#" in config
-    assert "/app/talk.sh 222#backchannel=1" in config
     # The template's own settings survive.
     assert "listen: ':8554'" in config
 
@@ -131,6 +130,17 @@ def test_go2rtc_config_keeps_the_plain_stream_for_the_primary() -> None:
     # It points at the primary, not the second camera.
     primary = config.split("  furbo:")[1]
     assert "/app/stream.sh {output} 111#" in primary.split("  furbo_222:")[0]
+
+
+def test_go2rtc_config_does_not_wire_up_talkback() -> None:
+    """Talkback opened a P2P session of its own, competing with the bridge's.
+
+    That is the failure this add-on exists to avoid, so it stays unwired until
+    it reads from the shared session.
+    """
+    config = fb.render_go2rtc_config(TEMPLATE, ["111"])
+    assert "talk.sh" not in config
+    assert "backchannel" not in config
 
 
 def test_go2rtc_config_parses_with_the_shipped_template() -> None:
@@ -146,6 +156,8 @@ def test_go2rtc_config_parses_with_the_shipped_template() -> None:
     assert list(config["streams"]) == ["furbo_111", "furbo", "furbo_222"]
     # The primary is reachable under both names, pointing at the same camera.
     assert config["streams"]["furbo"] == config["streams"]["furbo_111"]
+    # Video only: talkback is not wired up in this version.
+    assert len(config["streams"]["furbo_111"]) == 1
     # Everything the template configures survives generation.
     assert config["rtsp"]["listen"] == ":8554"
     assert config["api"]["listen"] == "127.0.0.1:1984"

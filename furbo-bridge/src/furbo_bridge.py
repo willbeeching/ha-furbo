@@ -917,9 +917,12 @@ def render_go2rtc_config(template: str, device_ids: list[str]) -> str:
     """The go2rtc config for these cameras, built from the shipped template.
 
     The template holds everything that does not depend on which cameras exist
-    (listeners, credentials, logging) and a `streams:` line to append to. Each
-    camera gets a video stream and a talkback stream of its own, both told
-    which camera they are for.
+    (listeners, credentials, logging) and a `streams:` line to append to.
+
+    No talkback stream is written. Talkback opened a P2P session of its own,
+    competing with the one the bridge holds for video and controls, which is
+    the failure this add-on exists to avoid. talk.sh stays in the image, ready
+    to be wired back up once it reads from the shared session.
     """
     if not device_ids:
         raise SystemExit("no cameras to write a go2rtc config for")
@@ -932,9 +935,6 @@ def render_go2rtc_config(template: str, device_ids: list[str]) -> str:
             lines.append(f"  {name}:")
             lines.append(
                 f'    - "exec:/app/stream.sh {{output}} {device_id}#killsignal=15#killtimeout=8"'
-            )
-            lines.append(
-                f'    - "exec:/app/talk.sh {device_id}#backchannel=1#killsignal=15#killtimeout=5"'
             )
     return "\n".join(lines) + "\n"
 

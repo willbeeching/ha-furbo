@@ -33,7 +33,9 @@ log:
 # named furbo_<device_id>, and the first also answers on the plain name
 # `furbo` that a single-camera bridge has always published.
 #
-# Talkback: go2rtc pipes the client microphone into talk.sh (negotiated as
-# PCMA, G.711 A-law 8 kHz) which forwards it to that camera's speaker. It is
-# one-way; the camera's own audio is not carried in the video stream.
+# Talkback is not wired up in this version. It ran talk.sh, which opened a
+# second P2P session to the camera, and because the camera reissues its P2P
+# credential on every fetch, that session and the bridge's own could
+# invalidate each other and take video and controls down with them. talk.sh
+# stays in the image and returns once it reads from the shared session.
 streams:
