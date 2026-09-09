@@ -27,7 +27,11 @@ from .const import (
     DOMAIN,
     MANUFACTURER,
 )
-from .coordinator import RENEWALS_MISSED, FurboBridgeCoordinator, FurboCoordinator
+from .coordinator import (
+    FurboBridgeCoordinator,
+    FurboCoordinator,
+    clear_renewal_budget,
+)
 from .discovery import (
     RTSP_USERNAME,
     DiscoveredBridge,
@@ -168,6 +172,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
     discovered = await async_discover_bridge(hass)
     coordinator.token_source = _token_source(hass, entry, discovered)
     await coordinator.async_config_entry_first_refresh()
+    # The token works, whether it was already good or a person has just signed
+    # in again after the wait for the add-on ran out. Either way the next time
+    # a token dies this entry gets the full wait over again.
+    clear_renewal_budget(hass, entry.entry_id)
 
     # Register the account hub device up front so cameras can reference it via
     # via_device regardless of platform order or whether calendar sensors exist.
@@ -249,8 +257,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
 async def async_unload_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> bool:
     """Unload a config entry and its platforms."""
     # Only a loaded entry is unloaded, so this does not run between the setup
-    # retries the count exists to survive.
-    hass.data.get(RENEWALS_MISSED, {}).pop(entry.entry_id, None)
+    # retries the count exists to survive. Setup clears it too: an entry that
+    # never loads is never unloaded.
+    clear_renewal_budget(hass, entry.entry_id)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 

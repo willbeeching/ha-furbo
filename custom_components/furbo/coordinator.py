@@ -54,6 +54,11 @@ MAX_RENEWAL_ATTEMPTS = 3
 RENEWALS_MISSED: HassKey[dict[str, int]] = HassKey(f"{DOMAIN}_renewals_missed")
 
 
+def clear_renewal_budget(hass: HomeAssistant, entry_id: str) -> None:
+    """Forget any renewals this entry missed, restoring its full allowance."""
+    hass.data.get(RENEWALS_MISSED, {}).pop(entry_id, None)
+
+
 class _Renewal(Enum):
     """What came of asking the bridge for a current cloud token."""
 
@@ -251,9 +256,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
                 CONF_TOKEN_ISSUED_AT: time.time(),
             },
         )
-        self.hass.data.setdefault(RENEWALS_MISSED, {}).pop(
-            self.config_entry.entry_id, None
-        )
+        clear_renewal_budget(self.hass, self.config_entry.entry_id)
         _LOGGER.info("Took a fresh cloud token from the Furbo Bridge add-on")
         return _Renewal.TAKEN
 

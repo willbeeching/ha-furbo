@@ -8,7 +8,9 @@ from urllib.parse import quote
 
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import UpdateFailed
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -23,6 +25,7 @@ from custom_components.furbo.const import (
     CONF_BRIDGES,
     CONF_COGNITO_TOKEN,
     CONF_EVENTS_ENABLED,
+    CONF_MFA_CODE,
     CONF_SCAN_INTERVAL,
     CONF_STREAM_URLS,
     DOMAIN,
@@ -423,3 +426,63 @@ async def test_setup_retries_are_bounded_before_prompting(
         for flow in hass.config_entries.flow.async_progress()
         if flow["context"].get("source") == SOURCE_REAUTH
     ]
+
+
+async def test_signing_in_again_restores_the_full_wait(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """After a sign-in, the next dead token gets the whole wait again.
+
+    The allowance is spent by an add-on that could not be reached. Signing in
+    fixes the token but says nothing about the add-on, and leaving the count
+    spent means the following expiry prompts on the first missed renewal
+    rather than waiting for the add-on at all.
+    """
+    mock_bridge.async_get_cloud_token.side_effect = FurboBridgeUnavailable("timeout")
+    mock_client.get_account_info.side_effect = FurboAuthError("expired")
+    await setup_integration(
+        hass,
+        mock_config_entry,
+        options={
+            CONF_BRIDGES: {
+                c.DEVICE_ID: {
+                    CONF_BRIDGE_URL: "http://bridge:8791",
+                    CONF_BRIDGE_TOKEN: "tok",
+                }
+            }
+        },
+    )
+    for _ in range(MAX_RENEWAL_ATTEMPTS):
+        freezer.tick(timedelta(minutes=10))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR
+
+    # Someone answers the prompt: a new token, and the entry loads.
+    mock_client.get_account_info.side_effect = None
+    mock_client.cognito_token = "SIGNED-IN-TOKEN"
+    flow = next(
+        f
+        for f in hass.config_entries.flow.async_progress()
+        if f["context"].get("source") == SOURCE_REAUTH
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {CONF_EMAIL: c.EMAIL, CONF_PASSWORD: c.PASSWORD}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_MFA_CODE: "1234"}
+    )
+    await hass.async_block_till_done()
+    assert result["reason"] == "reauth_successful"
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+
+    # That token dies too, with the add-on still unreachable: the entry waits
+    # for it again rather than going straight back to a prompt.
+    coordinator = mock_config_entry.runtime_data.coordinator
+    mock_client.get_devices.side_effect = FurboAuthError("expired again")
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
