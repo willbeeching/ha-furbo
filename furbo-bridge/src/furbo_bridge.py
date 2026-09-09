@@ -249,6 +249,12 @@ class P2PWorker:
             except SystemExit:
                 p2p.close()
                 raise
+        except fp.LoginRequired as exc:
+            # Nothing here can fix this one, so stop asking the cloud: it
+            # answers a burst of refused logins by locking the account out.
+            self.last_error = str(exc)
+            self._hold_off_login()
+            raise BridgeUnavailable(str(exc)) from None
         except SystemExit as exc:
             self.last_error = str(exc)
             if "log in" in str(exc) or "login" in str(exc):

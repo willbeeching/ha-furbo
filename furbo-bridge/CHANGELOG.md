@@ -3,6 +3,19 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.0-beta.6
+
+- A login the cloud refuses no longer escapes as a server error with a
+  traceback. A camera reconnecting handled only the "needs an emailed code"
+  case, so every other refusal went unhandled: the log filled with
+  tracebacks, `GET /api/status` never said `needs_login`, and the add-on
+  asked the cloud again on every single video request. A burst of refused
+  logins is what gets an account locked out.
+- Those now stop the add-on asking until someone fixes it, and say what to
+  fix: check the email and password, then set a fresh `mfa_code` with
+  `reset_session` on. A cloud that simply could not be reached is still
+  retried as before.
+
 ## 1.2.0-beta.5
 
 - A cloud outage while renewing the token is reported as an outage. It used

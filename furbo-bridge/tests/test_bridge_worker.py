@@ -195,6 +195,37 @@ def test_ensure_failure_becomes_unavailable(monkeypatch: pytest.MonkeyPatch) -> 
     assert worker.last_error == "login expired"
 
 
+def test_a_refused_login_holds_off_instead_of_retrying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A login only a person can fix stops the worker asking the cloud again.
+
+    It used to escape as a raw exception: a server error with a traceback, no
+    needs_login on the status, and a fresh login attempt on the next frame
+    request, which is how a burst of refusals gets an account locked out.
+    """
+
+    async def boom(_device: Any) -> dict[str, Any]:
+        raise fp.LoginRequired("the cloud refused the stored credentials")
+
+    monkeypatch.setattr(fp, "fetch_p2p_credentials", boom)
+    args = argparse.Namespace(
+        device=None, lib=None, region="us", tutk_log=False, tcp_relay=False, timeout=10
+    )
+    worker = fb.P2PWorker(args)
+    with pytest.raises(fb.BridgeUnavailable):
+        worker.refresh()
+    assert worker.needs_login is True
+
+    # And the next caller is turned away without touching the cloud at all.
+    async def never(_device: Any) -> dict[str, Any]:
+        raise AssertionError("asked the cloud again while holding off")
+
+    monkeypatch.setattr(fp, "fetch_p2p_credentials", never)
+    with pytest.raises(fb.BridgeUnavailable):
+        worker.refresh()
+
+
 def test_add_arguments_defaults() -> None:
     parser = argparse.ArgumentParser()
     fb.add_arguments(parser)

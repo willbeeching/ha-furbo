@@ -244,3 +244,62 @@ def test_credentials_the_cloud_refuses_need_a_person(
     with pytest.raises(fp.LoginRequired) as excinfo:
         asyncio.run(fp.current_credentials())
     assert "email and password" in str(excinfo.value)
+
+
+def test_a_refused_login_reaches_the_camera_path_answerably(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A camera reconnecting gets a LoginRequired, not a raw cloud error.
+
+    It used to catch only MfaRequired, so every other login failure escaped
+    fetch_p2p_credentials untouched, surfaced as a server error with a
+    traceback, and left the worker with no reason to stop asking.
+    """
+    monkeypatch.setattr(
+        fp,
+        "_load_session",
+        lambda: {"devices": [dict(DEV1)], "account_id": "A1", "cognito_token": "OLD"},
+    )
+
+    class _Client:
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            pass
+
+        async def get_p2p_connection(self, _device_id: str) -> dict[str, str]:
+            raise fp.FurboError("token invalid", 12002)
+
+    monkeypatch.setattr(fp, "FurboClient", _Client)
+
+    async def _relogin(stale: str | None = None) -> dict[str, Any]:
+        raise FurboLoginError("Furbo API error 400 (code 20001)", 20001)
+
+    monkeypatch.setattr(fp, "silent_relogin", _relogin)
+    with pytest.raises(fp.LoginRequired):
+        asyncio.run(fp.fetch_p2p_credentials(None))
+
+
+def test_a_cloud_outage_on_the_camera_path_stays_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unreachable cloud is still something to try again, not a lockout."""
+    monkeypatch.setattr(
+        fp,
+        "_load_session",
+        lambda: {"devices": [dict(DEV1)], "account_id": "A1", "cognito_token": "OLD"},
+    )
+
+    class _Client:
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            pass
+
+        async def get_p2p_connection(self, _device_id: str) -> dict[str, str]:
+            raise fp.FurboError("token invalid", 12002)
+
+    monkeypatch.setattr(fp, "FurboClient", _Client)
+
+    async def _relogin(stale: str | None = None) -> dict[str, Any]:
+        raise FurboConnectionError("cannot reach the cloud")
+
+    monkeypatch.setattr(fp, "silent_relogin", _relogin)
+    with pytest.raises(SystemExit):
+        asyncio.run(fp.fetch_p2p_credentials(None))

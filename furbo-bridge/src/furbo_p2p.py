@@ -680,6 +680,34 @@ async def _login_again() -> dict:
     return session
 
 
+async def relogin_or_explain(stale_token: str) -> dict:
+    """Log in again, turning every way it can fail into an answerable one.
+
+    Both callers -- a camera reconnecting and the cloud-token endpoint -- need
+    the same three outcomes, and they used to spell them out separately: the
+    camera path caught only MfaRequired, so a refused login escaped it raw,
+    reached the HTTP layer as a server error with a traceback, and left the
+    worker with no reason to hold off. It then tried again on the next frame
+    request, which is how an account gets rate-limited out.
+    """
+    try:
+        return await silent_relogin(stale_token)
+    except MfaRequired as mfa:
+        raise LoginRequired(
+            f"Cloud rejected the token and {mfa}. Set a fresh mfa_code and "
+            "reset_session in the add-on options, then restart it."
+        ) from None
+    except (FurboLoginError, FurboMfaError) as refused:
+        raise LoginRequired(
+            f"the cloud refused the stored credentials ({refused}). Check the "
+            "add-on's email and password, then set a fresh mfa_code with "
+            "reset_session on."
+        ) from None
+    except FurboError as exc:
+        # Could not reach the cloud, or the cloud faltered. Worth retrying.
+        raise _cloud_fail(exc) from exc
+
+
 async def current_credentials() -> dict[str, str]:
     """The account id and a cloud token that the cloud has just accepted.
 
@@ -708,22 +736,7 @@ async def current_credentials() -> dict[str, str]:
             if exc.code != 12002:
                 raise _cloud_fail(exc) from exc
             log("cloud rejected the stored token; logging in again")
-            try:
-                session = await silent_relogin(str(token))
-            except MfaRequired as mfa:
-                raise LoginRequired(
-                    f"Cloud rejected the token and {mfa}. Set a fresh mfa_code "
-                    "and reset_session in the add-on options, then restart it."
-                ) from None
-            except (FurboLoginError, FurboMfaError) as refused:
-                raise LoginRequired(
-                    f"the cloud refused the stored credentials ({refused}). "
-                    "Check the add-on's email and password."
-                ) from None
-            except FurboError as retry_exc:
-                # The login could not reach the cloud, or the cloud faltered.
-                # Nobody needs telling; the next caller tries again.
-                raise _cloud_fail(retry_exc) from retry_exc
+            session = await relogin_or_explain(str(token))
     return {
         "account_id": str(session["account_id"]),
         "cognito_token": str(session["cognito_token"]),
@@ -792,13 +805,7 @@ async def fetch_p2p_credentials(device_id: str | None) -> dict:
             # Logging in again with the same device id usually goes through
             # without a code, so try that before giving up on a person.
             log("cloud rejected the stored token; logging in again")
-            try:
-                session = await silent_relogin(str(session["cognito_token"]))
-            except MfaRequired as mfa:
-                raise SystemExit(
-                    f"Cloud rejected the token and {mfa}. Set a fresh mfa_code "
-                    "and reset_session in the add-on options, then restart it."
-                ) from None
+            session = await relogin_or_explain(str(session["cognito_token"]))
             client = FurboClient(http, session["account_id"], session["cognito_token"])
             try:
                 p2p = await client.get_p2p_connection(device["Id"])
