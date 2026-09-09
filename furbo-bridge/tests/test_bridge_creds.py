@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from furbo_cloud import FurboConnectionError, FurboLoginError
 import furbo_p2p as fp
 
 DEV1 = {"Id": 111, "DeviceName": "Kitchen", "P2PUuid": "UID1", "ProductId": "FB0030"}
@@ -134,7 +135,7 @@ def test_current_credentials_when_the_cloud_wants_a_code(
         raise fp.MfaRequired("the cloud wants a verification code")
 
     monkeypatch.setattr(fp, "silent_relogin", _relogin)
-    with pytest.raises(SystemExit) as excinfo:
+    with pytest.raises(fp.LoginRequired) as excinfo:
         asyncio.run(fp.current_credentials())
     assert "mfa_code" in str(excinfo.value)
 
@@ -207,3 +208,39 @@ def test_relogin_gives_up_rather_than_waiting_forever(
     # And the lock is free again for the next caller.
     assert fp._LOGIN_LOCK.acquire(timeout=0.1)
     fp._LOGIN_LOCK.release()
+
+
+def test_a_login_that_cannot_reach_the_cloud_is_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A network failure while logging in is an outage, not a bad password.
+
+    It used to escape as a 500, which a client reads as a definite refusal and
+    answers by asking someone to sign in, for something that would have
+    worked a minute later.
+    """
+    monkeypatch.setattr(fp, "_load_session", lambda: {"account_id": "A1", "cognito_token": "OLD"})
+    _cloud(monkeypatch, _Refused())
+
+    async def _relogin(stale: str | None = None) -> dict[str, Any]:
+        raise FurboConnectionError("cannot reach the cloud")
+
+    monkeypatch.setattr(fp, "silent_relogin", _relogin)
+    with pytest.raises(SystemExit):
+        asyncio.run(fp.current_credentials())
+
+
+def test_credentials_the_cloud_refuses_need_a_person(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wrong password is not something to keep retrying quietly."""
+    monkeypatch.setattr(fp, "_load_session", lambda: {"account_id": "A1", "cognito_token": "OLD"})
+    _cloud(monkeypatch, _Refused())
+
+    async def _relogin(stale: str | None = None) -> dict[str, Any]:
+        raise FurboLoginError("wrong email or password")
+
+    monkeypatch.setattr(fp, "silent_relogin", _relogin)
+    with pytest.raises(fp.LoginRequired) as excinfo:
+        asyncio.run(fp.current_credentials())
+    assert "email and password" in str(excinfo.value)

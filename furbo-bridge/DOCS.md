@@ -153,6 +153,10 @@ ports also works.
   `GET /api/cloud-token` can take far longer than the rest of the API. The
   integration allows for that and treats a renewal it did not get in time as
   something to retry on the next poll, not as a reason to ask for a sign-in.
+  A cloud that could not be reached answers `503` and is waited out the same
+  way; a renewal that needs a person, because the cloud wants an emailed code
+  or refuses the stored email and password, answers `409` and is acted on
+  straight away.
 - **The full poll waits on replies, not on a timer.** Each of the thirteen
   settings reads is awaited individually and moves on the moment the camera
   answers, so the sweep costs one round trip per setting. It used to sleep a

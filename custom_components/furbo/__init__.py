@@ -27,7 +27,7 @@ from .const import (
     DOMAIN,
     MANUFACTURER,
 )
-from .coordinator import FurboBridgeCoordinator, FurboCoordinator
+from .coordinator import RENEWALS_MISSED, FurboBridgeCoordinator, FurboCoordinator
 from .discovery import (
     RTSP_USERNAME,
     DiscoveredBridge,
@@ -248,6 +248,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
 
 async def async_unload_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> bool:
     """Unload a config entry and its platforms."""
+    # Only a loaded entry is unloaded, so this does not run between the setup
+    # retries the count exists to survive.
+    hass.data.get(RENEWALS_MISSED, {}).pop(entry.entry_id, None)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 

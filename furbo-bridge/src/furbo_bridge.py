@@ -779,6 +779,10 @@ def create_app(
             # again, which takes a lock the camera threads hold across their
             # own logins.
             creds = await loop.run_in_executor(None, fp.refreshed_credentials)
+        except fp.LoginRequired as exc:
+            # Someone has to act, so say so plainly rather than as an outage a
+            # client would sit and wait out.
+            return web.json_response({"error": "login_required", "detail": str(exc)}, status=409)
         except SystemExit as exc:
             raise BridgeUnavailable(str(exc)) from None
         return web.json_response(creds)

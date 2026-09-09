@@ -238,13 +238,23 @@ async def test_expired_token_without_a_bridge_still_reauths(
         await coordinator._async_update_data()
 
 
+@pytest.mark.parametrize("status", [404, 409])
 async def test_a_bridge_that_refuses_still_reauths(
-    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    status: int,
 ) -> None:
-    """A bridge that answers but cannot help does not swallow the reauth."""
+    """A bridge that answers but cannot help does not swallow the reauth.
+
+    404 is a bridge too old to have the endpoint; 409 is one that has it and
+    needs a person signed in before it can answer.
+    """
     await setup_integration(hass, mock_config_entry)
     coordinator = mock_config_entry.runtime_data.coordinator
-    coordinator.token_source = AsyncMock(side_effect=FurboBridgeError("no", status=404))
+    coordinator.token_source = AsyncMock(
+        side_effect=FurboBridgeError("no", status=status)
+    )
     mock_client.get_devices.side_effect = FurboAuthError("expired")
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_update_data()

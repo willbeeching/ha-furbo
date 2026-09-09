@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from unittest.mock import AsyncMock
 from urllib.parse import quote
 
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.furbo.api import FurboAuthError, FurboConnectionError
 from custom_components.furbo.bridge import FurboBridgeUnavailable
@@ -22,6 +27,7 @@ from custom_components.furbo.const import (
     CONF_STREAM_URLS,
     DOMAIN,
 )
+from custom_components.furbo.coordinator import MAX_RENEWAL_ATTEMPTS
 from custom_components.furbo.discovery import DiscoveredBridge, rtsp_password
 
 from . import const as c
@@ -369,6 +375,50 @@ async def test_setup_with_a_slow_bridge_retries_rather_than_prompting(
 
     assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
     assert not [
+        flow
+        for flow in hass.config_entries.flow.async_progress()
+        if flow["context"].get("source") == SOURCE_REAUTH
+    ]
+
+
+async def test_setup_retries_are_bounded_before_prompting(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """The wait for the add-on survives setup retries, and then ends.
+
+    Each retry builds a new coordinator, so a budget kept on the coordinator
+    starts again every time: an entry whose token had died with no add-on to
+    renew it would retry for ever and never ask anyone to sign in.
+    """
+    mock_bridge.async_get_cloud_token.side_effect = FurboBridgeUnavailable("timeout")
+    mock_client.get_account_info.side_effect = FurboAuthError("expired")
+    await setup_integration(
+        hass,
+        mock_config_entry,
+        options={
+            CONF_BRIDGES: {
+                c.DEVICE_ID: {
+                    CONF_BRIDGE_URL: "http://bridge:8791",
+                    CONF_BRIDGE_TOKEN: "tok",
+                }
+            }
+        },
+    )
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+
+    # Home Assistant's own retries, not a hand-rolled loop: each one builds a
+    # fresh coordinator, which is exactly what used to reset the budget.
+    for _ in range(MAX_RENEWAL_ATTEMPTS):
+        freezer.tick(timedelta(minutes=10))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+
+    assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR
+    assert [
         flow
         for flow in hass.config_entries.flow.async_progress()
         if flow["context"].get("source") == SOURCE_REAUTH

@@ -437,3 +437,43 @@ def test_cloud_token_before_a_login_is_unavailable() -> None:
         assert resp.status == 503
 
     with_session({}, scenario)
+
+
+def with_credentials(fail: Exception, scenario: Any) -> None:
+    """Run a scenario where asking for cloud credentials raises ``fail``."""
+
+    def credentials() -> dict[str, str]:
+        raise fail
+
+    original = fb.fp.refreshed_credentials
+    fb.fp.refreshed_credentials = credentials  # type: ignore[assignment]
+    try:
+        _run(scenario)
+    finally:
+        fb.fp.refreshed_credentials = original  # type: ignore[assignment]
+
+
+def test_a_cloud_outage_during_renewal_is_retryable() -> None:
+    """A renewal that could not reach the cloud says come back, not sign in.
+
+    503 is what the integration waits out. Anything else it reads as a
+    definite refusal and answers by prompting someone to sign in, which is
+    the wrong answer to a cloud that was briefly unreachable.
+    """
+
+    async def scenario(client: Any, worker: Any) -> None:
+        resp = await client.get("/api/cloud-token", headers=AUTH)
+        assert resp.status == 503
+
+    with_credentials(SystemExit("Cloud call failed: cannot connect"), scenario)
+
+
+def test_a_renewal_needing_a_person_says_so() -> None:
+    """A code or a wrong password is not an outage to wait out."""
+
+    async def scenario(client: Any, worker: Any) -> None:
+        resp = await client.get("/api/cloud-token", headers=AUTH)
+        assert resp.status == 409
+        assert (await resp.json())["error"] == "login_required"
+
+    with_credentials(fb.fp.LoginRequired("set a fresh mfa_code"), scenario)

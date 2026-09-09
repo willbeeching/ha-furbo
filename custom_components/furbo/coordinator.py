@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
+from homeassistant.util.hass_dict import HassKey
 
 from .api import FurboAuthError, FurboClient, FurboError
 from .bridge import (
@@ -46,6 +47,11 @@ _LOGGER = logging.getLogger(__name__)
 # missed attempts say nothing about whether recovery will work; a bridge that
 # is gone for good must not leave the entry stuck without a way back.
 MAX_RENEWAL_ATTEMPTS = 3
+# Where that count lives. It cannot live on the coordinator: a setup that
+# fails is retried with a new one, so a budget kept there starts again every
+# time and an entry whose token has died with no bridge to renew it retries
+# for ever instead of asking for a sign-in.
+RENEWALS_MISSED: HassKey[dict[str, int]] = HassKey(f"{DOMAIN}_renewals_missed")
 
 
 class _Renewal(Enum):
@@ -117,7 +123,6 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         # password and logs in again by itself, so it can hand over a current
         # cloud token when this one is rejected.
         self.token_source: Callable[[], Awaitable[tuple[str, str]]] | None = None
-        self._renewals_missed = 0
         self.hub_device_id: str | None = None
         self._tzinfo: ZoneInfo | None = None
         self._timezone_name: str | None = None
@@ -188,14 +193,15 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         outcome = await self._async_replace_token()
         if outcome is _Renewal.TAKEN:
             return True
-        if (
-            outcome is _Renewal.UNAVAILABLE
-            and self._renewals_missed < MAX_RENEWAL_ATTEMPTS
+        missed = self.hass.data.setdefault(RENEWALS_MISSED, {})
+        entry_id = self.config_entry.entry_id
+        if outcome is _Renewal.UNAVAILABLE and missed.get(entry_id, 0) < (
+            MAX_RENEWAL_ATTEMPTS
         ):
-            self._renewals_missed += 1
+            missed[entry_id] = missed.get(entry_id, 0) + 1
             raise UpdateFailed(
                 "the Furbo Bridge add-on could not supply a cloud token "
-                f"(attempt {self._renewals_missed} of {MAX_RENEWAL_ATTEMPTS})"
+                f"(attempt {missed[entry_id]} of {MAX_RENEWAL_ATTEMPTS})"
             )
         return False
 
@@ -245,7 +251,9 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
                 CONF_TOKEN_ISSUED_AT: time.time(),
             },
         )
-        self._renewals_missed = 0
+        self.hass.data.setdefault(RENEWALS_MISSED, {}).pop(
+            self.config_entry.entry_id, None
+        )
         _LOGGER.info("Took a fresh cloud token from the Furbo Bridge add-on")
         return _Renewal.TAKEN
 

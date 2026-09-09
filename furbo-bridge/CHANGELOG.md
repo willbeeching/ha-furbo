@@ -3,6 +3,16 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.0-beta.5
+
+- A cloud outage while renewing the token is reported as an outage. It used
+  to escape as a server error, which the integration read as a definite
+  refusal and answered by asking someone to sign in, for something that would
+  have worked a minute later.
+- A renewal that genuinely needs a person (an emailed code, or an email and
+  password the cloud refuses) says so distinctly, so it is acted on at once
+  rather than waited out.
+
 ## 1.2.0-beta.4
 
 - A login waiting behind another one gives up after about a minute and says

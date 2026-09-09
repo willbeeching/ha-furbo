@@ -64,7 +64,14 @@ import time
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from furbo_cloud import FurboClient, FurboError, encrypt_password, new_mobile_id
+from furbo_cloud import (
+    FurboClient,
+    FurboError,
+    FurboLoginError,
+    FurboMfaError,
+    encrypt_password,
+    new_mobile_id,
+)
 
 SESSION_FILE = Path(os.environ.get("FURBO_SESSION_FILE", "furbo_session.json"))
 
@@ -463,6 +470,15 @@ class MfaRequired(Exception):
     """The cloud wants an emailed code, which only a person can supply."""
 
 
+class LoginRequired(Exception):
+    """Only a person can get this bridge signed in again.
+
+    Kept apart from every other login failure: a client told this should ask
+    someone to sign in, where one told the cloud could not be reached should
+    simply come back later.
+    """
+
+
 def _cloud_fail(exc: FurboError) -> SystemExit:
     if exc.code == 12002:
         return SystemExit(f"Cloud rejected the token ({exc}). Run: furbo_p2p.py login")
@@ -695,10 +711,19 @@ async def current_credentials() -> dict[str, str]:
             try:
                 session = await silent_relogin(str(token))
             except MfaRequired as mfa:
-                raise SystemExit(
+                raise LoginRequired(
                     f"Cloud rejected the token and {mfa}. Set a fresh mfa_code "
                     "and reset_session in the add-on options, then restart it."
                 ) from None
+            except (FurboLoginError, FurboMfaError) as refused:
+                raise LoginRequired(
+                    f"the cloud refused the stored credentials ({refused}). "
+                    "Check the add-on's email and password."
+                ) from None
+            except FurboError as retry_exc:
+                # The login could not reach the cloud, or the cloud faltered.
+                # Nobody needs telling; the next caller tries again.
+                raise _cloud_fail(retry_exc) from retry_exc
     return {
         "account_id": str(session["account_id"]),
         "cognito_token": str(session["cognito_token"]),
