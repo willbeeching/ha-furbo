@@ -3,9 +3,19 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
-## 1.2.2-beta.1
+## 1.2.2
 
-Diagnostics only -- nothing changes in how the add-on behaves.
+- **A camera switched off no longer loses its video until the add-on is
+  restarted.** Only the first frame was ever on a timer, so a stream that had
+  been running and then stopped -- which is what switching a camera off looks
+  like, the session staying up with nothing to send -- left the reader waiting
+  for ever. It held the camera's single video slot, so every later request was
+  refused as busy. Video that goes quiet for ten seconds now gives up and hands
+  the slot back, and switching a camera off ends its stream at once rather than
+  waiting that out. Reported in #2.
+
+Also in this release, diagnostics that change nothing about how the add-on
+behaves:
 
 - A login now records which fields the cloud sent back, by name, at debug
   level. Never the values: those are the credentials. The client keeps two

@@ -688,3 +688,58 @@ def test_the_registry_routes_by_device_id() -> None:
     assert len(registry) == 2
     with pytest.raises(fb.UnknownCamera):
         registry.get("3")
+
+
+def test_a_stream_that_goes_quiet_gives_the_slot_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Video that stops after running ends, instead of waiting for ever.
+
+    Only the first frame was ever on a timer. A camera switched off mid-stream
+    keeps its session up and the SDK simply reports no data, so the reader span
+    on indefinitely, the video slot was never released, and every later request
+    was refused as busy until the add-on restarted.
+    """
+    monkeypatch.setattr(fb, "IDLE_FRAME_TIMEOUT", 0.05)
+
+    class _GoesQuiet(FakeP2P):
+        def recv_frame(self, buf: Any, _info: Any) -> tuple[int, int, int]:
+            if self.frames:
+                data = self.frames.pop(0)
+                buf[0 : len(data)] = data
+                return len(data), len(data), 0
+            # The session is alive and has nothing to say, for ever.
+            return fp.AV_ER_DATA_NOREADY, 0, 0
+
+    fake = _GoesQuiet()
+    fake.frames = [b"aaa", b"bbb"]
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+
+    assert list(worker.iter_frames()) == [b"aaa", b"bbb"]
+    # And the slot is free: the next viewer is served rather than refused.
+    worker.close_stream()
+    worker.open_stream("1080p")
+
+
+def test_switching_the_camera_off_ends_the_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No video comes from a camera that is off, so do not wait it out."""
+
+    class _Endless(FakeP2P):
+        def recv_frame(self, buf: Any, _info: Any) -> tuple[int, int, int]:
+            buf[0:3] = b"aaa"
+            return 3, 3, 0
+
+    fake = _Endless()
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+
+    frames = worker.iter_frames()
+    assert next(frames) == b"aaa"
+    worker.apply({"camera_on": False})
+    # The reader stops on its next pass rather than streaming a dark camera.
+    assert list(frames) == []

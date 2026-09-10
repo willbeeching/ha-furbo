@@ -89,6 +89,12 @@ READER_EXIT_TIMEOUT = 3.0
 # holding the single stream slot, so every retry gets a busy response and the
 # failure looks like a hang rather than a refusal.
 FIRST_FRAME_TIMEOUT = 8.0
+# How long a stream that HAS been producing frames may go quiet before it is
+# given up. Without this the only timeout was on the first frame, so a camera
+# switched off mid-stream left the reader waiting on "no data" for ever, the
+# slot it holds never came back, and every later request was refused as busy
+# until the add-on was restarted.
+IDLE_FRAME_TIMEOUT = 10.0
 # A moment between telling the camera to stop video and asking it to start
 # again, so it has released the old stream before the new request lands.
 STREAM_RESTART_SETTLE = 0.3
@@ -385,6 +391,12 @@ class P2PWorker:
             # Setting name -> the opcode written for it, so a refusal can be
             # matched back to the setting it belongs to.
             sent: dict[str, int] = {}
+            if settings.get("camera_on") is False:
+                # There is no video from a camera that is off. Setting the
+                # event (rather than calling close_stream, which wants the lock
+                # this already holds) ends the reader on its next pass, and the
+                # request handler releases the slot as it unwinds.
+                self._stream_stop.set()
             if "camera_on" in settings:
                 key = "SET_CAMERA_ON" if p2p.proto == "v3" else "SET_FURBO_POWER"
                 sent["camera_on"] = cmd[key]
@@ -539,7 +551,7 @@ class P2PWorker:
         buf = fp.create_string_buffer(FRAME_BUFFER_BYTES)
         info = fp.FrameInfo()
         self._reader_active.set()
-        started = time.monotonic()
+        last_frame = time.monotonic()
         seen_frame = False
         # What the SDK kept telling us, so a stream that yields nothing can say
         # why instead of spinning in silence.
@@ -550,19 +562,26 @@ class P2PWorker:
                 ret, size, expected = p2p.recv_frame(buf, info)
                 if ret >= 0 and size > 0:
                     seen_frame = True
+                    last_frame = time.monotonic()
                     yield buf.raw[:size]
                     continue
                 outcomes[ret] = outcomes.get(ret, 0) + 1
                 biggest_expected = max(biggest_expected, expected)
                 # The give-up covers every way of not getting a frame, not just
                 # "no data": a camera whose frames all arrive lost or
-                # incomplete never reaches that branch.
-                if not seen_frame and time.monotonic() - started > FIRST_FRAME_TIMEOUT:
+                # incomplete never reaches that branch. It also covers a stream
+                # that stops after running, which is what a camera being
+                # switched off looks like -- the session stays up and the SDK
+                # simply has nothing, for ever.
+                quiet = time.monotonic() - last_frame
+                limit = IDLE_FRAME_TIMEOUT if seen_frame else FIRST_FRAME_TIMEOUT
+                if quiet > limit:
                     _LOGGER.warning(
-                        "no usable video %.0fs after the start command "
-                        "(%s, largest frame expected %d bytes, buffer %d). "
-                        "Giving up so the slot is free for the next attempt",
-                        FIRST_FRAME_TIMEOUT,
+                        "video %s %.0fs (%s, largest frame expected %d bytes, "
+                        "buffer %d). Giving up so the slot is free for the "
+                        "next attempt",
+                        "stopped arriving after" if seen_frame else "never arrived within",
+                        limit,
                         ", ".join(f"{fp.err(c)} x{n}" for c, n in sorted(outcomes.items())),
                         biggest_expected,
                         FRAME_BUFFER_BYTES,
