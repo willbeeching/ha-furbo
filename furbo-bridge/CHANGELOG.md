@@ -3,6 +3,22 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.2-beta.1
+
+Diagnostics only -- nothing changes in how the add-on behaves.
+
+- A login now records which fields the cloud sent back, by name, at debug
+  level. Never the values: those are the credentials. The client keeps two
+  of them and discards the rest, so "the cloud gives us nothing to renew a
+  token with" has only ever described the client, and nobody had checked
+  what the response actually carries. If there is something to refresh
+  with, renewing the way the phone app does is a better answer than logging
+  in again every day, and this is how we find out.
+- When the add-on refuses to hand over a cloud token because only a person
+  can fix the login, its log now says why. It used to tell the caller and
+  go quiet, so the log showed "logging in again" and then nothing, and a
+  wrong password looked exactly like the cloud wanting an emailed code.
+
 ## 1.2.0
 
 **Several cameras on one account.** The add-on used to refuse to guess between

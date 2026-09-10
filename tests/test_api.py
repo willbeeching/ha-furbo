@@ -7,6 +7,7 @@ tests stay compatible with the aiohttp version each Home Assistant lane ships.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -82,6 +83,37 @@ async def test_login_without_mfa(
     assert await client.start_login(c.EMAIL, "enc", "mob") is None
     assert client.account_id == c.ACCOUNT_ID
     assert client.cognito_token == c.COGNITO_TOKEN
+
+
+async def test_login_names_the_fields_it_was_given(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A field the client does not keep is still named in the log.
+
+    The client keeps two fields and drops the rest, so "the cloud gives us
+    nothing to renew with" describes this parser, not the API. Nobody had
+    looked. Names only ever reach the log -- never values, which are the
+    credentials themselves.
+    """
+    caplog.set_level(logging.DEBUG, logger="custom_components.furbo.api")
+    aioclient_mock.post(
+        LOGIN,
+        json={
+            "AccountId": c.ACCOUNT_ID,
+            "CognitoToken": c.COGNITO_TOKEN,
+            "RefreshToken": "a-token-nobody-parses",
+            "ExpiresIn": 86400,
+        },
+    )
+    await _client(hass).start_login(c.EMAIL, "enc", "mob")
+
+    assert "RefreshToken" in caplog.text
+    assert "ExpiresIn" in caplog.text
+    # The values are what must never be logged.
+    assert "a-token-nobody-parses" not in caplog.text
+    assert c.COGNITO_TOKEN not in caplog.text
 
 
 async def test_login_with_mfa(

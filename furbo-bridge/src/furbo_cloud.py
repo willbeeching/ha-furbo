@@ -307,6 +307,12 @@ class FurboClient:
         self._store_login(data, login_path)
 
     def _store_login(self, data: dict[str, Any], path: str) -> None:
+        # Field names only, never values. The client keeps two fields and
+        # discards the rest, and "the cloud gives us nothing to refresh with"
+        # has only ever been a description of this parser -- nobody has looked
+        # at what the response actually carries. If there is a refresh token
+        # in here, renewing the way the app does beats logging in again.
+        _LOGGER.debug("Login response from %s carried: %s", path, ", ".join(sorted(data)))
         self.account_id = _required_str(data, "AccountId", path)
         self.cognito_token = _required_str(data, "CognitoToken", path)
 
