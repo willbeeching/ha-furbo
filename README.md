@@ -122,8 +122,9 @@ same account API are expected to work but are unverified.
 and entities for each, and one Furbo Bridge add-on serves them all, holding a
 separate session per camera. Leave the add-on's `device_id` blank for every
 camera, or set it (a single id, or several separated by commas) to serve only
-some. Multi-camera support has been built and tested against the add-on's own
-test suite, but not yet against two physical cameras, so reports are welcome.
+some. Each camera is bound to its own stream automatically, so there is nothing
+to configure. Reports are welcome: 1.2.0 got this wrong, showing every camera
+the first one's video, and 1.2.1 is the fix.
 
 ## Support
 
