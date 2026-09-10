@@ -355,10 +355,11 @@ async def test_discovered_addon_not_auto_bound_with_multiple_cameras(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """With two cameras, a single discovered add-on must not bind to either.
+    """An add-on that cannot say which camera is which binds to neither.
 
-    One add-on serves one camera; binding it to both would show one camera's
-    video and controls under the other. The user must map bridges explicitly.
+    It publishes one stream under the plain name. With two cameras on the
+    account there is no telling whose it is, and handing it to both shows the
+    first camera's video under the other.
     """
     second = dict(c.DEVICE)
     second["Id"] = 1788515097680000
@@ -384,6 +385,88 @@ async def test_discovered_addon_not_auto_bound_with_multiple_cameras(
     # No stream URL was bound, so no camera entity is created.
     assert hass.states.get("camera.test_camera") is None
     assert "2 cameras" in caplog.text
+
+
+async def test_a_bridge_that_names_its_cameras_binds_all_of_them(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every camera gets its own stream from one add-on, with no configuring.
+
+    This is what the multi-camera release was for, and what it did not do:
+    the guard predated the add-on serving more than one camera, so an account
+    with several got nothing bound at all and had to be set up by hand.
+    """
+    second = dict(c.DEVICE)
+    second["Id"] = 1788515097680000
+    second["DeviceName"] = "Second Camera"
+    mock_client.get_devices.return_value = [dict(c.DEVICE), second]
+    monkeypatch.setattr(
+        "custom_components.furbo.async_discover_bridge",
+        AsyncMock(
+            return_value=DiscoveredBridge(
+                slug="abc_furbo_bridge",
+                host="abc-furbo-bridge",
+                token="tok",
+                streams={
+                    c.DEVICE_ID: f"furbo_{c.DEVICE_ID}",
+                    "1788515097680000": "furbo_1788515097680000",
+                },
+            )
+        ),
+    )
+
+    await setup_integration(hass, mock_config_entry)
+
+    runtime = mock_config_entry.runtime_data
+    assert set(runtime.bridges) == {c.DEVICE_ID, "1788515097680000"}
+    auth = f"furbo:{rtsp_password('tok')}@abc-furbo-bridge:8554"
+    # Each camera on its own stream: the whole point, and the thing that was
+    # reported broken with three cameras all playing the first one's video.
+    assert runtime.stream_urls == {
+        c.DEVICE_ID: f"rtsp://{auth}/furbo_{c.DEVICE_ID}",
+        "1788515097680000": f"rtsp://{auth}/furbo_1788515097680000",
+    }
+    assert len(set(runtime.stream_urls.values())) == 2
+
+
+async def test_a_camera_the_bridge_does_not_serve_gets_no_stream(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A camera the add-on skips is left without video, and said so in the log.
+
+    The add-on's device_id option can pin it to some of the account's cameras.
+    The rest have no stream of their own, and the plain one is not theirs.
+    """
+    second = dict(c.DEVICE)
+    second["Id"] = 1788515097680000
+    second["DeviceName"] = "Second Camera"
+    mock_client.get_devices.return_value = [dict(c.DEVICE), second]
+    monkeypatch.setattr(
+        "custom_components.furbo.async_discover_bridge",
+        AsyncMock(
+            return_value=DiscoveredBridge(
+                slug="abc_furbo_bridge",
+                host="abc-furbo-bridge",
+                token="tok",
+                streams={c.DEVICE_ID: f"furbo_{c.DEVICE_ID}"},
+            )
+        ),
+    )
+
+    await setup_integration(hass, mock_config_entry)
+
+    runtime = mock_config_entry.runtime_data
+    assert set(runtime.stream_urls) == {c.DEVICE_ID}
+    assert "1788515097680000" in caplog.text
 
 
 async def test_explicit_bridge_still_binds_with_multiple_cameras(

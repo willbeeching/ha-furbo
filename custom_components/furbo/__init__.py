@@ -197,18 +197,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
     configured_bridges: dict[str, dict[str, str]] = entry.options.get(CONF_BRIDGES, {})
     configured_streams: dict[str, str] = entry.options.get(CONF_STREAM_URLS, {})
 
-    # A discovered add-on serves exactly one camera, so it can only be bound
-    # automatically when the account has a single camera; with more than one we
-    # cannot tell which camera the add-on is paired with, and binding it to all
-    # of them would show one camera's video and controls under every device.
-    # In that case, require the user to map each bridge to its camera explicitly
-    # (Configure -> per-camera bridge/stream URLs).
-    auto_bind = discovered if len(coordinator.data.devices) == 1 else None
+    # An add-on that lists its cameras says which stream belongs to which, so
+    # every camera can be bound to its own. One that does not publishes a
+    # single stream under the plain name: that is the right stream only when
+    # the account has one camera, and binding it to several would show the
+    # first camera's video under all of them.
+    sole_camera = len(coordinator.data.devices) == 1
+    auto_bind = (
+        discovered
+        if discovered is not None and (sole_camera or discovered.names_cameras)
+        else None
+    )
     if discovered is not None and auto_bind is None:
         _LOGGER.warning(
-            "Found the Furbo Bridge add-on but this account has %d cameras; "
-            "not auto-binding it. Configure each camera's bridge and stream URL "
-            "in the Furbo integration's options to avoid crossing streams.",
+            "Found the Furbo Bridge add-on but could not read which of this "
+            "account's %d cameras it serves, so none were bound to it "
+            "automatically. Update the add-on, or set each camera's bridge and "
+            "stream URL in the Furbo integration's options.",
             len(coordinator.data.devices),
         )
 
@@ -238,8 +243,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
 
         stream = configured_streams.get(device_id)
         if not stream and auto_bind is not None:
-            # One bridge serves several cameras, each on its own stream.
-            stream = auto_bind.stream_url_for(device_id)
+            # One bridge serves several cameras, each on its own stream. A
+            # camera it cannot name gets none: no video is better than another
+            # camera's, which is indistinguishable from this one working.
+            stream = auto_bind.stream_url_for(device_id, sole_camera=sole_camera)
+            if stream is None:
+                _LOGGER.warning(
+                    "The Furbo Bridge add-on does not publish a stream for "
+                    "camera %s, so it has no video. Check the add-on's "
+                    "device_id option, or set the stream URL by hand",
+                    device_id,
+                )
         if stream:
             stream_urls[device_id] = stream
 

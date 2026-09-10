@@ -188,8 +188,10 @@ async def test_each_camera_gets_its_own_stream(
     auth = f"furbo:{rtsp_password('s3cret')}@abc123-furbo-bridge:8554"
     assert found.stream_url_for("111") == f"rtsp://{auth}/furbo_111"
     assert found.stream_url_for("222") == f"rtsp://{auth}/furbo_222"
-    # A camera the bridge does not serve falls back rather than inventing a name.
-    assert found.stream_url_for("999") == f"rtsp://{auth}/furbo"
+    # A camera this bridge does not serve gets no URL at all. The plain stream
+    # would resolve and play camera 111, which looks exactly like it working.
+    assert found.stream_url_for("999") is None
+    assert found.stream_url_for("999", sole_camera=True) is None
 
 
 async def test_older_addon_without_a_camera_list(
@@ -199,8 +201,9 @@ async def test_older_addon_without_a_camera_list(
 ) -> None:
     """An add-on that predates multiple cameras has no such endpoint.
 
-    Every camera then points at the single stream it does publish, so updating
-    the integration ahead of the add-on does not break the existing one.
+    Its single stream is the right one for a single-camera account, so
+    updating the integration ahead of the add-on keeps that setup working. It
+    is not the right one for any camera of an account that has several.
     """
     monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
     aioclient_mock.get(
@@ -214,7 +217,13 @@ async def test_older_addon_without_a_camera_list(
     found = await async_discover_bridge(hass)
     assert found is not None
     assert found.streams == {}
-    assert found.stream_url_for("111").endswith("/furbo")
+    assert found.names_cameras is False
+    sole = found.stream_url_for("111", sole_camera=True)
+    assert sole is not None
+    assert sole.endswith("/furbo")
+    # With more than one camera on the account, that stream belongs to
+    # whichever the add-on serves, and naming it here would cross the feeds.
+    assert found.stream_url_for("111") is None
 
 
 async def test_unreachable_camera_list_falls_back(
@@ -239,6 +248,10 @@ async def test_unreachable_camera_list_falls_back(
     found = await async_discover_bridge(hass)
     assert found is not None
     assert found.streams == {}
+    # This is what issue #1 hit: the camera list was unreadable at setup, so
+    # every camera was offered the same plain stream and all played the first.
+    assert found.stream_url_for("111") is None
+    assert found.stream_url_for("222") is None
 
 
 async def test_a_malformed_camera_list_is_ignored(

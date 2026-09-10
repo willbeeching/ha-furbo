@@ -524,3 +524,52 @@ async def test_options_flow_prefills_discovered_bridge(
     assert result["step_id"] == "camera"
     # The discovered add-on host is surfaced to the user on the form.
     assert result["description_placeholders"]["discovered"] == "abc-furbo-bridge"
+
+
+async def test_options_flow_offers_no_stream_it_cannot_name(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two cameras and an unreadable camera list means no stream is suggested.
+
+    This is the screen issue #1 was filled in on: the add-on's camera list was
+    unreachable at that moment, so every camera was offered the same plain
+    stream, accepted, and all of them played the first camera's video. An
+    empty box is answerable; a URL that quietly plays the wrong dog is not.
+    """
+    second = dict(c.DEVICE)
+    second["Id"] = 1788515097680000
+    second["DeviceName"] = "Second Camera"
+    mock_client.get_devices.return_value = [dict(c.DEVICE), second]
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-token")
+    aioclient_mock.get(
+        "http://supervisor/addons",
+        json={"data": {"addons": [{"slug": "abc_furbo_bridge", "state": "started"}]}},
+    )
+    aioclient_mock.get(
+        "http://supervisor/addons/abc_furbo_bridge/info",
+        json={
+            "data": {"hostname": "abc-furbo-bridge", "options": {"api_token": "tok"}}
+        },
+    )
+    aioclient_mock.get("http://abc-furbo-bridge:8791/api/cameras", exc=TimeoutError())
+    await setup_integration(hass, mock_config_entry)
+
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SCAN_INTERVAL: 120, CONF_EVENTS_ENABLED: True},
+    )
+    assert result["step_id"] == "camera"
+    suggested = {
+        key.schema: key.description["suggested_value"]
+        for key in result["data_schema"].schema
+        if key.description
+    }
+    assert suggested[CONF_STREAM_URL] == ""
+    # The bridge URL is still offered: it is the same for every camera, and
+    # the API is asked about one camera by id, so it cannot cross them.
+    assert suggested[CONF_BRIDGE_URL] == "http://abc-furbo-bridge:8791"

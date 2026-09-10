@@ -57,7 +57,8 @@ class DiscoveredBridge:
     token: str | None
     # Cloud device id -> go2rtc stream name, as the add-on reports it. Empty
     # for an add-on that predates multiple cameras, or one that could not be
-    # reached; every camera then falls back to the single stream it publishes.
+    # reached, in which case the only stream we can name is the single one
+    # such a bridge publishes.
     streams: Mapping[str, str] = field(default_factory=dict)
 
     @property
@@ -65,21 +66,43 @@ class DiscoveredBridge:
         """The add-on's HTTP API base URL."""
         return f"http://{self.host}:{BRIDGE_PORT}"
 
-    def stream_url_for(self, device_id: str | None = None) -> str:
-        """Return one camera's go2rtc RTSP URL, with credentials when set.
+    def _rtsp_url(self, name: str) -> str:
+        """Build one go2rtc stream URL, with credentials when the token is set."""
+        auth = f"{RTSP_USERNAME}:{rtsp_password(self.token)}@" if self.token else ""
+        return f"rtsp://{auth}{self.host}:{RTSP_PORT}/{name}"
+
+    def stream_url_for(
+        self, device_id: str | None = None, *, sole_camera: bool = False
+    ) -> str | None:
+        """One camera's go2rtc RTSP URL, or None when it cannot be named.
 
         The add-on requires RTSP authentication for non-loopback clients, so a
         credential derived from the token (not the token itself) is carried as
         the RTSP password.
+
+        A bridge that lists its cameras settles this outright. One that does
+        not (too old for `/api/cameras`, or unreachable when we asked)
+        publishes a single stream under the plain name, which is this camera's
+        only when it is the account's only camera -- hence ``sole_camera``.
+        Guessing otherwise is how three cameras end up sharing one feed:
+        the name resolves, the URL works, and every camera plays the first.
         """
-        auth = f"{RTSP_USERNAME}:{rtsp_password(self.token)}@" if self.token else ""
-        name = self.streams.get(device_id or "", LEGACY_STREAM)
-        return f"rtsp://{auth}{self.host}:{RTSP_PORT}/{name}"
+        name = self.streams.get(device_id) if device_id else None
+        if name is None:
+            if self.streams or not sole_camera:
+                return None
+            name = LEGACY_STREAM
+        return self._rtsp_url(name)
+
+    @property
+    def names_cameras(self) -> bool:
+        """Whether this bridge told us which stream belongs to which camera."""
+        return bool(self.streams)
 
     @property
     def stream_url(self) -> str:
-        """The stream a bridge serving a single camera publishes."""
-        return self.stream_url_for()
+        """The plain stream every bridge publishes for its first camera."""
+        return self._rtsp_url(LEGACY_STREAM)
 
 
 async def _get(session: aiohttp.ClientSession, path: str, token: str) -> Any:

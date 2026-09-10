@@ -289,6 +289,11 @@ class FurboOptionsFlow(OptionsFlow):
         """Initialise the per-flow state."""
         self._options: dict[str, Any] = {}
         self._pending: list[tuple[str, str]] = []
+        # How many cameras this account has, which _pending stops telling us
+        # once it starts shrinking. A bridge that cannot name its cameras
+        # publishes one stream, and that is only this camera's when it is the
+        # sole camera.
+        self._camera_count = 0
         self._stream_urls: dict[str, str] = {}
         self._bridges: dict[str, dict[str, str]] = {}
         self._discovered: DiscoveredBridge | None = None
@@ -308,6 +313,7 @@ class FurboOptionsFlow(OptionsFlow):
         if user_input is not None:
             self._options = dict(user_input)
             self._pending = _cameras_for_entry(self.hass, self.config_entry)
+            self._camera_count = len(self._pending)
             ids = {device_id for device_id, _ in self._pending}
             # Keep per-camera settings only for cameras that still exist.
             streams = self.config_entry.options.get(CONF_STREAM_URLS, {})
@@ -376,9 +382,14 @@ class FurboOptionsFlow(OptionsFlow):
         # Offer the Furbo Bridge add-on's URLs and token when it is running and
         # this camera has not already been configured by hand.
         discovered = await self._async_discovered_bridge()
-        suggested_stream = self._stream_urls.get(device_id) or (
-            discovered.stream_url_for(device_id) if discovered else ""
+        offered = (
+            discovered.stream_url_for(device_id, sole_camera=self._camera_count == 1)
+            if discovered
+            else None
         )
+        # Nothing offered rather than a guess: a stream URL that plays another
+        # camera looks exactly like one that works.
+        suggested_stream = self._stream_urls.get(device_id) or offered or ""
         suggested_bridge = bridge_conf.get(CONF_BRIDGE_URL) or (
             discovered.bridge_url if discovered else ""
         )
