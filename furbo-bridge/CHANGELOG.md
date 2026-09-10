@@ -3,6 +3,14 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.3
+
+- A new `furbo_p2p.py diary` command reports what the account's Doggie Diary
+  contains, for working out whether the daily video can be fetched without the
+  phone app. It prints field names, dates and counts, never the links: those
+  are signed URLs to video of someone's home. Nothing else uses it yet and
+  nothing else changes.
+
 ## 1.2.2
 
 - **A camera switched off no longer loses its video until the add-on is

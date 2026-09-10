@@ -65,6 +65,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from furbo_cloud import (
+    BASE_URL,
+    PETGPT_URL,
     FurboClient,
     FurboError,
     FurboLoginError,
@@ -550,6 +552,64 @@ async def cloud_login(code: str | None = None, send_only: bool = False) -> dict:
     SESSION_FILE.write_text(json.dumps(session, indent=2))
     log(f"logged in, {len(devices)} device(s), session saved to {SESSION_FILE}")
     return session
+
+
+async def cloud_diary(language: str) -> None:
+    """Print the shape of the account's Doggie Diary, without its contents.
+
+    Exploratory: the app posts AccountId, CognitoToken and Language to
+    /doggie_diary/report and gets back a list of days, each carrying a
+    TimeLapseUrl -- the daily video. Nothing here is documented, and which of
+    the two API hosts serves it is the one thing the decompiled app does not
+    say (it comes from a build config), so both are tried.
+
+    Field names and counts only. The URLs are signed links to video of
+    someone's home, so they are described, never printed.
+    """
+    import aiohttp
+
+    session = _load_session()
+    payload = {
+        "AccountId": session["account_id"],
+        "CognitoToken": session["cognito_token"],
+        "Language": language,
+    }
+    async with aiohttp.ClientSession() as http:
+        client = FurboClient(http, session["account_id"], session["cognito_token"])
+        for base in (BASE_URL, PETGPT_URL):
+            try:
+                data = await client._post("/doggie_diary/report", payload, base=base, form=True)
+            except FurboError as exc:
+                print(f"{base}: {exc}")
+                continue
+            print(f"{base}: answered")
+            print(f"  top-level fields: {', '.join(sorted(data))}")
+            diaries = data.get("Diaries")
+            if not isinstance(diaries, list):
+                print(f"  Diaries is {type(diaries).__name__}, not a list")
+                return
+            print(f"  {len(diaries)} diary entries")
+            for entry in diaries[:3]:
+                if not isinstance(entry, dict):
+                    continue
+                print(f"  - fields: {', '.join(sorted(entry))}")
+                for key in ("DiaryDate", "Weekday", "IsValid"):
+                    print(f"    {key}: {entry.get(key)!r}")
+                for key in ("TimeLapseUrl", "SnapshotUrl", "SurveyUrl"):
+                    value = entry.get(key)
+                    if not isinstance(value, str) or not value:
+                        print(f"    {key}: {value!r}")
+                        continue
+                    # The link itself is private; its shape is not.
+                    host = value.split("/")[2] if "//" in value else "?"
+                    query = value.split("?", 1)[1] if "?" in value else ""
+                    names = sorted({p.split("=")[0] for p in query.split("&") if p})
+                    print(
+                        f"    {key}: {len(value)} chars on {host}, "
+                        f"query keys: {', '.join(names) or 'none'}"
+                    )
+            return
+    print("neither host answered")
 
 
 async def cloud_status(days: int) -> None:
@@ -1589,6 +1649,8 @@ def main() -> int:
         "--send-only", action="store_true", help="email the MFA code and stop; finish with --code"
     )
     lg.add_argument("--code", help="the emailed verification code, to finish a --send-only login")
+    dy = sub.add_parser("diary", help="cloud: what the Doggie Diary report contains")
+    dy.add_argument("--language", default="en")
     st = sub.add_parser("status", help="cloud: devices, alerts, subscription, activity, events")
     st.add_argument("--days", type=int, default=2)
 
@@ -1675,6 +1737,9 @@ def main() -> int:
 
     if args.cmd == "login":
         asyncio.run(cloud_login(args.code, args.send_only))
+        return 0
+    if args.cmd == "diary":
+        asyncio.run(cloud_diary(args.language))
         return 0
     if args.cmd == "status":
         asyncio.run(cloud_status(args.days))
