@@ -218,6 +218,9 @@ async def test_older_addon_without_a_camera_list(
     assert found is not None
     assert found.streams == {}
     assert found.names_cameras is False
+    # A settled answer: this add-on has no such endpoint, so asking again
+    # would only ever get the same 404.
+    assert found.camera_list_unavailable is False
     sole = found.stream_url_for("111", sole_camera=True)
     assert sole is not None
     assert sole.endswith("/furbo")
@@ -252,6 +255,8 @@ async def test_unreachable_camera_list_falls_back(
     # every camera was offered the same plain stream and all played the first.
     assert found.stream_url_for("111") is None
     assert found.stream_url_for("222") is None
+    # And it is worth asking again: the add-on may simply have been starting.
+    assert found.camera_list_unavailable is True
 
 
 async def test_a_malformed_camera_list_is_ignored(
@@ -301,3 +306,24 @@ async def test_camera_list_that_is_not_a_document(
     found = await async_discover_bridge(hass)
     assert found is not None
     assert found.streams == {}
+
+
+async def test_a_failing_camera_list_is_worth_asking_again(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server error from the add-on is not the same as it being too old."""
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+    aioclient_mock.get(
+        ADDONS_URL, json=_addons({"slug": "abc123_furbo_bridge", "state": "started"})
+    )
+    aioclient_mock.get(
+        INFO_URL, json=_info(hostname="abc123-furbo-bridge", options={"api_token": "s"})
+    )
+    aioclient_mock.get(CAMERAS_URL, status=503)
+
+    found = await async_discover_bridge(hass)
+    assert found is not None
+    assert found.streams == {}
+    assert found.camera_list_unavailable is True

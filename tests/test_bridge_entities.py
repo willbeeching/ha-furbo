@@ -496,3 +496,100 @@ async def test_explicit_bridge_still_binds_with_multiple_cameras(
     runtime = mock_config_entry.runtime_data
     assert set(runtime.bridges) == {c.DEVICE_ID}
     assert hass.states.get("switch.test_camera_camera") is not None
+
+
+async def test_a_bridge_that_answers_later_is_picked_up(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """An add-on still starting up does not cost the cameras their video.
+
+    Refusing to guess which camera is which is right, but on its own it left a
+    multi-camera account with no video at all, for as long as it took someone
+    to notice and reload the integration by hand. The add-on is usually just
+    booting alongside Home Assistant.
+    """
+    second = dict(c.DEVICE)
+    second["Id"] = 1788515097680000
+    second["DeviceName"] = "Second Camera"
+    mock_client.get_devices.return_value = [dict(c.DEVICE), second]
+
+    naming = DiscoveredBridge(
+        slug="abc_furbo_bridge",
+        host="abc-furbo-bridge",
+        token="tok",
+        streams={
+            c.DEVICE_ID: f"furbo_{c.DEVICE_ID}",
+            "1788515097680000": "furbo_1788515097680000",
+        },
+    )
+    starting = DiscoveredBridge(
+        slug="abc_furbo_bridge",
+        host="abc-furbo-bridge",
+        token="tok",
+        camera_list_unavailable=True,
+    )
+    asked = 0
+
+    async def _discover(_hass: HomeAssistant) -> DiscoveredBridge:
+        nonlocal asked
+        asked += 1
+        return starting if asked == 1 else naming
+
+    monkeypatch.setattr("custom_components.furbo.async_discover_bridge", _discover)
+
+    await setup_integration(hass, mock_config_entry)
+
+    # Nothing bound yet, and no guessed stream -- but the cloud side is fine.
+    assert mock_config_entry.runtime_data.stream_urls == {}
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert hass.states.get("sensor.test_camera_subscription_days_left").state == "24"
+
+    # The add-on finishes starting and the next ask succeeds.
+    freezer.tick(timedelta(minutes=3))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    runtime = mock_config_entry.runtime_data
+    auth = f"furbo:{rtsp_password('tok')}@abc-furbo-bridge:8554"
+    assert runtime.stream_urls == {
+        c.DEVICE_ID: f"rtsp://{auth}/furbo_{c.DEVICE_ID}",
+        "1788515097680000": f"rtsp://{auth}/furbo_1788515097680000",
+    }
+    assert set(runtime.bridges) == {c.DEVICE_ID, "1788515097680000"}
+
+
+async def test_an_older_bridge_is_not_asked_again(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    monkeypatch: pytest.MonkeyPatch,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A 404 is a settled answer, so nothing keeps polling for a better one."""
+    second = dict(c.DEVICE)
+    second["Id"] = 1788515097680000
+    mock_client.get_devices.return_value = [dict(c.DEVICE), second]
+    asked = 0
+
+    async def _discover(_hass: HomeAssistant) -> DiscoveredBridge:
+        nonlocal asked
+        asked += 1
+        return DiscoveredBridge(
+            slug="abc_furbo_bridge", host="abc-furbo-bridge", token="tok"
+        )
+
+    monkeypatch.setattr("custom_components.furbo.async_discover_bridge", _discover)
+    await setup_integration(hass, mock_config_entry)
+    assert asked == 1
+
+    freezer.tick(timedelta(minutes=30))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert asked == 1

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 import logging
 from typing import Any
 from urllib.parse import unquote, urlsplit, urlunsplit
@@ -13,6 +14,7 @@ from homeassistant.const import CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_time_interval
 
 from .api import FurboClient
 from .bridge import FurboBridgeClient
@@ -40,6 +42,11 @@ from .discovery import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# How often to ask a discovered add-on again which camera is which, when it
+# could not say at setup. It is usually just starting up alongside Home
+# Assistant, so the answer normally comes on the first or second ask.
+DISCOVERY_RETRY = timedelta(minutes=2)
 
 PLATFORMS: list[Platform] = [
     Platform.BUTTON,
@@ -157,6 +164,25 @@ def _token_source(
     return client.async_get_cloud_token
 
 
+def _retry_discovery(hass: HomeAssistant, entry: FurboConfigEntry) -> None:
+    """Reload the entry once the add-on can say which camera is which.
+
+    Only reached when the account has several cameras and the add-on could not
+    be asked, which leaves every one of them without video. Nothing else would
+    ever ask again, so the cameras stayed missing until someone reloaded the
+    integration by hand, however long after the add-on came up.
+    """
+
+    async def _ask_again(_now: datetime) -> None:
+        bridge = await async_discover_bridge(hass)
+        if bridge is not None and bridge.names_cameras:
+            _LOGGER.debug("The Furbo Bridge add-on named its cameras; reloading")
+            # Reloading unloads the entry, and unloading cancels this timer.
+            hass.config_entries.async_schedule_reload(entry.entry_id)
+
+    entry.async_on_unload(async_track_time_interval(hass, _ask_again, DISCOVERY_RETRY))
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> bool:
     """Set up Furbo from a config entry."""
     client = FurboClient(
@@ -216,6 +242,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> boo
             "stream URL in the Furbo integration's options.",
             len(coordinator.data.devices),
         )
+        if discovered.camera_list_unavailable:
+            # It could not be asked, as opposed to asked and found too old.
+            # Everything else here still loads; only video waits.
+            _retry_discovery(hass, entry)
 
     # A bridge that is down at startup must not keep the cloud entities from
     # loading: refresh without raising, and let its entities be unavailable

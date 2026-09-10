@@ -56,10 +56,13 @@ class DiscoveredBridge:
     host: str
     token: str | None
     # Cloud device id -> go2rtc stream name, as the add-on reports it. Empty
-    # for an add-on that predates multiple cameras, or one that could not be
-    # reached, in which case the only stream we can name is the single one
-    # such a bridge publishes.
+    # for an add-on that predates multiple cameras: the only stream we can
+    # name is then the single one it publishes.
     streams: Mapping[str, str] = field(default_factory=dict)
+    # True when the list could not be read at all, rather than read and found
+    # to be absent. The bridge may well name its cameras once it is up, so a
+    # caller that needed the names should ask again instead of giving up.
+    camera_list_unavailable: bool = False
 
     @property
     def bridge_url(self) -> str:
@@ -118,12 +121,17 @@ async def _get(session: aiohttp.ClientSession, path: str, token: str) -> Any:
 
 async def _stream_names(
     session: aiohttp.ClientSession, host: str, token: str | None
-) -> dict[str, str]:
+) -> dict[str, str] | None:
     """Ask the add-on which stream belongs to which camera.
 
-    An add-on that serves a single camera has no such endpoint, so a 404 (or
-    any other failure) simply means every camera falls back to the one stream
-    it does publish.
+    Returns None when the question could not be put -- the add-on was starting,
+    slow, or briefly unreachable -- which is worth asking again later. An
+    add-on too old to have the endpoint answers 404, which is a settled answer
+    and returns an empty mapping: it publishes the one stream and no more.
+
+    The two used to be indistinguishable, so a moment's unavailability during
+    setup looked permanent and left a multi-camera account with no video at
+    all until someone reloaded the integration by hand.
     """
     if not token:
         return {}
@@ -133,12 +141,15 @@ async def _stream_names(
             headers={"Authorization": f"Bearer {token}"},
             timeout=_TIMEOUT,
         ) as resp:
-            if resp.status != 200:
+            if resp.status in (404, 405):
                 return {}
+            if resp.status != 200:
+                _LOGGER.debug("Furbo Bridge camera list: HTTP %s", resp.status)
+                return None
             body = await resp.json()
     except (aiohttp.ClientError, TimeoutError, ValueError) as err:
         _LOGGER.debug("Furbo Bridge camera list unavailable: %s", err)
-        return {}
+        return None
     cameras = body.get("cameras") if isinstance(body, dict) else None
     if not isinstance(cameras, list):
         return {}
@@ -189,7 +200,11 @@ async def async_discover_bridge(hass: HomeAssistant) -> DiscoveredBridge | None:
             api_token = value if isinstance(value, str) and value else None
         streams = await _stream_names(session, str(host), api_token)
         return DiscoveredBridge(
-            slug=slug, host=str(host), token=api_token, streams=streams
+            slug=slug,
+            host=str(host),
+            token=api_token,
+            streams=streams or {},
+            camera_list_unavailable=streams is None,
         )
     except (aiohttp.ClientError, TimeoutError, ValueError, KeyError) as err:
         _LOGGER.debug("Furbo Bridge add-on discovery failed: %s", err)
