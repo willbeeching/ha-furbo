@@ -127,3 +127,28 @@ NOTABLE_EVENTS: list[dict[str, Any]] = [
 ]
 
 DAILY_SUMMARY = "Your furbabies had a quiet day with a little wandering by the door."
+
+# What FurboClient.get_diary returns: the shape of a diary report, with the
+# signed links described rather than included.
+DIARY_SHAPE: dict[str, Any] = {
+    "host": "product.furbo.co",
+    "fields": ["Diaries", "ResultCode"],
+    "count": 7,
+    "days": [
+        {
+            "date": "2026-09-10",
+            "weekday": "Thursday",
+            "valid": True,
+            "fields": ["DiaryDate", "IsValid", "TimeLapseUrl", "Weekday"],
+            "links": {
+                "TimeLapseUrl": {
+                    "host": "d2xyz.cloudfront.net",
+                    "type": "mp4",
+                    "query": ["Expires", "Key-Pair-Id", "Signature"],
+                },
+                "SnapshotUrl": None,
+                "SurveyUrl": None,
+            },
+        }
+    ],
+}

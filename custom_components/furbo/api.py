@@ -26,6 +26,7 @@ import asyncio
 import base64
 import logging
 from typing import Any, cast
+from urllib.parse import parse_qs, urlsplit
 import uuid
 
 import aiohttp
@@ -36,6 +37,15 @@ _LOGGER = logging.getLogger(__name__)
 
 MAIN_URL = "https://product.furbo.co"
 PETGPT_URL = "https://pet-gpt.furbo.co"
+
+# The Doggie Diary. Which of the two hosts serves it is not in the app's
+# sources (it arrives from a build config), so both are tried and whichever
+# answers is remembered for the life of the client.
+DIARY_PATH = "/doggie_diary/report"
+DIARY_HOSTS = (MAIN_URL, PETGPT_URL)
+DIARY_LINKS = ("TimeLapseUrl", "SnapshotUrl", "SurveyUrl")
+# Enough days to see the pattern, few enough to sit in an entity attribute.
+DIARY_DAYS = 3
 
 # Static basic-auth header shipped in the app (client id, not a user secret).
 BASIC_AUTH = "Basic dG9tb2Z1bnJkOmhhcHB5UGV0MTIz"
@@ -115,6 +125,46 @@ def new_mobile_id() -> str:
 
 
 # --- response validation ---------------------------------------------------
+
+
+def _link_shape(value: Any) -> dict[str, Any] | None:
+    """Describe a URL without disclosing it, or None when there is not one.
+
+    A diary link is a signed URL to video of the inside of someone's home. It
+    ends up in an entity attribute, a diagnostics download and an issue
+    report, so what is kept is the shape that answers whether it can simply be
+    fetched: the host, the file type and which query parameters sign it. The
+    URL itself never leaves the response.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    parts = urlsplit(value)
+    name = parts.path.rsplit("/", 1)[-1]
+    return {
+        "host": parts.netloc,
+        "type": name.rsplit(".", 1)[-1].lower() if "." in name else "",
+        "query": sorted(parse_qs(parts.query)),
+    }
+
+
+def _diary_shape(data: dict[str, Any], host: str, path: str) -> dict[str, Any]:
+    """Summarise a diary report: what it holds, not what it links to."""
+    days = _as_dict_list(data.get("Diaries", []), path, "Diaries")
+    return {
+        "host": urlsplit(host).netloc,
+        "fields": sorted(data),
+        "count": len(days),
+        "days": [
+            {
+                "date": _optional_str(day, "DiaryDate", path),
+                "weekday": _optional_str(day, "Weekday", path),
+                "valid": day.get("IsValid"),
+                "fields": sorted(day),
+                "links": {key: _link_shape(day.get(key)) for key in DIARY_LINKS},
+            }
+            for day in days[:DIARY_DAYS]
+        ],
+    }
 
 
 def _malformed(path: str, what: str) -> FurboConnectionError:
@@ -206,6 +256,8 @@ class FurboClient:
             "User-Agent": USER_AGENT,
             "Authorization": BASIC_AUTH,
         }
+        # Set the first time the diary answers; see DIARY_HOSTS.
+        self._diary_host: str | None = None
 
     async def _post(
         self,
@@ -444,6 +496,32 @@ class FurboClient:
             path, {**self._base(), "Date": date}, base=PETGPT_URL, form=True
         )
         return _optional_str(data, "Summary", path) or ""
+
+    async def get_diary(self, language: str = "en") -> dict[str, Any]:
+        """Describe the account's Doggie Diary, without its links.
+
+        The app posts the account, the token and a language and gets back one
+        entry per day, each carrying a TimeLapseUrl: the daily video that
+        otherwise only the phone app will show you. What comes back here is
+        the shape of that answer, because nothing needs the URL until
+        something downloads it, and whatever does that can read it where it
+        is fetched rather than carrying it through Home Assistant's state.
+        """
+        payload = {**self._base(), "Language": language}
+        hosts = (self._diary_host,) if self._diary_host else DIARY_HOSTS
+        refused: FurboError = FurboConnectionError(f"No Furbo host serves {DIARY_PATH}")
+        for host in hosts:
+            try:
+                data = await self._post(DIARY_PATH, payload, base=host, form=True)
+            except FurboAuthError:
+                # The token is dead everywhere; a second host cannot help.
+                raise
+            except FurboError as err:
+                refused = err
+                continue
+            self._diary_host = host
+            return _diary_shape(data, host, DIARY_PATH)
+        raise refused
 
     async def get_activity_report(self, dates: list[str]) -> dict[str, dict[str, int]]:
         """Return the total count per alert type for each requested day.

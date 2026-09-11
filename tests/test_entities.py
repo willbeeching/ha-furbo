@@ -183,3 +183,35 @@ async def test_alert_frequency_select(
     assert (
         hass.states.get("select.test_camera_barking_alert_frequency").state == "always"
     )
+
+
+async def test_diary_sensor_reports_shape_not_links(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """The diagnostic sensor says what the diary holds and where, not its URLs."""
+    await setup_integration(hass, mock_config_entry)
+
+    diary = hass.states.get("sensor.furbo_account_doggie_diary_days")
+    assert diary.state == "7"
+    assert diary.attributes["host"] == "product.furbo.co"
+    day = diary.attributes["days"][0]
+    assert day["date"] == "2026-09-10"
+    assert day["links"]["TimeLapseUrl"]["type"] == "mp4"
+    assert day["links"]["TimeLapseUrl"]["query"] == [
+        "Expires",
+        "Key-Pair-Id",
+        "Signature",
+    ]
+    assert "https://" not in repr(diary.attributes)
+
+
+async def test_diary_sensor_is_unknown_without_a_diary(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """No diary leaves the sensor unknown and its attributes empty."""
+    mock_client.get_diary.side_effect = FurboError("no diary")
+    await setup_integration(hass, mock_config_entry)
+
+    diary = hass.states.get("sensor.furbo_account_doggie_diary_days")
+    assert diary.state == "unknown"
+    assert "days" not in diary.attributes

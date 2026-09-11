@@ -419,3 +419,68 @@ async def test_setup_after_the_token_died_overnight(
     # The log says how long the dead token had lasted, which is the only way
     # to learn the cloud's actual token lifetime.
     assert "issued 26.0h ago" in caplog.text
+
+
+# --- doggie diary ----------------------------------------------------------------
+
+
+async def test_diary_is_asked_for_once_an_hour(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """The diary changes daily, so it is not refetched on every five-minute poll."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    assert mock_client.get_diary.await_count == 1
+    assert coordinator.data.diary["count"] == 7
+
+    await coordinator.async_refresh()
+    await coordinator.async_refresh()
+    assert mock_client.get_diary.await_count == 1
+    # Still carried, not dropped because it was not re-asked.
+    assert coordinator.data.diary["count"] == 7
+
+    # An hour on, it is asked again.
+    coordinator._diary_at = time.monotonic() - 3601
+    await coordinator.async_refresh()
+    assert mock_client.get_diary.await_count == 2
+
+
+async def test_diary_failure_does_not_fail_the_entry(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """An account without the diary loads normally, and is not asked again at once."""
+    mock_client.get_diary.side_effect = FurboError("no diary", code=80002)
+    await setup_integration(hass, mock_config_entry)
+
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    coordinator = mock_config_entry.runtime_data.coordinator
+    assert coordinator.data.diary is None
+
+    # The refusal backs off for the same hour rather than retrying every poll.
+    await coordinator.async_refresh()
+    assert mock_client.get_diary.await_count == 1
+
+
+async def test_diary_auth_failure_asks_for_a_new_login(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A token the diary host rejects is a dead token, not a missing diary."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    coordinator._diary_at = None
+    mock_client.get_diary.side_effect = FurboAuthError("expired")
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+
+async def test_diary_is_skipped_when_events_are_off(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Turning the calendar off also stops the diary: same host, same rate limit."""
+    await setup_integration(
+        hass, mock_config_entry, {**mock_config_entry.options, "events_enabled": False}
+    )
+
+    assert mock_client.get_diary.await_count == 0
+    assert mock_config_entry.runtime_data.coordinator.data.diary is None

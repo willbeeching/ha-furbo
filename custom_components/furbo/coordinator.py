@@ -70,6 +70,13 @@ class _Renewal(Enum):
     UNAVAILABLE = "unavailable"
 
 
+# The diary changes once a day and the host that serves it rate-limits
+# repeat calls, so it is asked for at most this often however fast the rest
+# of the account is polled. A failed attempt waits the same hour: an account
+# without the subscription would otherwise be refused on every cycle.
+DIARY_INTERVAL = timedelta(hours=1)
+
+
 @dataclass(slots=True)
 class FurboDeviceData:
     """State for one Furbo camera."""
@@ -100,6 +107,9 @@ class FurboData:
     activity_today: dict[str, int] = field(default_factory=dict)
     notable_events_today: int = 0
     account_timezone: str | None = None
+    # Shape of the account's Doggie Diary, never its links. None until the
+    # cloud has answered once; see FurboClient.get_diary.
+    diary: dict[str, Any] | None = None
 
 
 class FurboCoordinator(DataUpdateCoordinator[FurboData]):
@@ -131,6 +141,8 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         self.hub_device_id: str | None = None
         self._tzinfo: ZoneInfo | None = None
         self._timezone_name: str | None = None
+        self._diary: dict[str, Any] | None = None
+        self._diary_at: float | None = None
 
     @property
     def events_enabled(self) -> bool:
@@ -315,7 +327,28 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
             activity_today=activity,
             notable_events_today=event_count,
             account_timezone=self._timezone_name,
+            diary=await self._async_diary() if self.events_enabled else None,
         )
+
+    async def _async_diary(self) -> dict[str, Any] | None:
+        """Return the diary's shape, asking the cloud at most hourly.
+
+        Gated on the same option as the calendar: both are extras on the
+        rate-limiting host that the camera itself does not need.
+        """
+        now = time.monotonic()
+        waited = None if self._diary_at is None else now - self._diary_at
+        if waited is not None and waited < DIARY_INTERVAL.total_seconds():
+            return self._diary
+        # Set before the call, so a refusal backs off for the same hour.
+        self._diary_at = now
+        try:
+            self._diary = await self.client.get_diary()
+        except FurboAuthError as err:
+            raise ConfigEntryAuthFailed from err
+        except FurboError as err:
+            _LOGGER.debug("Doggie Diary unavailable this cycle: %s", err)
+        return self._diary
 
     def _carry_over_calendar(
         self, devices: dict[str, FurboDeviceData]

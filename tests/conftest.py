@@ -49,6 +49,7 @@ def _make_client() -> AsyncMock:
     }
     client.get_daily_summary.return_value = c.DAILY_SUMMARY
     client.get_notable_events.return_value = list(c.NOTABLE_EVENTS)
+    client.get_diary.return_value = dict(c.DIARY_SHAPE)
     return client
 
 

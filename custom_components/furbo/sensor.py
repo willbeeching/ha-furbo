@@ -30,6 +30,7 @@ from .entity import FurboAccountEntity, FurboBridgeEntity, FurboDeviceEntity
 PARALLEL_UPDATES = 0
 
 EVENTS_UNIT = "events"
+DAYS_UNIT = "days"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -101,6 +102,14 @@ DEVICE_SENSORS: tuple[FurboDeviceSensorDescription, ...] = (
     ),
 )
 
+
+def _diary_attributes(data: FurboData) -> dict[str, Any]:
+    """Expose which host answered and what each day carries."""
+    if data.diary is None:
+        return {}
+    return {"host": data.diary["host"], "days": data.diary["days"]}
+
+
 ACCOUNT_SENSORS: tuple[FurboAccountSensorDescription, ...] = (
     FurboAccountSensorDescription(
         key="barking_events_today",
@@ -125,6 +134,16 @@ ACCOUNT_SENSORS: tuple[FurboAccountSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda data: data.notable_events_today,
         attributes_fn=lambda data: {"summary": data.daily_summary or None},
+    ),
+    # Diagnostic: whether the account's daily video report can be reached, and
+    # what a day in it holds. The links themselves are deliberately not here.
+    FurboAccountSensorDescription(
+        key="diary_days",
+        translation_key="diary_days",
+        native_unit_of_measurement=DAYS_UNIT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: None if data.diary is None else data.diary["count"],
+        attributes_fn=_diary_attributes,
     ),
 )
 

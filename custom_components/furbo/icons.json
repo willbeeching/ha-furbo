@@ -195,6 +195,9 @@
       },
       "treat_toss_sound": {
         "default": "mdi:music-note"
+      },
+      "diary_days": {
+        "default": "mdi:book-open-variant"
       }
     },
     "number": {

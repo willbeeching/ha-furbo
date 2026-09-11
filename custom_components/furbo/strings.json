@@ -187,6 +187,9 @@
           "custom": "Custom",
           "mute": "Mute"
         }
+      },
+      "diary_days": {
+        "name": "Doggie Diary days"
       }
     },
     "number": {
