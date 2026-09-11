@@ -195,6 +195,19 @@ jobs:
       - name: Require add-on version bump on content change
         run: python scripts/check_addon_version.py "origin/${{ github.base_ref }}"
 
+  changelog:
+    # Runs on pushes too, not only pull requests: the add-on's version guard
+    # is pull-request-only and a push to main walked straight past it, which
+    # is how a fix once shipped under a version users already had.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Require release notes for the declared version
+        run: python scripts/release_notes.py
+
   hassfest:
     runs-on: ubuntu-latest
     steps:

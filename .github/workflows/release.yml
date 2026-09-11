@@ -57,6 +57,13 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.base }}
         run: python scripts/build_release.py --expect-version "$VERSION" --output dist
+      - name: Read the release notes from the changelog
+        env:
+          VERSION: ${{ steps.version.outputs.base }}
+        # Fails when the version has no entry. Generated notes would be a bare
+        # compare link here (this repository is pushed to, not merged into),
+        # and that is what a user sees in the HACS update prompt.
+        run: python scripts/release_notes.py --version "$VERSION" --output notes.md
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -71,5 +78,5 @@ jobs:
             dist/*.tar.gz dist/*.sha256 \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --generate-notes \
+            --notes-file notes.md \
             "${flags[@]}"
