@@ -181,9 +181,10 @@ jobs:
           path: furbo-bridge.sbom.json
 
   addon-version:
-    # On pull requests, require a version bump when shipped add-on files change,
-    # so Home Assistant actually offers the update to installed users.
-    if: github.event_name == 'pull_request'
+    # Require a version bump when shipped add-on files change, so Home
+    # Assistant actually offers the update to installed users. This ran on
+    # pull requests only, and a push to main walked straight past it: three
+    # fixes shipped under a version number their reporter already had.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -193,7 +194,21 @@ jobs:
         with:
           python-version: "3.13"
       - name: Require add-on version bump on content change
-        run: python scripts/check_addon_version.py "origin/${{ github.base_ref }}"
+        env:
+          # A pull request compares against its base; a push against what was
+          # on the branch before it.
+          BASE: >-
+            ${{ github.event_name == 'pull_request'
+                && format('origin/{0}', github.base_ref)
+                || github.event.before }}
+        run: |
+          base="$BASE"
+          # A first push, a force-push or a manual run leaves no usable before
+          # commit. The previous commit is the honest comparison there.
+          if ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
+            base="HEAD^"
+          fi
+          python scripts/check_addon_version.py "$base"
 
   changelog:
     # Runs on pushes too, not only pull requests: the add-on's version guard
