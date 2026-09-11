@@ -16,7 +16,10 @@ that ships to users gets an entry here.
   it threw the session away every time the add-on started, so each restart
   went round the emailed-code loop again and looked like the add-on refusing
   to start. It now resets, says so, and then leaves the new session alone
-  until the option is turned off and on again.
+  until the option is turned off and on again. Completing an emailed code
+  with the option still on counts as that reset, so the session the code just
+  earned survives the next restart -- which is the path the recovery
+  instructions put you on.
 - **An `mfa_code` that arrives with no login waiting for it is called out.**
   It used to fall through to requesting a new code, which silently made the
   code you had just typed useless -- and the next restart then checked that

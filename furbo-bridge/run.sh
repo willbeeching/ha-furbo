@@ -65,6 +65,11 @@ RTSP_PASSWORD="$(printf 'furbo-rtsp:%s' "$API_TOKEN" | sha256 | cut -c1-32)"
 # Never discard a pending MFA challenge the user is in the middle of completing.
 if [ "$RESET_SESSION" = "true" ]; then
   if [ -n "$MFA_CODE" ] && [ -f "$PENDING" ]; then
+    # Finishing this login IS the reset the option asked for, so record it as
+    # done. Without that the next restart saw an unhandled reset, threw the
+    # session away again, and sent the user back to the code they had just
+    # finished using.
+    : > "$RESET_DONE"
     echo "[furbo] reset_session is on but an emailed code is being submitted;" >&2
     echo "[furbo] keeping the pending login. Turn 'reset_session' off." >&2
   elif [ -f "$RESET_DONE" ] && [ -f "$FURBO_SESSION_FILE" ]; then

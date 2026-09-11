@@ -285,3 +285,31 @@ def test_turning_reset_session_off_arms_it_again(tmp_path: Path) -> None:
 
     again, _, _, _ = _run(tmp_path, on, py_body=writes_session)
     assert "clearing the stored session" in again.stderr
+
+
+def test_finishing_mfa_with_reset_on_keeps_the_new_session(tmp_path: Path) -> None:
+    """The reset the user asked for is the login they are completing.
+
+    Submitting a code with reset_session still on preserved the pending login
+    but never recorded the reset as handled, so the next restart wiped the
+    session that login had just earned -- on exactly the path the recovery
+    instructions put people on.
+    """
+    options = {
+        **BASE,
+        "email": "a@b.c",
+        "password": "pw",
+        "reset_session": True,
+        "mfa_code": "1234",
+    }
+    writes_session = 'printf "{}" > "$FURBO_SESSION_FILE"; exit 0'
+
+    first, data, _, session_file = _run(tmp_path, options, pending=True, py_body=writes_session)
+    assert "keeping the pending login" in first.stderr
+    assert (data / "furbo_reset_done").exists()
+    assert session_file.exists()
+
+    # The restart after it must not throw that session away.
+    second, _, _, _ = _run(tmp_path, options, py_body="exit 0")
+    assert "clearing the stored session" not in second.stderr
+    assert session_file.exists()
