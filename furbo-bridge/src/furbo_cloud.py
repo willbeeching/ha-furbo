@@ -387,13 +387,21 @@ class FurboClient:
             base=PETGPT_URL,
         )
 
-    async def get_p2p_connection(self, device_id: str) -> dict[str, str]:
-        """AuthKey, P2PAccountId and a freshly issued P2PAccountKey for TUTK."""
+    async def get_p2p_connection(self, device_id: str) -> dict[str, Any]:
+        """AuthKey, P2PAccountId and a freshly issued P2PAccountKey for TUTK.
+
+        All three come back null for a legacy camera: an FB002 authenticates
+        from its device record instead, with the account id and the device's
+        P2PAccessToken. So a null here is this camera's answer, not a
+        malformed response, and the caller decides which path that means.
+        Reported with working values in #3.
+        """
         path = "/v5/device/p2p_connection/get"
         data = await self._post(path, {**self._base(), "DeviceId": device_id})
-        _required_str(data, "AuthKey", path)
-        _required_str(data, "P2PAccountKey", path)
-        return cast("dict[str, str]", data)
+        _optional_str(data, "AuthKey", path)
+        _optional_str(data, "P2PAccountId", path)
+        _optional_str(data, "P2PAccountKey", path)
+        return data
 
     async def control_device(self, device_id: str, action: str) -> None:
         """Send a fire-and-forget command to the camera."""

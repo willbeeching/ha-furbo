@@ -118,6 +118,13 @@ camera (volume, night mode, alert settings) stays as you set it.
 Developed and verified on a **Furbo 360 (`FB0030`)**. Other Furbo models on the
 same account API are expected to work but are unverified.
 
+**Older cameras (`FB002`)** are supported from add-on 1.2.6. The cloud hands
+these no P2P credentials at all, so they authenticate from the device record
+instead. That path was worked out and verified on real FB002 hardware by
+[@scotthalldumarey](https://github.com/scotthalldumarey) in
+[#3](https://github.com/willbeeching/ha-furbo/issues/3); I have no such camera
+and have not been able to test it myself.
+
 **More than one camera** on the account works: the integration creates a device
 and entities for each, and one Furbo Bridge add-on serves them all, holding a
 separate session per camera. Leave the add-on's `device_id` blank for every

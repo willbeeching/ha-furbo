@@ -148,8 +148,26 @@ def test_alert_settings_rejects_non_string_values() -> None:
     asyncio.run(go())
 
 
-def test_p2p_connection_requires_keys() -> None:
-    resp = FakeResponse(200, {"P2PAccountId": "x"})  # missing AuthKey/P2PAccountKey
+def test_p2p_connection_allows_null_legacy_keys() -> None:
+    """A legacy camera answers with all three null; that is not malformed.
+
+    An FB002 is given no modern P2P credentials and authenticates from its
+    device record instead, so rejecting the response here would stop it before
+    it ever reached the SDK. Reported in #3.
+    """
+    resp = FakeResponse(200, {"AuthKey": None, "P2PAccountId": None, "P2PAccountKey": None})
+    client = _client([resp])
+
+    async def go() -> None:
+        data = await client.get_p2p_connection("dev")
+        assert data["AuthKey"] is None
+
+    asyncio.run(go())
+
+
+def test_p2p_connection_still_rejects_a_wrong_type() -> None:
+    """Null is an answer; a number is not."""
+    resp = FakeResponse(200, {"AuthKey": 1234, "P2PAccountKey": "k"})
     client = _client([resp])
 
     async def go() -> None:

@@ -3,6 +3,21 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.6
+
+- **Older `FB002` cameras can connect.** The cloud answers with `AuthKey`,
+  `P2PAccountId` and `P2PAccountKey` all null for these, which the add-on
+  treated as a broken response and gave up on before it ever reached the
+  camera. They authenticate from the device record instead: the account id and
+  the device's own `P2PAccessToken`, over the plain parallel connect. Which
+  path is taken follows from the cloud sending no `AuthKey`, not from the
+  model, so a camera that works today cannot be moved onto it.
+
+  Worked out and verified on real FB002 hardware by
+  [@scotthalldumarey](https://github.com/scotthalldumarey) in #3, down to the
+  exact `auth_type`. I have no FB002 and have not tested this myself, so it
+  ships on their verification rather than mine.
+
 ## 1.2.5
 
 - **The add-on's `log_level` option now reaches the add-on.** It was wired to

@@ -14,6 +14,15 @@ app in apk/decompiled. Sequence:
   4. Furbo's own IOCTRL opcodes (0x900 range) for state and control, the
      standard 0x1FF to start video with a quality number, 0x300 for audio.
 
+A legacy camera (an FB002) is given none of those credentials: the cloud
+answers AuthKey, P2PAccountId and P2PAccountKey as null, and the camera
+authenticates from its own device record instead -- IOTC_Connect_ByUID_Parallel
+with no auth key, then avClientStartEx with the account id and the device's
+P2PAccessToken, in the clear (security_mode 0, auth_type 1). Steps 1 and 4 are
+the same either way. Which path is taken follows from the missing AuthKey, not
+from the model, so a camera the cloud issues credentials for cannot reach it.
+Contributed with working hardware values in #3; see p2p_auth().
+
 Needs a TUTK SDK 4.x shared library for this machine. The one that
 docker-wyze-bridge ships (app/lib/lib.amd64) works: FURBO_TUTK_LIB or --lib.
 
@@ -770,6 +779,30 @@ def session_devices() -> list[dict[str, str]]:
     ]
 
 
+def p2p_auth(device: dict, p2p: dict, account_id: str) -> tuple[str, str, str, bool]:
+    """Return (auth_key, account, password, legacy) for one camera.
+
+    A legacy camera -- an FB002, reported in #3 -- is given AuthKey,
+    P2PAccountId and P2PAccountKey as null, and authenticates from its own
+    device record instead: the account id, and the device's P2PAccessToken.
+
+    Keyed on the missing AuthKey rather than on the product id, deliberately.
+    A camera the cloud issues real credentials for can then never take this
+    path, however it is named, so adding it cannot regress a camera that
+    works today.
+    """
+    auth_key = p2p.get("AuthKey") or ""
+    if auth_key:
+        return auth_key, str(p2p["P2PAccountId"]), str(p2p["P2PAccountKey"]), False
+    token = str(device.get("P2PAccessToken") or "")
+    if not token:
+        raise SystemExit(
+            f"{device.get('DeviceName') or 'this camera'} was given no P2P "
+            "credentials by the cloud and has no P2PAccessToken to fall back on"
+        )
+    return "", account_id, token, True
+
+
 async def fetch_p2p_credentials(device_id: str | None) -> dict:
     """Uid, auth key and a fresh P2P password for one device.
 
@@ -811,13 +844,17 @@ async def fetch_p2p_credentials(device_id: str | None) -> dict:
                 p2p = await client.get_p2p_connection(device["Id"])
             except FurboError as retry_exc:
                 raise _cloud_fail(retry_exc) from retry_exc
+    auth_key, account, password, legacy = p2p_auth(device, p2p, str(session["account_id"]))
+    if legacy:
+        log(f"{device['DeviceName']}: no AuthKey from the cloud; using legacy P2P auth")
     return {
         "name": device["DeviceName"],
         "device_id": str(device["Id"]),
         "uid": device["P2PUuid"],
-        "auth_key": p2p["AuthKey"],
-        "account": p2p["P2PAccountId"],
-        "password": p2p["P2PAccountKey"],
+        "auth_key": auth_key,
+        "account": account,
+        "password": password,
+        "legacy": legacy,
         "device_token": device.get("DeviceToken") or "",
         "product": device.get("ProductId") or "",
         "proto": PROTO_BY_PRODUCT.get(device.get("ProductId") or "", "v2"),
@@ -886,16 +923,25 @@ class FurboP2P:
         sid = lib.IOTC_Get_SessionID()
         if sid < 0:
             raise SystemExit(f"IOTC_Get_SessionID failed: {err(sid)}")
-        cin = St_IOTCConnectInput()
-        cin.cb = sizeof(cin)
-        cin.authentication_type = 0
-        cin.auth_key = creds["auth_key"].encode()
-        cin.timeout = timeout
-        log(f"connecting to {creds['name']} uid={creds['uid']} (timeout {timeout}s)")
-        ret = lib.IOTC_Connect_ByUIDEx(c_char_p(creds["uid"].encode()), c_int(sid), byref(cin))
-        if ret < 0:
-            lib.IOTC_Session_Close(c_int(sid))
-            raise SystemExit(f"IOTC_Connect_ByUIDEx failed: {err(ret)}")
+        if creds.get("legacy"):
+            # No AuthKey to present, so the connect that takes one is not an
+            # option: a legacy camera is reached by the plain parallel connect.
+            log(f"connecting to {creds['name']} uid={creds['uid']} (legacy, parallel)")
+            ret = lib.IOTC_Connect_ByUID_Parallel(c_char_p(creds["uid"].encode()), c_int(sid))
+            if ret < 0:
+                lib.IOTC_Session_Close(c_int(sid))
+                raise SystemExit(f"IOTC_Connect_ByUID_Parallel failed: {err(ret)}")
+        else:
+            cin = St_IOTCConnectInput()
+            cin.cb = sizeof(cin)
+            cin.authentication_type = 0
+            cin.auth_key = creds["auth_key"].encode()
+            cin.timeout = timeout
+            log(f"connecting to {creds['name']} uid={creds['uid']} (timeout {timeout}s)")
+            ret = lib.IOTC_Connect_ByUIDEx(c_char_p(creds["uid"].encode()), c_int(sid), byref(cin))
+            if ret < 0:
+                lib.IOTC_Session_Close(c_int(sid))
+                raise SystemExit(f"IOTC_Connect_ByUIDEx failed: {err(ret)}")
         self.session_id = ret
         info = St_SInfoEx()
         info.size = sizeof(info)
@@ -916,11 +962,16 @@ class FurboP2P:
         cin.iotc_session_id = self.session_id
         cin.iotc_channel_id = 0
         cin.timeout_sec = timeout
+        legacy = bool(creds.get("legacy"))
         cin.account_or_identity = creds["account"].encode()
         cin.password_or_token = creds["password"].encode()
         cin.resend = 1
-        cin.security_mode = 1  # DTLS, as the app does for TUTKV2 devices
-        cin.auth_type = 0
+        # A legacy camera authenticates in the clear with the account id and
+        # the device's P2PAccessToken. auth_type 1 is an empirical result from
+        # the hardware in #3, not a value read off a matching TUTK header:
+        # ours are older and do not define the field at all.
+        cin.security_mode = 0 if legacy else 1  # else DTLS, as the app does
+        cin.auth_type = 1 if legacy else 0
         cin.sync_recv_data = 0
         cout = AVClientStartOutConfig()
         cout.cb = sizeof(cout)

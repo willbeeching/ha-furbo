@@ -481,3 +481,126 @@ def test_the_sdk_comes_down_once_at_shutdown(_fresh_sdk: None) -> None:
     assert lib.calls.count("IOTC_DeInitialize") == 1
     fp.deinitialize_sdk()  # idempotent
     assert lib.calls.count("IOTC_DeInitialize") == 1
+
+
+# --- legacy (FB002) authentication ------------------------------------------
+
+
+class _FakeLib:
+    """Records SDK calls so the two auth paths can be told apart."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def __getattr__(self, name: str) -> Any:
+        def call(*args: Any) -> int:
+            self.calls.append((name, args))
+            if name == "IOTC_Get_SessionID":
+                return 1
+            if name in ("IOTC_Connect_ByUIDEx", "IOTC_Connect_ByUID_Parallel"):
+                return 3
+            if name == "avClientStartEx":
+                return 7
+            if name == "IOTC_Session_Check_Ex":
+                return -1  # skip the session-mode logging
+            return 0
+
+        return call
+
+    def named(self, name: str) -> tuple[Any, ...] | None:
+        for called, args in self.calls:
+            if called == name:
+                return args
+        return None
+
+
+def _p2p(lib: _FakeLib) -> fp.FurboP2P:
+    obj = fp.FurboP2P.__new__(fp.FurboP2P)
+    obj.lib = lib
+    obj.session_id = 3
+    return obj
+
+
+MODERN = {
+    "name": "cam",
+    "uid": "UID123",
+    "auth_key": "ABCD1234",
+    "account": "p2p-account",
+    "password": "p2p-key",
+    "legacy": False,
+}
+LEGACY = {
+    "name": "cam",
+    "uid": "UID123",
+    "auth_key": "",
+    "account": "ACC0000000001",
+    "password": "p2p-access-token",
+    "legacy": True,
+}
+
+
+def test_legacy_connects_without_an_auth_key() -> None:
+    """With no AuthKey there is nothing to present, so the parallel connect."""
+    lib = _FakeLib()
+    _p2p(lib).connect(LEGACY, timeout=5)
+    assert lib.named("IOTC_Connect_ByUID_Parallel") is not None
+    assert lib.named("IOTC_Connect_ByUIDEx") is None
+
+
+def test_a_modern_camera_still_connects_with_its_auth_key() -> None:
+    """The FB002 path must not change what a camera with credentials does."""
+    lib = _FakeLib()
+    _p2p(lib).connect(MODERN, timeout=5)
+    assert lib.named("IOTC_Connect_ByUIDEx") is not None
+    assert lib.named("IOTC_Connect_ByUID_Parallel") is None
+
+
+@pytest.mark.parametrize(
+    ("creds", "security_mode", "auth_type", "identity", "secret"),
+    [
+        # Verified against FB002 hardware in #3: the account id and the
+        # device's P2PAccessToken, in the clear, auth_type 1.
+        (LEGACY, 0, 1, b"ACC0000000001", b"p2p-access-token"),
+        # Unchanged: DTLS with the cloud's per-session P2P credentials.
+        (MODERN, 1, 0, b"p2p-account", b"p2p-key"),
+    ],
+)
+def test_av_settings_per_auth_path(
+    creds: dict[str, Any],
+    security_mode: int,
+    auth_type: int,
+    identity: bytes,
+    secret: bytes,
+) -> None:
+    """These four fields decide whether authentication succeeds at all."""
+    lib = _FakeLib()
+    _p2p(lib).start_av(creds)
+    args = lib.named("avClientStartEx")
+    assert args is not None
+    cin = args[0]._obj
+    assert cin.security_mode == security_mode
+    assert cin.auth_type == auth_type
+    assert cin.account_or_identity == identity
+    assert cin.password_or_token == secret
+    assert cin.resend == 1
+    assert cin.sync_recv_data == 0
+
+
+def test_p2p_auth_picks_the_modern_credentials_when_there_are_any() -> None:
+    """A camera the cloud issues credentials for is untouched by the fallback."""
+    p2p = {"AuthKey": "ABCD1234", "P2PAccountId": "acct", "P2PAccountKey": "key"}
+    device = {"DeviceName": "cam", "P2PAccessToken": "ignored"}
+    assert fp.p2p_auth(device, p2p, "ACC1") == ("ABCD1234", "acct", "key", False)
+
+
+def test_p2p_auth_falls_back_to_the_device_record() -> None:
+    """All three null means the account id and the device's own token."""
+    p2p = {"AuthKey": None, "P2PAccountId": None, "P2PAccountKey": None}
+    device = {"DeviceName": "cam", "P2PAccessToken": "tok"}
+    assert fp.p2p_auth(device, p2p, "ACC1") == ("", "ACC1", "tok", True)
+
+
+def test_p2p_auth_says_so_when_there_is_nothing_to_use() -> None:
+    """No modern credentials and no P2PAccessToken is a dead end, said plainly."""
+    with pytest.raises(SystemExit, match="P2PAccessToken"):
+        fp.p2p_auth({"DeviceName": "cam"}, {"AuthKey": None}, "ACC1")
