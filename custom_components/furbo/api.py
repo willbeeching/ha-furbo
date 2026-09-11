@@ -37,12 +37,13 @@ _LOGGER = logging.getLogger(__name__)
 
 MAIN_URL = "https://product.furbo.co"
 PETGPT_URL = "https://pet-gpt.furbo.co"
+# The diary, the event list and saved videos: the app's unversioned endpoints.
+# All three hosts are named in the app's own runtime config, which it reads
+# from https://dh1mqkcjivi9n.cloudfront.net/config/TF_FQDN.json rather than
+# building in. Should one of them ever move, that file says where to.
+EVENT_URL = "https://event-handler.furbo.co"
 
-# The Doggie Diary. Which of the two hosts serves it is not in the app's
-# sources (it arrives from a build config), so both are tried and whichever
-# answers is remembered for the life of the client.
 DIARY_PATH = "/doggie_diary/report"
-DIARY_HOSTS = (MAIN_URL, PETGPT_URL)
 DIARY_LINKS = ("TimeLapseUrl", "SnapshotUrl", "SurveyUrl")
 # Enough days to see the pattern, few enough to sit in an entity attribute.
 DIARY_DAYS = 3
@@ -256,8 +257,6 @@ class FurboClient:
             "User-Agent": USER_AGENT,
             "Authorization": BASIC_AUTH,
         }
-        # Set the first time the diary answers; see DIARY_HOSTS.
-        self._diary_host: str | None = None
 
     async def _post(
         self,
@@ -507,21 +506,13 @@ class FurboClient:
         something downloads it, and whatever does that can read it where it
         is fetched rather than carrying it through Home Assistant's state.
         """
-        payload = {**self._base(), "Language": language}
-        hosts = (self._diary_host,) if self._diary_host else DIARY_HOSTS
-        refused: FurboError = FurboConnectionError(f"No Furbo host serves {DIARY_PATH}")
-        for host in hosts:
-            try:
-                data = await self._post(DIARY_PATH, payload, base=host, form=True)
-            except FurboAuthError:
-                # The token is dead everywhere; a second host cannot help.
-                raise
-            except FurboError as err:
-                refused = err
-                continue
-            self._diary_host = host
-            return _diary_shape(data, host, DIARY_PATH)
-        raise refused
+        data = await self._post(
+            DIARY_PATH,
+            {**self._base(), "Language": language},
+            base=EVENT_URL,
+            form=True,
+        )
+        return _diary_shape(data, EVENT_URL, DIARY_PATH)
 
     async def get_activity_report(self, dates: list[str]) -> dict[str, dict[str, int]]:
         """Return the total count per alert type for each requested day.

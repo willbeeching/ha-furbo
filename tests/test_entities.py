@@ -193,7 +193,7 @@ async def test_diary_sensor_reports_shape_not_links(
 
     diary = hass.states.get("sensor.furbo_account_doggie_diary_days")
     assert diary.state == "7"
-    assert diary.attributes["host"] == "product.furbo.co"
+    assert diary.attributes["host"] == "event-handler.furbo.co"
     day = diary.attributes["days"][0]
     assert day["date"] == "2026-09-10"
     assert day["links"]["TimeLapseUrl"]["type"] == "mp4"

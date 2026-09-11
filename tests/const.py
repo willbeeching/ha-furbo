@@ -131,7 +131,7 @@ DAILY_SUMMARY = "Your furbabies had a quiet day with a little wandering by the d
 # What FurboClient.get_diary returns: the shape of a diary report, with the
 # signed links described rather than included.
 DIARY_SHAPE: dict[str, Any] = {
-    "host": "product.furbo.co",
+    "host": "event-handler.furbo.co",
     "fields": ["Diaries", "ResultCode"],
     "count": 7,
     "days": [

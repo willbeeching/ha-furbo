@@ -22,6 +22,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 from yarl import URL
 
 from custom_components.furbo.api import (
+    EVENT_URL,
     MAIN_URL,
     PETGPT_URL,
     FurboAuthError,
@@ -525,8 +526,7 @@ async def test_set_alert_setting(
 
 # --- doggie diary ----------------------------------------------------------------
 
-DIARY_MAIN = f"{MAIN_URL}/doggie_diary/report"
-DIARY_PETGPT = f"{PETGPT_URL}/doggie_diary/report"
+DIARY = f"{EVENT_URL}/doggie_diary/report"
 
 # A real-looking signed link. The test asserts none of it survives into the
 # shape the client returns.
@@ -554,10 +554,10 @@ async def test_diary_describes_without_disclosing(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
     """The shape names the host, type and signing parameters, never the URL."""
-    aioclient_mock.post(DIARY_MAIN, json=DIARY_BODY)
+    aioclient_mock.post(DIARY, json=DIARY_BODY)
     shape = await _client(hass, authed=True).get_diary()
 
-    assert shape["host"] == "product.furbo.co"
+    assert shape["host"] == "event-handler.furbo.co"
     assert shape["count"] == 1
     assert shape["fields"] == ["Diaries", "ResultCode"]
     day = shape["days"][0]
@@ -581,41 +581,22 @@ async def test_diary_describes_without_disclosing(
     assert "APKAEXAMPLE" not in rendered
 
 
-async def test_diary_falls_back_to_the_other_host(
+async def test_diary_surfaces_a_refusal(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    """The host that serves the diary is found by trying, then remembered."""
-    aioclient_mock.post(DIARY_MAIN, status=404, json={"Code": 404})
-    aioclient_mock.post(DIARY_PETGPT, json=DIARY_BODY)
-    client = _client(hass, authed=True)
-
-    assert (await client.get_diary())["host"] == "pet-gpt.furbo.co"
-    calls_after_first = len(aioclient_mock.mock_calls)
-
-    # The second call goes straight to the host that answered.
-    assert (await client.get_diary())["host"] == "pet-gpt.furbo.co"
-    assert len(aioclient_mock.mock_calls) == calls_after_first + 1
-
-
-async def test_diary_raises_when_no_host_serves_it(
-    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
-) -> None:
-    """Both hosts refusing surfaces the refusal, not a silent empty diary."""
-    aioclient_mock.post(DIARY_MAIN, status=400, json={"Code": 12345})
-    aioclient_mock.post(DIARY_PETGPT, status=400, json={"Code": 12345})
+    """A refused report is an error, not a silently empty diary."""
+    aioclient_mock.post(DIARY, status=400, json={"Code": 12345})
     with pytest.raises(FurboError):
         await _client(hass, authed=True).get_diary()
 
 
-async def test_diary_does_not_retry_a_dead_token_on_the_second_host(
+async def test_diary_reports_a_dead_token_as_one(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    """A rejected token fails everywhere, so only one host is asked."""
-    aioclient_mock.post(DIARY_MAIN, status=400, json={"Code": 12002})
-    aioclient_mock.post(DIARY_PETGPT, json=DIARY_BODY)
+    """12002 from the diary host is the token, so a new login is asked for."""
+    aioclient_mock.post(DIARY, status=400, json={"Code": 12002})
     with pytest.raises(FurboAuthError):
         await _client(hass, authed=True).get_diary()
-    assert len(aioclient_mock.mock_calls) == 1
 
 
 async def test_diary_caps_the_days_it_describes(
@@ -623,7 +604,7 @@ async def test_diary_caps_the_days_it_describes(
 ) -> None:
     """The count is the whole report; the detail stays small enough to store."""
     body = {"Diaries": [dict(DIARY_BODY["Diaries"][0]) for _ in range(10)]}
-    aioclient_mock.post(DIARY_MAIN, json=body)
+    aioclient_mock.post(DIARY, json=body)
     shape = await _client(hass, authed=True).get_diary()
     assert shape["count"] == 10
     assert len(shape["days"]) == 3
@@ -633,6 +614,6 @@ async def test_diary_rejects_a_malformed_report(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
     """Diaries that is not a list of objects is a malformed response."""
-    aioclient_mock.post(DIARY_MAIN, json={"Diaries": ["not-an-object"]})
+    aioclient_mock.post(DIARY, json={"Diaries": ["not-an-object"]})
     with pytest.raises(FurboConnectionError):
         await _client(hass, authed=True).get_diary()
