@@ -5,6 +5,18 @@ that ships to users gets an entry here.
 
 ## 1.2.3
 
+- **The add-on no longer says a code was emailed when none was.** The login
+  that requests one had its failure swallowed and the "a code was emailed"
+  message printed regardless, so a login the cloud refused sent people to
+  watch an inbox that nothing was ever going to arrive in. What actually
+  happened is now read off the disk: a session means it logged straight in, a
+  pending login means a code really is on its way, and neither means the login
+  failed and says so. Reported in #4.
+- **An `mfa_code` that arrives with no login waiting for it is called out.**
+  It used to fall through to requesting a new code, which silently made the
+  code you had just typed useless -- and the next restart then checked that
+  stale code against the new login and reported it as wrong. It now says the
+  code cannot be used and to expect a fresh one.
 - A new `furbo_p2p.py diary` command reports what the account's Doggie Diary
   contains, for working out whether the daily video can be fetched without the
   phone app. It prints field names, dates and counts, never the links: those

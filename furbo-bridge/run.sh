@@ -85,14 +85,40 @@ if [ ! -f "$FURBO_SESSION_FILE" ]; then
     "$PY" /app/furbo_p2p.py login --code "$MFA_CODE"
     echo "[furbo] logged in. Clear the 'mfa_code' option so it is not reused." >&2
   else
+    if [ -n "$MFA_CODE" ]; then
+      # Their code is about to be made useless by the login below, so say so
+      # rather than discarding it in silence: a code only verifies the login
+      # that asked for it, and the next restart would send this stale one.
+      echo "[furbo] ==============================================================" >&2
+      echo "[furbo] An 'mfa_code' is set but no login is waiting for one, so it" >&2
+      echo "[furbo] cannot be used -- a code only works for the login that asked" >&2
+      echo "[furbo] for it. Requesting a new one now: use the code from the NEXT" >&2
+      echo "[furbo] email, not the one already in the options." >&2
+      echo "[furbo] ==============================================================" >&2
+    fi
     echo "[furbo] no session yet — requesting a verification code by email..." >&2
     "$PY" /app/furbo_p2p.py login --send-only || true
-    echo "[furbo] ==============================================================" >&2
-    echo "[furbo] A code was emailed to $FURBO_EMAIL." >&2
-    echo "[furbo] Put it in the add-on's 'mfa_code' option and restart the add-on." >&2
-    echo "[furbo] ==============================================================" >&2
-    # Idle so the add-on stays 'started' and the logs remain visible.
-    sleep infinity
+    # What happened is on disk, so read it there. Announcing a code because the
+    # command was run told people to go and look for an email that a failed
+    # login had never sent.
+    if [ -f "$FURBO_SESSION_FILE" ]; then
+      echo "[furbo] logged in; no code was needed." >&2
+    elif [ -f "$PENDING" ]; then
+      echo "[furbo] ==============================================================" >&2
+      echo "[furbo] A code was emailed to $FURBO_EMAIL." >&2
+      echo "[furbo] Put it in the add-on's 'mfa_code' option and restart the add-on." >&2
+      echo "[furbo] ==============================================================" >&2
+      # Idle so the add-on stays 'started' and the logs remain visible.
+      sleep infinity
+    else
+      echo "[furbo] ==============================================================" >&2
+      echo "[furbo] No code was sent: the login above did not get far enough." >&2
+      echo "[furbo] Check the 'email' and 'password' options. If they are right," >&2
+      echo "[furbo] the cloud may be refusing logins for a while -- wait a few" >&2
+      echo "[furbo] minutes and restart the add-on." >&2
+      echo "[furbo] ==============================================================" >&2
+      sleep infinity
+    fi
   fi
 fi
 

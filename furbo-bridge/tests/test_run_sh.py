@@ -30,8 +30,15 @@ def _run(
     *,
     session: bool = False,
     pending: bool = False,
+    py_body: str = "exit 0",
+    timeout: float = 15,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path]:
-    """Run run.sh against a temp data dir; return (result, data, py_log, session)."""
+    """Run run.sh against a temp data dir; return (result, data, py_log, session).
+
+    ``py_body`` is the tail of the stubbed app: it decides what that run of the
+    app "did" -- succeeded, failed, wrote a session, wrote a pending login --
+    which is exactly what run.sh now reads to decide what to tell the user.
+    """
     data = tmp_path / "data"
     data.mkdir()
     (data / "options.json").write_text(json.dumps(options))
@@ -49,7 +56,7 @@ def _run(
         textwrap.dedent(f"""\
         #!/usr/bin/env bash
         echo "$@" >> "{py_log}"
-        exit 0
+        {py_body}
         """)
     )
     stub.chmod(0o755)
@@ -80,9 +87,27 @@ def _run(
         },
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=timeout,
     )
     return result, data, py_log, session_file
+
+
+def _run_until_idle(tmp_path: Path, options: dict[str, object], *, py_body: str) -> str:
+    """Run run.sh as far as the 'waiting for a person' idle, return its stderr.
+
+    The branches that ask for a code deliberately sleep for ever so the add-on
+    stays started and its log stays on screen, so the only way to read what
+    they said is to let it get there and then stop it.
+    """
+    try:
+        result, _, _, _ = _run(tmp_path, options, py_body=py_body, timeout=4)
+    except subprocess.TimeoutExpired as expired:
+        return (
+            (expired.stderr or b"").decode()
+            if isinstance(expired.stderr, bytes)
+            else (expired.stderr or "")
+        )
+    return result.stderr
 
 
 BASE = {"api_token": "tok", "quality": "1080p", "log_level": "info"}
@@ -166,3 +191,59 @@ def test_go2rtc_config_is_written_before_go2rtc_starts(tmp_path: Path) -> None:
     # And before the bridge itself, so go2rtc never reads a stale config.
     assert log.index("go2rtc-config") < log.index("serve")
     assert f"--output {data}/go2rtc.yaml" in log
+
+
+def test_a_code_is_only_announced_when_one_was_sent(tmp_path: Path) -> None:
+    """A login that failed must not be reported as an email on its way.
+
+    The send was run with its failure swallowed and the "a code was emailed"
+    message printed regardless, so a login refused by the cloud sent people to
+    watch an inbox that nothing was ever going to arrive in.
+    """
+    stderr = _run_until_idle(
+        tmp_path,
+        {**BASE, "email": "a@b.c", "password": "pw"},
+        py_body="exit 1",
+    )
+    assert "No code was sent" in stderr
+    assert "A code was emailed" not in stderr
+
+
+def test_a_code_that_was_sent_is_announced(tmp_path: Path) -> None:
+    """The pending login on disk is what says a code really went out."""
+    stderr = _run_until_idle(
+        tmp_path,
+        {**BASE, "email": "a@b.c", "password": "pw"},
+        py_body='touch "${FURBO_SESSION_FILE%.json}.pending.json"; exit 0',
+    )
+    assert "A code was emailed to a@b.c" in stderr
+    assert "No code was sent" not in stderr
+
+
+def test_a_stale_code_is_called_out_rather_than_dropped(tmp_path: Path) -> None:
+    """An mfa_code with no login waiting for it is said out loud.
+
+    It used to fall through to requesting a new code, which silently made the
+    code the user had just typed useless -- and the next restart then verified
+    that stale code against the new login and blamed the user for it.
+    """
+    stderr = _run_until_idle(
+        tmp_path,
+        {**BASE, "email": "a@b.c", "password": "pw", "mfa_code": "1234"},
+        py_body='touch "${FURBO_SESSION_FILE%.json}.pending.json"; exit 0',
+    )
+    assert "no login is waiting for one" in stderr
+    assert "use the code from the next" in stderr.lower()
+
+
+def test_a_login_needing_no_code_goes_straight_on(tmp_path: Path) -> None:
+    """Some accounts log in without a code; that must not look like waiting."""
+    result, _, py_log, _ = _run(
+        tmp_path,
+        {**BASE, "email": "a@b.c", "password": "pw"},
+        py_body='printf "{}" > "$FURBO_SESSION_FILE"; exit 0',
+    )
+    assert "no code was needed" in result.stderr
+    assert "A code was emailed" not in result.stderr
+    # And it carried on to start the bridge rather than idling.
+    assert "serve" in py_log.read_text()
