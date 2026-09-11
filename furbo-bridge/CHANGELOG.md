@@ -12,6 +12,11 @@ that ships to users gets an entry here.
   happened is now read off the disk: a session means it logged straight in, a
   pending login means a code really is on its way, and neither means the login
   failed and says so. Reported in #4.
+- **`reset_session` resets once, not once per restart.** Left on by accident
+  it threw the session away every time the add-on started, so each restart
+  went round the emailed-code loop again and looked like the add-on refusing
+  to start. It now resets, says so, and then leaves the new session alone
+  until the option is turned off and on again.
 - **An `mfa_code` that arrives with no login waiting for it is called out.**
   It used to fall through to requesting a new code, which silently made the
   code you had just typed useless -- and the next restart then checked that

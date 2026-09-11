@@ -15,6 +15,9 @@ GO2RTC="${FURBO_GO2RTC:-go2rtc}"
 OPTIONS="$DATA/options.json"
 export FURBO_SESSION_FILE="$DATA/furbo_session.json"
 PENDING="$DATA/furbo_session.pending.json"
+# Written once a reset has been carried out, so leaving the option on does not
+# wipe the session again on every restart. Removed when the option goes off.
+RESET_DONE="$DATA/furbo_reset_done"
 
 # --- read options (no bashio dependency; options.json is written by HA) -------
 # JSON booleans are printed lowercase ("true"/"false"), so `= "true"` works.
@@ -64,11 +67,22 @@ if [ "$RESET_SESSION" = "true" ]; then
   if [ -n "$MFA_CODE" ] && [ -f "$PENDING" ]; then
     echo "[furbo] reset_session is on but an emailed code is being submitted;" >&2
     echo "[furbo] keeping the pending login. Turn 'reset_session' off." >&2
+  elif [ -f "$RESET_DONE" ] && [ -f "$FURBO_SESSION_FILE" ]; then
+    # The option asks for a reset, not for one per restart. Left on by
+    # accident it used to throw away a working session every single time the
+    # add-on started, sending the user round the emailed-code loop again.
+    echo "[furbo] reset_session is still on, but the session has already been" >&2
+    echo "[furbo] reset and a new one exists. Leaving it alone -- turn the" >&2
+    echo "[furbo] option off. Toggle it off and on again to reset once more." >&2
   else
     echo "[furbo] reset_session is on: clearing the stored session." >&2
     rm -f "$FURBO_SESSION_FILE" "$PENDING"
+    : > "$RESET_DONE"
     echo "[furbo] cleared. Turn 'reset_session' off again; a fresh login follows." >&2
   fi
+else
+  # Off again: the next time it is turned on, it resets.
+  rm -f "$RESET_DONE"
 fi
 
 # --- ensure a cloud session (P2P credentials are fetched fresh each session) --

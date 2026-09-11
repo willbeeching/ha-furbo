@@ -67,7 +67,7 @@ ports also works.
 | `email` / `password` | Furbo account credentials (used only to log in and fetch P2P credentials). |
 | `mfa_code` | The emailed verification code, needed once to complete login. Clear it afterwards. |
 | `device_id` | The Furbo cloud device id this add-on serves. **Required only if your account has more than one camera** — the add-on lists the ids in its log and refuses to guess. See the multi-camera note below. |
-| `reset_session` | Turn on once to discard the stored session and log in again (expired session, changed password, wrong account), then turn it back off. |
+| `reset_session` | Turn on once to discard the stored session and log in again (expired session, changed password, wrong account), then turn it back off. It resets once, not once per restart, so forgetting to turn it off does not keep throwing the new session away; toggle it off and on to reset again. |
 | `quality` | `1080p`, `720p` or `360p`. This camera serves 1080p or 360p; 720p falls back to 360p. |
 | `api_token` | **Required.** Bearer token the HTTP API requires; the add-on will not start without it. Use a long random value and set the same value in the integration. |
 | `log_level` | go2rtc log verbosity. |

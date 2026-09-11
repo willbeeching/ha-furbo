@@ -40,7 +40,7 @@ def _run(
     which is exactly what run.sh now reads to decide what to tell the user.
     """
     data = tmp_path / "data"
-    data.mkdir()
+    data.mkdir(exist_ok=True)
     (data / "options.json").write_text(json.dumps(options))
     session_file = data / "furbo_session.json"
     pending_file = data / "furbo_session.pending.json"
@@ -247,3 +247,41 @@ def test_a_login_needing_no_code_goes_straight_on(tmp_path: Path) -> None:
     assert "A code was emailed" not in result.stderr
     # And it carried on to start the bridge rather than idling.
     assert "serve" in py_log.read_text()
+
+
+def test_reset_session_left_on_does_not_keep_wiping(tmp_path: Path) -> None:
+    """The option asks for a reset, not for one on every restart.
+
+    Left on by accident it threw away a working session every time the add-on
+    started, which sends the user round the emailed-code loop again and looks
+    exactly like the add-on refusing to start.
+    """
+    options = {**BASE, "email": "a@b.c", "password": "pw", "reset_session": True}
+    writes_session = 'printf "{}" > "$FURBO_SESSION_FILE"; exit 0'
+
+    # First start: a session exists, so it is reset and a new one is made.
+    first, data, _, session_file = _run(tmp_path, options, session=True, py_body=writes_session)
+    assert "clearing the stored session" in first.stderr
+    assert (data / "furbo_reset_done").exists()
+    assert session_file.exists()
+
+    # Restarting with the option still on keeps that session.
+    second, _, _, _ = _run(tmp_path, options, py_body="exit 0")
+    assert "already been" in second.stderr
+    assert "clearing the stored session" not in second.stderr
+    assert session_file.exists()
+
+
+def test_turning_reset_session_off_arms_it_again(tmp_path: Path) -> None:
+    """Toggling it off and on resets once more, so a real reset still works."""
+    on = {**BASE, "email": "a@b.c", "password": "pw", "reset_session": True}
+    off = {**BASE, "email": "a@b.c", "password": "pw", "reset_session": False}
+    writes_session = 'printf "{}" > "$FURBO_SESSION_FILE"; exit 0'
+
+    _run(tmp_path, on, session=True, py_body=writes_session)
+    # Off: the marker goes, so the option is armed for next time.
+    _, data, _, _ = _run(tmp_path, off, py_body="exit 0")
+    assert not (data / "furbo_reset_done").exists()
+
+    again, _, _, _ = _run(tmp_path, on, py_body=writes_session)
+    assert "clearing the stored session" in again.stderr
