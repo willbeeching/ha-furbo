@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -413,6 +414,13 @@ class FurboBridgeCoordinator(DataUpdateCoordinator[BridgeState]):
         self.client = client
         # The cloud coordinator owns the device metadata (name, model, firmware).
         self.cloud = cloud
+        # One-shot actions (pan, toss) share this camera's single P2P session,
+        # so they go one at a time. Held here rather than as the button
+        # platform's PARALLEL_UPDATES because that is per platform, not per
+        # camera: it made one camera's pan wait on another camera's, and it
+        # made both wait on a diary download that has nothing to do with any
+        # camera and can run for minutes.
+        self.action_lock = asyncio.Lock()
 
     async def _async_update_data(self) -> BridgeState:
         """Fetch the bridge's cached camera state, verifying its identity."""

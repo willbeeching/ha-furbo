@@ -130,9 +130,10 @@ class FurboBridgeEntity(CoordinatorEntity[FurboBridgeCoordinator]):
         self.coordinator.async_set_updated_data(state)
 
     async def _async_action(self, action: Awaitable[None]) -> None:
-        """Run a one-shot bridge action (pan, toss) with the same error mapping."""
+        """Run a one-shot bridge action (pan, toss), one at a time per camera."""
         try:
-            await action
+            async with self.coordinator.action_lock:
+                await action
         except FurboBridgeError as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,

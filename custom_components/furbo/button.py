@@ -21,8 +21,10 @@ from .entity import FurboAccountEntity, FurboBridgeEntity
 
 _LOGGER = logging.getLogger(__name__)
 
-# Actions go through the bridge's single P2P session; serialize them.
-PARALLEL_UPDATES = 1
+# Camera actions serialize per camera, on the bridge coordinator's own lock.
+# A platform-wide limit would put the diary download, which can run for
+# minutes and touches no camera, in the same queue as pressing pan.
+PARALLEL_UPDATES = 0
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -108,7 +110,8 @@ class FurboDiaryButton(FurboAccountEntity, ButtonEntity):
         links are presigned and expire, so they are worth having only at the
         moment they are used.
         """
-        folder = diary_folder(self.hass)
+        entry = self.coordinator.config_entry
+        folder = diary_folder(self.hass, entry.unique_id or "", entry.entry_id)
         try:
             days = await self.coordinator.client.get_diary_report()
         except FurboError as err:

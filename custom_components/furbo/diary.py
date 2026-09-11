@@ -34,14 +34,22 @@ CHUNK = 256 * 1024
 # plain calendar date is accepted, so no value of DiaryDate can climb out of
 # the diary folder or name a file it should not.
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# The account id is a Furbo value and also becomes a path segment, so it is
+# held to the same rule. Anything else falls back to the config entry id,
+# which Home Assistant generates and is always safe.
+ACCOUNT = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class DiaryError(HomeAssistantError):
     """A diary video could not be saved."""
 
 
-def diary_folder(hass: HomeAssistant) -> Path:
-    """Return the folder diary videos belong in.
+def diary_folder(hass: HomeAssistant, account: str, fallback: str) -> Path:
+    """Return the folder one account's diary videos belong in.
+
+    Scoped per account, because two accounts produce a video for the same
+    date. Sharing a folder would not merely mix them up: the second account's
+    video is skipped as already saved, and quietly never arrives.
 
     Raises when the installation has no local media directory. That is worth
     saying plainly rather than inventing a path: somewhere outside the media
@@ -54,7 +62,8 @@ def diary_folder(hass: HomeAssistant) -> Path:
             "Home Assistant has no local media directory, so there is nowhere "
             "to save the diary. Add one under media_dirs in configuration.yaml."
         )
-    return Path(local) / DIARY_DIR
+    name = account if ACCOUNT.match(account) else fallback
+    return Path(local) / DIARY_DIR / name
 
 
 def _video(day: dict[str, Any]) -> tuple[str, str] | None:

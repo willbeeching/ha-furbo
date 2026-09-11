@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
+from pytest_homeassistant_custom_component.test_util.aiohttp import (
+    AiohttpClientMocker,
+    AiohttpClientMockResponse,
+)
+from yarl import URL
 
 from custom_components.furbo.api import FurboError
 from custom_components.furbo.diary import (
@@ -19,7 +25,9 @@ from custom_components.furbo.diary import (
     missing,
 )
 
+from . import const as c
 from .conftest import setup_integration
+from .test_bridge_entities import BRIDGE_OPTIONS
 
 VIDEO = "https://time-lapse-prod-de.s3.amazonaws.com/a/b.mp4?X-Amz-Signature=abc"
 
@@ -42,7 +50,31 @@ def test_folder_needs_a_media_directory(hass: HomeAssistant) -> None:
     """Without a local media directory there is nowhere sensible to write."""
     hass.config.media_dirs = {}
     with pytest.raises(DiaryError, match="no local media directory"):
-        diary_folder(hass)
+        diary_folder(hass, "acct", "entry")
+
+
+def test_folder_is_per_account(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Two accounts produce a video for the same date, so they cannot share.
+
+    Sharing does not just mix them up: the second account's video is skipped
+    as already saved and never arrives at all.
+    """
+    hass.config.media_dirs = {"local": str(tmp_path)}
+    assert diary_folder(hass, "acct-a", "entry") != diary_folder(
+        hass, "acct-b", "entry"
+    )
+    assert diary_folder(hass, "acct-a", "entry").name == "acct-a"
+
+
+def test_folder_falls_back_when_the_account_is_not_path_safe(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """The account id is Furbo's value and becomes a path segment."""
+    hass.config.media_dirs = {"local": str(tmp_path)}
+    root = tmp_path / "furbo_diary"
+    for account in ("../../etc", "a/b", "", "has space"):
+        folder = diary_folder(hass, account, "entry123")
+        assert folder == root / "entry123"
 
 
 def test_missing_skips_days_already_saved(tmp_path: Path) -> None:
@@ -144,7 +176,8 @@ async def test_button_downloads_the_missing_days(
         blocking=True,
     )
 
-    assert _names(tmp_path / "furbo_diary") == ["2026-09-04.mp4", "2026-09-05.mp4"]
+    folder = tmp_path / "furbo_diary" / c.ACCOUNT_ID
+    assert _names(folder) == ["2026-09-04.mp4", "2026-09-05.mp4"]
     # The report is read at press time, never reused: the links expire.
     assert mock_client.get_diary_report.await_count == 1
 
@@ -178,8 +211,8 @@ async def test_button_does_nothing_when_every_day_is_saved(
 ) -> None:
     """Pressing twice, or running it daily, downloads nothing the second time."""
     hass.config.media_dirs = {"local": str(tmp_path)}
-    folder = tmp_path / "furbo_diary"
-    folder.mkdir()
+    folder = tmp_path / "furbo_diary" / c.ACCOUNT_ID
+    folder.mkdir(parents=True)
     (folder / "2026-09-04.mp4").write_bytes(b"already here")
     mock_client.get_diary_report.return_value = [_day("2026-09-04")]
     await setup_integration(hass, mock_config_entry)
@@ -193,3 +226,102 @@ async def test_button_does_nothing_when_every_day_is_saved(
 
     assert _contents(folder / "2026-09-04.mp4") == b"already here"
     assert aioclient_mock.call_count == 0
+
+
+async def test_a_download_does_not_hold_up_a_camera_action(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    tmp_path: Path,
+) -> None:
+    """Tossing a treat must not wait behind a video.
+
+    The diary button and the camera buttons are one platform, and it used to
+    declare PARALLEL_UPDATES = 1: a single semaphore shared by all five. A
+    download runs for as long as the video takes, up to ten minutes, and the
+    camera has nothing to do with it.
+
+    Pressed together, because that is when the semaphore applies: Home
+    Assistant's entity service call takes a fast path for a single entity that
+    skips it entirely (helpers/service.py, "Single entity case avoids creating
+    task"). One call naming both is what an area or label target does.
+    """
+    hass.config.media_dirs = {"local": str(tmp_path)}
+    mock_client.get_diary_report.return_value = [_day("2026-09-04")]
+
+    tossed = asyncio.Event()
+
+    async def slow_video(method: str, url: URL, data: object) -> Any:
+        # Holds the download open until the treat has gone out. If the two
+        # share a semaphore this waits for ever and the timeout below fires.
+        await tossed.wait()
+        return AiohttpClientMockResponse(method, url, response=b"mp4-bytes")
+
+    async def toss() -> None:
+        tossed.set()
+
+    aioclient_mock.get(VIDEO, side_effect=slow_video)
+    mock_bridge.async_toss.side_effect = toss
+    await setup_integration(hass, mock_config_entry, BRIDGE_OPTIONS)
+
+    async with asyncio.timeout(10):
+        await hass.services.async_call(
+            "button",
+            "press",
+            {
+                "entity_id": [
+                    "button.furbo_account_download_doggie_diary",
+                    "button.test_camera_toss_treat",
+                ]
+            },
+            blocking=True,
+        )
+
+    assert mock_bridge.async_toss.await_count == 1
+    folder = tmp_path / "furbo_diary" / c.ACCOUNT_ID
+    assert _names(folder) == ["2026-09-04.mp4"]
+
+
+async def test_camera_actions_still_go_one_at_a_time(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Dropping the platform limit must not let two actions into one session.
+
+    They share the camera's single P2P session, so the serialising moved to
+    the bridge coordinator's lock rather than going away.
+    """
+    running = 0
+    overlapped = False
+
+    async def slow_action(*args: object) -> None:
+        nonlocal running, overlapped
+        running += 1
+        overlapped = overlapped or running > 1
+        await asyncio.sleep(0)
+        running -= 1
+
+    mock_bridge.async_toss.side_effect = slow_action
+    mock_bridge.async_pan.side_effect = slow_action
+    await setup_integration(hass, mock_config_entry, BRIDGE_OPTIONS)
+
+    await asyncio.gather(
+        hass.services.async_call(
+            "button",
+            "press",
+            {"entity_id": "button.test_camera_toss_treat"},
+            blocking=True,
+        ),
+        hass.services.async_call(
+            "button",
+            "press",
+            {"entity_id": "button.test_camera_pan_left"},
+            blocking=True,
+        ),
+    )
+
+    assert not overlapped

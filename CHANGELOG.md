@@ -19,6 +19,13 @@ numbers: the two are released independently and their numbers do not line up.
   The report is read fresh on every press rather than reused: Furbo's links are
   presigned and expire, so they are worth having only at the moment they are
   used, and they never reach Home Assistant's stored state.
+- Each account saves into its own folder under `furbo_diary`. Two accounts
+  produce a video for the same date, and a shared folder would not merely mix
+  them up: the second account's video would be skipped as already saved and
+  never arrive.
+- Camera actions serialize per camera rather than across the whole button
+  platform, so a download cannot hold up a pan or a treat, and one camera's
+  action no longer waits on another's.
 
 ## 1.3.2
 
