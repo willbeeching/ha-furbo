@@ -604,3 +604,32 @@ def test_p2p_auth_says_so_when_there_is_nothing_to_use() -> None:
     """No modern credentials and no P2PAccessToken is a dead end, said plainly."""
     with pytest.raises(SystemExit, match="P2PAccessToken"):
         fp.p2p_auth({"DeviceName": "cam"}, {"AuthKey": None}, "ACC1")
+
+
+@pytest.mark.parametrize(
+    ("p2p", "absent"),
+    [
+        # A null where a credential should be: pressing on turned it into the
+        # literal string "None" and failed to authenticate for no visible reason.
+        ({"AuthKey": "a", "P2PAccountId": "x", "P2PAccountKey": None}, "P2PAccountKey"),
+        # Absent entirely: the cloud parser no longer requires it, so this used
+        # to reach the caller as a bare KeyError.
+        ({"AuthKey": "a", "P2PAccountId": "x"}, "P2PAccountKey"),
+        # The dangerous one. Half a modern response is not a legacy camera, and
+        # taking the fallback would move a camera that should be using DTLS
+        # onto the unencrypted path.
+        ({"AuthKey": None, "P2PAccountId": "x", "P2PAccountKey": "k"}, "AuthKey"),
+    ],
+)
+def test_p2p_auth_refuses_half_a_modern_response(p2p: dict, absent: str) -> None:
+    """Two shapes are supported; anything between them is refused, not guessed."""
+    device = {"DeviceName": "cam", "P2PAccessToken": "tok"}
+    with pytest.raises(SystemExit, match=absent):
+        fp.p2p_auth(device, p2p, "ACC1")
+
+
+def test_p2p_auth_treats_an_empty_string_as_absent() -> None:
+    """The cloud sending "" is no more a credential than sending null."""
+    p2p = {"AuthKey": "", "P2PAccountId": "", "P2PAccountKey": ""}
+    device = {"DeviceName": "cam", "P2PAccessToken": "tok"}
+    assert fp.p2p_auth(device, p2p, "ACC1") == ("", "ACC1", "tok", True)

@@ -3,6 +3,18 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.7
+
+- **A half-complete P2P response is refused rather than guessed at.** Making
+  the three modern credentials optional for FB002 support in 1.2.6 left the
+  step after it still assuming they were all there. A null `P2PAccountKey`
+  became the literal string `"None"` and failed to authenticate for no visible
+  reason; a missing one raised a bare `KeyError`; and a missing `AuthKey`
+  alongside otherwise complete credentials silently took the legacy path,
+  moving a camera that should be using DTLS onto the unencrypted one. Two
+  shapes are now accepted, all three credentials or none of them, and anything
+  between is refused with the missing field named.
+
 ## 1.2.6
 
 - **Older `FB002` cameras can connect.** The cloud answers with `AuthKey`,

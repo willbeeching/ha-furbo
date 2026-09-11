@@ -779,26 +779,50 @@ def session_devices() -> list[dict[str, str]]:
     ]
 
 
+MODERN_P2P_KEYS = ("AuthKey", "P2PAccountId", "P2PAccountKey")
+
+
 def p2p_auth(device: dict, p2p: dict, account_id: str) -> tuple[str, str, str, bool]:
     """Return (auth_key, account, password, legacy) for one camera.
 
-    A legacy camera -- an FB002, reported in #3 -- is given AuthKey,
-    P2PAccountId and P2PAccountKey as null, and authenticates from its own
-    device record instead: the account id, and the device's P2PAccessToken.
+    The cloud answers in one of two shapes, and only two are accepted:
 
-    Keyed on the missing AuthKey rather than on the product id, deliberately.
-    A camera the cloud issues real credentials for can then never take this
-    path, however it is named, so adding it cannot regress a camera that
-    works today.
+    All three of AuthKey, P2PAccountId and P2PAccountKey, which is a modern
+    camera, connected with its auth key and DTLS.
+
+    None of them, which is a legacy camera -- an FB002, reported in #3. It
+    authenticates from its own device record instead: the account id, and the
+    device's P2PAccessToken, in the clear.
+
+    Anything in between is refused rather than guessed at. Half a modern
+    response is not a legacy camera, and treating it as one would quietly move
+    a camera that should be using DTLS onto the unencrypted path. It is also
+    not usable as a modern one, and pressing on there turns a null into the
+    literal string "None" and fails to authenticate for no visible reason.
+
+    Which path is taken follows from what the cloud sent, never from the
+    product id, so a camera that is issued real credentials cannot reach the
+    legacy path however it is named.
     """
-    auth_key = p2p.get("AuthKey") or ""
-    if auth_key:
-        return auth_key, str(p2p["P2PAccountId"]), str(p2p["P2PAccountKey"]), False
-    token = str(device.get("P2PAccessToken") or "")
-    if not token:
+    have = {k: p2p.get(k) for k in MODERN_P2P_KEYS}
+    usable = {k: v for k, v in have.items() if isinstance(v, str) and v}
+    name = device.get("DeviceName") or "this camera"
+
+    if len(usable) == len(MODERN_P2P_KEYS):
+        return usable["AuthKey"], usable["P2PAccountId"], usable["P2PAccountKey"], False
+
+    if usable:
+        absent = ", ".join(k for k in MODERN_P2P_KEYS if k not in usable)
         raise SystemExit(
-            f"{device.get('DeviceName') or 'this camera'} was given no P2P "
-            "credentials by the cloud and has no P2PAccessToken to fall back on"
+            f"the cloud sent {name} only part of its P2P credentials "
+            f"(no {absent}); refusing to guess which kind of camera this is"
+        )
+
+    token = device.get("P2PAccessToken")
+    if not isinstance(token, str) or not token:
+        raise SystemExit(
+            f"{name} was given no P2P credentials by the cloud and has no "
+            "P2PAccessToken to fall back on"
         )
     return "", account_id, token, True
 
