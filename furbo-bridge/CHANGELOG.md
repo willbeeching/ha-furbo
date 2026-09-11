@@ -3,6 +3,20 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.5
+
+- **The add-on's `log_level` option now reaches the add-on.** It was wired to
+  go2rtc alone, while the bridge's own logger stayed pinned at info, so
+  setting it to debug produced nothing from the part you were trying to
+  debug.
+- The `furbo_p2p.py diary` command has been removed. It asked two hosts that
+  turned out not to serve the diary, so it never worked. The integration
+  reports the same thing as a Doggie Diary sensor, and downloads the videos,
+  with no container shell needed. See #5.
+- The build retries its downloads of the TUTK library and go2rtc. Both come
+  from third-party hosts that rate-limit anonymous traffic, and a 429 has
+  failed the build before.
+
 ## 1.2.4
 
 - **The add-on no longer says a code was emailed when none was.** The login

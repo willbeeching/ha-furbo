@@ -37,7 +37,8 @@ RUN set -eux; \
       *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
     esac; \
     url="https://raw.githubusercontent.com/mrlt8/docker-wyze-bridge/${TUTK_LIB_COMMIT}/app/lib/lib.${arch}"; \
-    curl -fsSL -o /usr/local/lib/libIOTCAPIs_ALL.so "$url"; \
+    curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+      -o /usr/local/lib/libIOTCAPIs_ALL.so "$url"; \
     echo "${sha}  /usr/local/lib/libIOTCAPIs_ALL.so" | sha256sum -c -; \
     ldconfig
 
@@ -49,7 +50,8 @@ RUN set -eux; \
       *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
     esac; \
     url="https://github.com/AlexxIT/go2rtc/releases/download/v${GO2RTC_VERSION}/go2rtc_linux_${arch}"; \
-    curl -fsSL -o /usr/local/bin/go2rtc "$url"; \
+    curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+      -o /usr/local/bin/go2rtc "$url"; \
     echo "${sha}  /usr/local/bin/go2rtc" | sha256sum -c -; \
     chmod +x /usr/local/bin/go2rtc
 

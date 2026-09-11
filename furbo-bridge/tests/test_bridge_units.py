@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -202,3 +203,31 @@ def test_frames_are_dropped_rather_than_queued_without_limit() -> None:
         frames.offer(b"x")
     assert frames.dropped == 8
     assert frames._queue.qsize() == 2
+
+
+@pytest.mark.parametrize(
+    ("option", "expected"),
+    [
+        ("debug", logging.DEBUG),
+        ("DEBUG", logging.DEBUG),
+        # Supervisor offers trace; Python has no such level, so it is debug.
+        ("trace", logging.DEBUG),
+        ("  warning ", logging.WARNING),
+        ("fatal", logging.CRITICAL),
+        # Unset, empty or nonsense all mean the default rather than silence.
+        ("", logging.INFO),
+        ("shouty", logging.INFO),
+    ],
+)
+def test_log_level_follows_the_addon_option(
+    monkeypatch: pytest.MonkeyPatch, option: str, expected: int
+) -> None:
+    """The add-on's log_level reaches the bridge's own logger, not just go2rtc."""
+    monkeypatch.setenv("GO2RTC_LOG", option)
+    assert fb._log_level() == expected
+
+
+def test_log_level_defaults_without_the_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No option set is info, the level the bridge has always used."""
+    monkeypatch.delenv("GO2RTC_LOG", raising=False)
+    assert fb._log_level() == logging.INFO
