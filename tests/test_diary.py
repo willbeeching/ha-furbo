@@ -325,3 +325,47 @@ async def test_camera_actions_still_go_one_at_a_time(
     )
 
     assert not overlapped
+
+
+async def test_two_presses_do_not_race_on_the_same_file(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    tmp_path: Path,
+) -> None:
+    """An automation and a person can press at once; they must not collide.
+
+    Both presses want the same date, so both write the same .part file and one
+    moves it away while the other is still using it. Nothing serialised them
+    once the platform-wide limit went, so the diary does its own.
+    """
+    hass.config.media_dirs = {"local": str(tmp_path)}
+    mock_client.get_diary_report.return_value = [_day("2026-09-04")]
+
+    arrived = 0
+
+    async def slow_video(method: str, url: URL, data: object) -> Any:
+        nonlocal arrived
+        arrived += 1
+        # Yield repeatedly, so a second press has every chance to reach the
+        # same partial file while this one still holds it open. Unserialised,
+        # it does: both fetch, and the first to finish moves the file out from
+        # under the second, which fails with FileNotFoundError.
+        for _ in range(5):
+            await asyncio.sleep(0)
+        return AiohttpClientMockResponse(method, url, response=b"mp4-bytes")
+
+    aioclient_mock.get(VIDEO, side_effect=slow_video)
+    await setup_integration(hass, mock_config_entry)
+
+    press = {"entity_id": "button.furbo_account_download_doggie_diary"}
+    await asyncio.gather(
+        hass.services.async_call("button", "press", press, blocking=True),
+        hass.services.async_call("button", "press", press, blocking=True),
+    )
+
+    folder = tmp_path / "furbo_diary" / c.ACCOUNT_ID
+    assert _names(folder) == ["2026-09-04.mp4"]
+    # The second press waits, finds the day saved, and fetches nothing.
+    assert arrived == 1

@@ -144,6 +144,13 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         self._timezone_name: str | None = None
         self._diary: dict[str, Any] | None = None
         self._diary_at: float | None = None
+        # One diary download at a time for this account. Two presses -- a
+        # person and an automation, say -- otherwise fetch the same day at
+        # once and write the same partial file, and the first to finish moves
+        # it out from under the second. Separate from the per-camera action
+        # lock: a download has nothing to do with any camera, and waits far
+        # longer than a pan should.
+        self.diary_lock = asyncio.Lock()
 
     @property
     def events_enabled(self) -> bool:

@@ -112,16 +112,20 @@ class FurboDiaryButton(FurboAccountEntity, ButtonEntity):
         """
         entry = self.coordinator.config_entry
         folder = diary_folder(self.hass, entry.unique_id or "", entry.entry_id)
-        try:
-            days = await self.coordinator.client.get_diary_report()
-        except FurboError as err:
-            raise DiaryError(f"Could not read the Doggie Diary: {err}") from err
+        # The whole press, not just the writing: reading the report and
+        # deciding what is missing have to see the same disk as the downloads
+        # that follow them, or two presses both decide a day is missing.
+        async with self.coordinator.diary_lock:
+            try:
+                days = await self.coordinator.client.get_diary_report()
+            except FurboError as err:
+                raise DiaryError(f"Could not read the Doggie Diary: {err}") from err
 
-        session = async_get_clientsession(self.hass)
-        wanted = await self.hass.async_add_executor_job(missing, folder, days)
-        if not wanted:
-            _LOGGER.debug("Doggie Diary: all %d days already saved", len(days))
-            return
-        for date, url in wanted:
-            saved = await async_save(self.hass, session, folder, date, url)
-            _LOGGER.info("Saved the %s Doggie Diary video to %s", date, saved)
+            session = async_get_clientsession(self.hass)
+            wanted = await self.hass.async_add_executor_job(missing, folder, days)
+            if not wanted:
+                _LOGGER.debug("Doggie Diary: all %d days already saved", len(days))
+                return
+            for date, url in wanted:
+                saved = await async_save(self.hass, session, folder, date, url)
+                _LOGGER.info("Saved the %s Doggie Diary video to %s", date, saved)

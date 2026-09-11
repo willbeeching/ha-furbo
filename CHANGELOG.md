@@ -26,6 +26,10 @@ numbers: the two are released independently and their numbers do not line up.
 - Camera actions serialize per camera rather than across the whole button
   platform, so a download cannot hold up a pan or a treat, and one camera's
   action no longer waits on another's.
+- One diary download at a time per account. Two presses at once, a person and
+  an automation say, would otherwise fetch the same day together and write the
+  same partial file, and whichever finished first moved it out from under the
+  other.
 
 ## 1.3.2
 
