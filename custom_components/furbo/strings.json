@@ -267,6 +267,9 @@
       },
       "treat_sound": {
         "name": "Play treat sound"
+      },
+      "download_diary": {
+        "name": "Download Doggie Diary"
       }
     }
   },

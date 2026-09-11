@@ -499,15 +499,30 @@ class FurboClient:
         )
         return _optional_str(data, "Summary", path) or ""
 
+    async def get_diary_report(self, language: str = "en") -> list[dict[str, Any]]:
+        """Return the account's diary days as the cloud sends them.
+
+        One entry per day for a rolling week, oldest first, each carrying a
+        TimeLapseUrl: the daily video that otherwise only the phone app will
+        show you. The links are presigned and time limited, so this is for a
+        caller about to use them right now. Anything that keeps a result
+        should keep :meth:`get_diary` instead.
+        """
+        data = await self._post(
+            DIARY_PATH,
+            {**self._base(), "Language": language},
+            base=EVENT_URL,
+            form=True,
+        )
+        return _as_dict_list(data.get("Diaries", []), DIARY_PATH, "Diaries")
+
     async def get_diary(self, language: str = "en") -> dict[str, Any]:
         """Describe the account's Doggie Diary, without its links.
 
-        The app posts the account, the token and a language and gets back one
-        entry per day, each carrying a TimeLapseUrl: the daily video that
-        otherwise only the phone app will show you. What comes back here is
-        the shape of that answer, because nothing needs the URL until
-        something downloads it, and whatever does that can read it where it
-        is fetched rather than carrying it through Home Assistant's state.
+        The shape of the report rather than the report itself, because
+        nothing needs a URL until something downloads it, and whatever does
+        that reads it where it is fetched rather than carrying it through
+        Home Assistant's state.
         """
         data = await self._post(
             DIARY_PATH,
