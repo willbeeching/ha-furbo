@@ -539,7 +539,7 @@ DIARY_BODY = {
     "Diaries": [
         {
             "DiaryDate": "2026-09-10",
-            "Weekday": "Thursday",
+            "Weekday": 4,
             "IsValid": True,
             "JoyRemark": "a good day",
             "TimeLapseUrl": TIMELAPSE,
@@ -562,7 +562,7 @@ async def test_diary_describes_without_disclosing(
     assert shape["fields"] == ["Diaries", "ResultCode"]
     day = shape["days"][0]
     assert day["date"] == "2026-09-10"
-    assert day["weekday"] == "Thursday"
+    assert day["weekday"] == 4
     assert day["valid"] is True
     assert "JoyRemark" in day["fields"]
     assert day["links"]["TimeLapseUrl"] == {
@@ -597,6 +597,22 @@ async def test_diary_reports_a_dead_token_as_one(
     aioclient_mock.post(DIARY, status=400, json={"Code": 12002})
     with pytest.raises(FurboAuthError):
         await _client(hass, authed=True).get_diary()
+
+
+async def test_diary_keeps_unexpected_field_types(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A field of a surprising type is the answer, not a malformed response.
+
+    Weekday arrives as an int from the live API; the first attempt at this
+    demanded a string and threw away a report that had arrived intact.
+    """
+    body = {"Diaries": [{"DiaryDate": 20260910, "Weekday": None, "IsValid": "yes"}]}
+    aioclient_mock.post(DIARY, json=body)
+    day = (await _client(hass, authed=True).get_diary())["days"][0]
+    assert day["date"] == 20260910
+    assert day["weekday"] is None
+    assert day["valid"] == "yes"
 
 
 async def test_diary_caps_the_days_it_describes(

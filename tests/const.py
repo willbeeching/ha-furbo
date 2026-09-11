@@ -137,7 +137,7 @@ DIARY_SHAPE: dict[str, Any] = {
     "days": [
         {
             "date": "2026-09-10",
-            "weekday": "Thursday",
+            "weekday": 4,
             "valid": True,
             "fields": ["DiaryDate", "IsValid", "TimeLapseUrl", "Weekday"],
             "links": {

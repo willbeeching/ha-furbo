@@ -157,8 +157,11 @@ def _diary_shape(data: dict[str, Any], host: str, path: str) -> dict[str, Any]:
         "count": len(days),
         "days": [
             {
-                "date": _optional_str(day, "DiaryDate", path),
-                "weekday": _optional_str(day, "Weekday", path),
+                # Passed through as they come. This describes what the
+                # report holds, so a field of an unexpected type is the
+                # answer, not a malformed response: Weekday is an int.
+                "date": day.get("DiaryDate"),
+                "weekday": day.get("Weekday"),
                 "valid": day.get("IsValid"),
                 "fields": sorted(day),
                 "links": {key: _link_shape(day.get(key)) for key in DIARY_LINKS},
