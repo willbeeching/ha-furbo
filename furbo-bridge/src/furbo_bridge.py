@@ -64,6 +64,7 @@ from typing import Any
 
 from aiohttp import web
 
+from furbo_cloud import configure_logging
 import furbo_p2p as fp
 
 _LOGGER = logging.getLogger("furbo_bridge")
@@ -1011,32 +1012,9 @@ async def _refresh_loop(worker: P2PWorker, executor: ThreadPoolExecutor, interva
         await asyncio.sleep(interval)
 
 
-# The add-on's log_level option, in the names Supervisor uses. "trace" has no
-# Python equivalent and is treated as debug.
-LOG_LEVELS = {
-    "trace": logging.DEBUG,
-    "debug": logging.DEBUG,
-    "info": logging.INFO,
-    "warning": logging.WARNING,
-    "error": logging.ERROR,
-    "fatal": logging.CRITICAL,
-}
-
-
-def _log_level() -> int:
-    """Return the level the add-on's log_level option asks for.
-
-    Read from the environment rather than an argument: run.sh already exports
-    it for go2rtc, and until now it reached go2rtc alone. Setting the option to
-    debug turned up nothing from the bridge itself, which is exactly when
-    somebody is looking.
-    """
-    return LOG_LEVELS.get(os.environ.get("GO2RTC_LOG", "").strip().lower(), logging.INFO)
-
-
 async def serve(args: argparse.Namespace) -> None:
     """Run the HTTP bridge until interrupted."""
-    logging.basicConfig(level=_log_level(), format="%(asctime)s %(name)s %(message)s")
+    configure_logging()
     if not args.token:
         # The API exposes camera video and physical controls; never run it
         # unauthenticated on the network.

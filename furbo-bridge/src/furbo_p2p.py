@@ -78,6 +78,7 @@ from furbo_cloud import (
     FurboError,
     FurboLoginError,
     FurboMfaError,
+    configure_logging,
     encrypt_password,
     new_mobile_id,
 )
@@ -1655,6 +1656,11 @@ def cmd_stream(args) -> int:
 
 
 def main() -> int:
+    # Every command, not just the server. The login path is where the useful
+    # debug lines are, and until now it ran at Python's default level whatever
+    # the add-on's log_level said, so turning the option up did nothing for
+    # the one thing somebody turns it up to see.
+    configure_logging()
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

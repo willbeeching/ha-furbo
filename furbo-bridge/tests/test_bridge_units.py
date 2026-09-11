@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import furbo_bridge as fb
+import furbo_cloud as fc
 
 
 def test_normalise_state_maps_nested_shapes() -> None:
@@ -222,12 +223,31 @@ def test_frames_are_dropped_rather_than_queued_without_limit() -> None:
 def test_log_level_follows_the_addon_option(
     monkeypatch: pytest.MonkeyPatch, option: str, expected: int
 ) -> None:
-    """The add-on's log_level reaches the bridge's own logger, not just go2rtc."""
+    """The add-on's log_level reaches the Python side, not just go2rtc."""
     monkeypatch.setenv("GO2RTC_LOG", option)
-    assert fb._log_level() == expected
+    assert fc.log_level() == expected
 
 
 def test_log_level_defaults_without_the_option(monkeypatch: pytest.MonkeyPatch) -> None:
     """No option set is info, the level the bridge has always used."""
     monkeypatch.delenv("GO2RTC_LOG", raising=False)
-    assert fb._log_level() == logging.INFO
+    assert fc.log_level() == logging.INFO
+
+
+def test_configure_logging_reaches_the_login_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A debug line from the cloud client must actually come out.
+
+    furbo_p2p ran every command at Python's default level, so the one log line
+    that says what the login response contained could never print however high
+    the add-on's log_level was set -- which is the only reason anybody turns it
+    up. Proven end to end rather than by asserting the level: configure, log,
+    and read it back off the stream.
+    """
+    monkeypatch.setenv("GO2RTC_LOG", "debug")
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    fc.configure_logging()
+    logging.getLogger("furbo_cloud").debug("Login response from %s carried: %s", "/x", "A, B")
+    assert "Login response from /x carried: A, B" in capsys.readouterr().err

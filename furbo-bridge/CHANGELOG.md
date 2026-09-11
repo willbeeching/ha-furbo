@@ -3,6 +3,17 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.8
+
+- **`log_level` now reaches the login, not just the running bridge.** 1.2.6
+  wired the option into the server and stopped there, so every command run by
+  the start-up script -- the login among them -- still ran at Python's default
+  level. Setting the option to debug therefore printed nothing from the one
+  step anybody turns it up to watch. The line that records which fields the
+  cloud returns at login can now actually appear, which is what is needed to
+  find out whether Furbo hands back anything that would let a session be
+  renewed without a person.
+
 ## 1.2.7
 
 - **A half-complete P2P response is refused rather than guessed at.** Making

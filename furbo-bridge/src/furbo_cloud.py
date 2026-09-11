@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 from typing import Any, cast
 import uuid
 
@@ -50,6 +51,30 @@ CODE_RATE_LIMITED = 80002  # body carries TimeWait in seconds
 # never sleep longer than the upper bound whatever TimeWait claims.
 _RATE_LIMIT_MIN_WAIT = 10.0
 _RATE_LIMIT_MAX_WAIT = 120.0
+
+# The add-on's log_level option, in the names Supervisor uses, with "trace"
+# treated as debug because Python has no such level. run.sh exports it as
+# GO2RTC_LOG for go2rtc, and every entry point here reads the same value, so
+# turning the option up reaches the Python side as well.
+LOG_LEVELS = {
+    "trace": logging.DEBUG,
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "fatal": logging.CRITICAL,
+}
+
+
+def log_level() -> int:
+    """Return the level the add-on's log_level option asks for."""
+    return LOG_LEVELS.get(os.environ.get("GO2RTC_LOG", "").strip().lower(), logging.INFO)
+
+
+def configure_logging() -> None:
+    """Send this process's logs to stdout at the level the option asks for."""
+    logging.basicConfig(level=log_level(), format="%(asctime)s %(name)s %(message)s")
+
 
 ACTION_TOSS_TREAT = "TossTreat"
 ACTION_PLAY_TREAT_SOUND = "PlayTreatTossingSound"
