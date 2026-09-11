@@ -201,14 +201,16 @@ jobs:
             ${{ github.event_name == 'pull_request'
                 && format('origin/{0}', github.base_ref)
                 || github.event.before }}
+        # shellcheck sees no env block, so a local named "base" reads to it as
+        # a misspelling of BASE (SC2153). Named apart to keep it quiet.
         run: |
-          base="$BASE"
+          ref="$BASE"
           # A first push, a force-push or a manual run leaves no usable before
           # commit. The previous commit is the honest comparison there.
-          if ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
-            base="HEAD^"
+          if ! git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
+            ref="HEAD^"
           fi
-          python scripts/check_addon_version.py "$base"
+          python scripts/check_addon_version.py "$ref"
 
   changelog:
     # Runs on pushes too, not only pull requests: the add-on's version guard
