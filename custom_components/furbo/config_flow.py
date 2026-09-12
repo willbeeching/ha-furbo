@@ -8,6 +8,8 @@ import time
 from typing import Any
 
 from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    SOURCE_RECONFIGURE,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -146,11 +148,33 @@ class FurboConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={CONF_EMAIL: self._email},
         )
 
+    def _known_mobile_id(self) -> str | None:
+        """Return the device identity this entry already registered, if any.
+
+        Furbo binds a MobileId per login and caps how many an account may
+        hold (DeviceBindingLimit in the login response). Minting a new one on
+        every reauth therefore spends that allowance on the same Home
+        Assistant over and over, and something has to give way: signing in
+        again here would evict a binding elsewhere, the add-on's included,
+        which leaves it unable to renew and asking for a code of its own.
+
+        Reauthenticating the same install is not a new device, so it reuses
+        the identity the entry already has.
+        """
+        if self.source == SOURCE_REAUTH:
+            entry = self._get_reauth_entry()
+        elif self.source == SOURCE_RECONFIGURE:
+            entry = self._get_reconfigure_entry()
+        else:
+            return None
+        known = entry.data.get(CONF_MOBILE_ID)
+        return known if isinstance(known, str) and known else None
+
     async def _async_try_login(self, email: str, password: str) -> dict[str, str]:
         """Start login. On success sets up state; returns flow errors."""
         self._email = email
         self._enc_password = encrypt_password(password)
-        self._mobile_id = new_mobile_id()
+        self._mobile_id = self._known_mobile_id() or new_mobile_id()
         self._client = FurboClient(async_get_clientsession(self.hass))
         try:
             self._mfa_candidate = await self._client.start_login(

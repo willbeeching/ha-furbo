@@ -171,6 +171,14 @@ def _diary_shape(data: dict[str, Any], host: str, path: str) -> dict[str, Any]:
     }
 
 
+def _binding_limit(data: dict[str, Any]) -> object:
+    """Return DeviceBindingLimit when it is a plain number, else a placeholder."""
+    value = data.get("DeviceBindingLimit")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return "absent" if value is None else "not a number"
+    return value
+
+
 def _malformed(path: str, what: str) -> FurboConnectionError:
     """Build the error raised for a response that does not fit the contract."""
     return FurboConnectionError(f"Malformed response from {path}: {what}")
@@ -380,13 +388,18 @@ class FurboClient:
 
     def _store_login(self, data: dict[str, Any], path: str) -> None:
         """Persist the identifiers a successful login returns."""
-        # Field names only, never values. Two fields are kept and the rest
-        # discarded, and "the cloud gives us nothing to refresh with" has only
-        # ever been a description of this parser -- nobody has looked at what
-        # the response actually carries. If there is a refresh token in here,
-        # renewing the way the app does beats logging in again.
+        # Field names only, never values, with one exception: the login
+        # response has now been seen and carries no refresh token of any kind,
+        # so a session cannot be renewed without logging in again. What it does
+        # carry is DeviceBindingLimit, and each login registers a MobileId
+        # against that limit, so how many an account allows decides whether two
+        # clients on one account evict each other. A small integer, and the
+        # answer to why a session dies early, so it is logged by value.
         _LOGGER.debug(
-            "Login response from %s carried: %s", path, ", ".join(sorted(data))
+            "Login response from %s carried: %s. DeviceBindingLimit=%s",
+            path,
+            ", ".join(sorted(data)),
+            _binding_limit(data),
         )
         account_id = _required_str(data, "AccountId", path)
         cognito_token = _required_str(data, "CognitoToken", path)

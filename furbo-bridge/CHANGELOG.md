@@ -3,6 +3,12 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.9
+
+- The login response's `DeviceBindingLimit` is logged by value at debug level.
+  Each login binds a `MobileId` against that limit, so the number decides
+  whether two clients on one account can coexist or evict each other.
+
 ## 1.2.8
 
 - **`log_level` now reaches the login, not just the running bridge.** 1.2.6

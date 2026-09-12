@@ -573,3 +573,47 @@ async def test_options_flow_offers_no_stream_it_cannot_name(
     # The bridge URL is still offered: it is the same for every camera, and
     # the API is asked about one camera by id, so it cannot cross them.
     assert suggested[CONF_BRIDGE_URL] == "http://abc-furbo-bridge:8791"
+
+
+async def test_reauth_keeps_the_registered_device_identity(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Signing in again is the same Home Assistant, not another device.
+
+    Furbo binds a MobileId per login against a DeviceBindingLimit, so minting
+    a fresh one on every reauth spends the account's allowance on this one
+    install repeatedly and pushes other bindings out -- the add-on's among
+    them, which is what leaves it unable to renew and asking for its own code.
+    """
+    await setup_integration(hass, mock_config_entry)
+    registered = mock_config_entry.data["mobile_id"]
+
+    result = await mock_config_entry.start_reauth_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_MFA_CODE: "1234"}
+    )
+
+    assert result["reason"] == "reauth_successful"
+    assert mock_config_entry.data["mobile_id"] == registered
+    # And the cloud was told the same one, not a new one.
+    assert mock_client.start_login.await_args.args[2] == registered
+
+
+async def test_a_new_setup_still_registers_a_new_identity(
+    hass: HomeAssistant, mock_client: AsyncMock
+) -> None:
+    """Only reauth reuses one. A fresh entry is genuinely a new device."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_MFA_CODE: "1234"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["mobile_id"]

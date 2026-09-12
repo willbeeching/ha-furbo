@@ -31,6 +31,22 @@ numbers: the two are released independently and their numbers do not line up.
   same partial file, and whichever finished first moved it out from under the
   other.
 
+## 1.4.1
+
+- **Signing in again no longer registers Home Assistant as a new device.**
+  Furbo binds a `MobileId` per login and caps how many an account may hold, and
+  reauthenticating minted a fresh one every time instead of reusing the one the
+  entry already had. That spends the account's allowance on the same
+  installation over and over, and something has to give way: the likely
+  casualty is the Furbo Bridge add-on's own binding, which is exactly what
+  leaves it unable to renew and asking for a verification code of its own.
+  Reauth and reconfigure now reuse the identity the entry registered; a genuinely
+  new entry still gets a new one.
+- The login response's `DeviceBindingLimit` is logged by value at debug level,
+  so how many bindings an account actually allows can be read rather than
+  guessed at. The response carries no refresh token of any kind, which is now
+  confirmed from a real login rather than assumed.
+
 ## 1.3.2
 
 - **The Doggie Diary sensor stopped discarding the report it asked for.** The
