@@ -25,7 +25,12 @@ ARG GO2RTC_VERSION="1.9.9"
 ARG GO2RTC_SHA256_AMD64="aca941066c816cd69f4d689bf556f924057f5087449c2fdd7d5854d9aaec8ea9"
 ARG GO2RTC_SHA256_ARM64="d13d4d692833d9606ac0d0e25675bba58e804f3f401e4f70761c867f38d2777a"
 
+# upgrade, not just install: the base image is pinned by digest so its content
+# is fixed, and Debian publishes fixes for packages inside it faster than the
+# image is rebuilt. Without this the build ships known-patchable packages, which
+# the CI vulnerability scan fails on -- correctly. Perl was the first to bite.
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends curl ca-certificates ffmpeg tini \
     && rm -rf /var/lib/apt/lists/*
 

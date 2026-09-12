@@ -3,6 +3,14 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.10
+
+- **The image picks up Debian's security fixes at build time.** The base image
+  is pinned by digest, so its contents are fixed, and Debian publishes patches
+  for packages inside it faster than the image is rebuilt. The build installed
+  what it needed and inherited everything else unpatched, which meant shipping
+  known-patchable packages -- perl, in this instance. It now upgrades first.
+
 ## 1.2.9
 
 - The login response's `DeviceBindingLimit` is logged by value at debug level.
