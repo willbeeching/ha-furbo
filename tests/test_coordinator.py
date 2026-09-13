@@ -549,3 +549,32 @@ async def test_the_repair_issue_clears_once_a_token_arrives(
     await coordinator._async_update_data()
 
     assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_the_repair_issue_goes_when_the_account_does(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Deleting the account takes its notice with it.
+
+    A repair notice is registered against the integration rather than the
+    entry, so removing the entry does not clear it. Someone who deletes the
+    account precisely because they are done with it would be left with a
+    permanent warning about an add-on nothing is waiting on, and nothing to
+    press to make it go away.
+    """
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    issue_id = f"bridge_needs_code_{mock_config_entry.entry_id}"
+
+    coordinator.token_source = AsyncMock(
+        side_effect=FurboBridgeError("login_required", status=409)
+    )
+    mock_client.get_devices.side_effect = FurboAuthError("expired")
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+
+    assert await hass.config_entries.async_remove(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None

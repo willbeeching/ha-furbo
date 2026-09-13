@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -22,6 +23,11 @@ WINDOW = {
     "start": datetime(2026, 9, 12, 19, 0, 0),
     "end": datetime(2026, 9, 13, 7, 0, 0),
 }
+# The same window as absolute moments, worked out by hand rather than by
+# repeating the conversion under test. September, so London is on BST: the
+# 19:00 an automation author writes is 18:00 UTC.
+LONDON_START = 1789236000  # 2026-09-12T18:00:00Z
+LONDON_END = 1789279200  # 2026-09-13T06:00:00Z
 EVENT = {
     "Id": 91,
     "DeviceId": c.DEVICE_ID,
@@ -29,6 +35,17 @@ EVENT = {
     "Videos": ["https://example.invalid/a.mp4"],
     "Thumbnail": "https://example.invalid/t.jpg",
 }
+
+
+def _london(hass: HomeAssistant) -> None:
+    """Put Home Assistant on a timezone that is not the host's.
+
+    Every assertion against LONDON_START and LONDON_END depends on this: with
+    Home Assistant and the host agreeing, reading a naive time in the wrong
+    one of them is invisible.
+    """
+    hass.config.time_zone = "Europe/London"
+    dt_util.set_default_time_zone(dt_util.get_time_zone("Europe/London"))
 
 
 async def _call(
@@ -43,6 +60,7 @@ async def test_get_events_returns_the_clips(
     hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
 ) -> None:
     """The point of the action: the caller gets the links, state does not."""
+    _london(hass)
     await setup_integration(hass, mock_config_entry)
     mock_client.get_events.return_value = [dict(EVENT)]
 
@@ -53,8 +71,87 @@ async def test_get_events_returns_the_clips(
     assert result == {"events": [EVENT]}
     # The window reaches the cloud as epoch seconds, overnight included.
     sent = mock_client.get_events.await_args.kwargs
-    assert sent["start"] == int(WINDOW["start"].timestamp())
-    assert sent["end"] == int(WINDOW["end"].timestamp())
+    assert sent["start"] == LONDON_START
+    assert sent["end"] == LONDON_END
+
+
+async def test_a_bare_time_means_home_assistants_own_clock(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A window written without an offset is the user's local time.
+
+    Asserted against fixed epoch seconds rather than against the same
+    conversion the code does, which is what let this through: a test that
+    calls .timestamp() on a naive datetime agrees with the bug.
+
+    The trap is that a naive datetime is read in the timezone of the machine
+    Home Assistant runs on, which for a container is UTC and has nothing to do
+    with the person writing the automation. In September that is an hour of
+    drift, so 19:00 fetched the clips from 20:00.
+    """
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    await _call(
+        hass, "get_events", {"config_entry_id": mock_config_entry.entry_id, **WINDOW}
+    )
+
+    sent = mock_client.get_events.await_args.kwargs
+    assert sent["start"] == LONDON_START
+    assert datetime.fromtimestamp(sent["start"], UTC).hour == 18
+
+
+async def test_an_offset_is_honoured_not_overwritten(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A window that states its offset means exactly what it says."""
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    bst = timezone(timedelta(hours=1))
+    await _call(
+        hass,
+        "get_events",
+        {
+            "config_entry_id": mock_config_entry.entry_id,
+            "start": datetime(2026, 9, 12, 19, 0, 0, tzinfo=bst),
+            "end": datetime(2026, 9, 13, 7, 0, 0, tzinfo=bst),
+        },
+    )
+
+    sent = mock_client.get_events.await_args.kwargs
+    assert sent["start"] == LONDON_START
+    assert sent["end"] == LONDON_END
+
+
+async def test_one_end_with_an_offset_and_one_without(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A mixed pair is a window, not a crash.
+
+    Comparing a naive datetime with an aware one raises TypeError in Python,
+    so before both ends were normalised this reached the user as an unhandled
+    error rather than as clips.
+    """
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    await _call(
+        hass,
+        "get_events",
+        {
+            "config_entry_id": mock_config_entry.entry_id,
+            "start": datetime(2026, 9, 12, 19, 0, 0),
+            "end": datetime(2026, 9, 13, 6, 0, 0, tzinfo=UTC),
+        },
+    )
+
+    sent = mock_client.get_events.await_args.kwargs
+    assert sent["start"] == LONDON_START
+    assert sent["end"] == LONDON_END
 
 
 async def test_get_events_refuses_a_backwards_window(

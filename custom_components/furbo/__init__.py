@@ -33,6 +33,7 @@ from .const import (
 from .coordinator import (
     FurboBridgeCoordinator,
     FurboCoordinator,
+    clear_needs_code,
     clear_renewal_budget,
 )
 from .discovery import (
@@ -322,6 +323,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> bo
     # never loads is never unloaded.
     clear_renewal_budget(hass, entry.entry_id)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> None:
+    """Clean up what outlives the entry itself.
+
+    A repair notice is registered against the integration, not the entry, so
+    removing the account does not take it with it. Someone who deletes the
+    entry precisely because they are done with it would otherwise be left
+    with a permanent warning about an add-on nothing is waiting on.
+    """
+    clear_needs_code(hass, entry.entry_id)
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> None:

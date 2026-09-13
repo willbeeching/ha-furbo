@@ -30,6 +30,7 @@ from homeassistant.core import (
 )
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.util import dt as dt_util
 import voluptuous as vol
 
 from .api import EVENTS_DEFAULT_LIMIT, FurboError
@@ -101,8 +102,16 @@ def _failed(err: FurboError) -> ServiceValidationError:
 async def _async_get_events(call: ServiceCall) -> ServiceResponse:
     """Return the events in a window, each with its own clip links."""
     entry = _entry(call.hass, call)
-    start: datetime = call.data[ATTR_START]
-    end: datetime = call.data[ATTR_END]
+    # cv.datetime hands back whatever was written: a time with an offset keeps
+    # it, a bare "2026-09-12 19:00:00" arrives with no timezone at all. Left
+    # alone, the naive one is read in the timezone of whatever machine Home
+    # Assistant happens to run on, which for a container is UTC and for the
+    # person writing the automation is their own clock. as_utc reads a naive
+    # time in the timezone Home Assistant is configured for, which is the one
+    # the automation was written against, and normalises both so the
+    # comparison below cannot raise on a mixed pair.
+    start: datetime = dt_util.as_utc(call.data[ATTR_START])
+    end: datetime = dt_util.as_utc(call.data[ATTR_END])
     if end <= start:
         raise ServiceValidationError(
             translation_domain=DOMAIN, translation_key="end_before_start"

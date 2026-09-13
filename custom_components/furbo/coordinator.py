@@ -74,8 +74,15 @@ def _async_needs_code(hass: HomeAssistant, entry_id: str) -> None:
     )
 
 
-def _async_code_no_longer_needed(hass: HomeAssistant, entry_id: str) -> None:
-    """Take the notice down once the add-on can hand over a token again."""
+def clear_needs_code(hass: HomeAssistant, entry_id: str) -> None:
+    """Take the notice down: the add-on can hand over a token, or is gone.
+
+    Called both when a token is successfully taken and when the entry is
+    removed. A repair notice outlives the entry it was raised against, so
+    without the second call, deleting an account leaves behind a warning
+    about an add-on that nothing is asking anything of any more, and no
+    way to clear it.
+    """
     ir.async_delete_issue(hass, DOMAIN, f"{ISSUE_BRIDGE_NEEDS_CODE}_{entry_id}")
 
 
@@ -308,7 +315,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
             },
         )
         clear_renewal_budget(self.hass, self.config_entry.entry_id)
-        _async_code_no_longer_needed(self.hass, self.config_entry.entry_id)
+        clear_needs_code(self.hass, self.config_entry.entry_id)
         _LOGGER.info("Took a fresh cloud token from the Furbo Bridge add-on")
         return _Renewal.TAKEN
 

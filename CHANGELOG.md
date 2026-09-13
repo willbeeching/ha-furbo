@@ -6,6 +6,21 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.5.1
+
+- **`furbo.get_events` read a plain time in the wrong timezone.** A window
+  written without an offset, which is how most people write one, was read in
+  the timezone of the machine Home Assistant runs on rather than the timezone
+  Home Assistant is set to. On a container those differ: asking for 19:00 from
+  a London install fetched the clips from 20:00. Both ends of the window are
+  now read as the local time the automation was written in.
+- **A window with an offset on one end and not the other no longer fails.**
+  Mixing the two raised an unhandled error instead of returning clips.
+- The repair notice about the add-on waiting for a verification code is now
+  cleared when the account is deleted. It was registered against the
+  integration rather than the entry, so removing the account left a permanent
+  warning about an add-on nothing was waiting on, with nothing to press.
+
 ## 1.5.0
 
 - **New: two actions that hand back Furbo data for your own automations.**
