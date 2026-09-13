@@ -3,6 +3,18 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.11
+
+- **The security upgrade in 1.2.10 is now four named packages rather than
+  everything.** 1.2.10 ran a blanket `apt-get upgrade`, which Docker's own
+  guidance is against: it makes two builds of the same file produce different
+  images, and it changes packages nothing in the build asked about. The four
+  the scan actually named are upgraded by name instead, each recorded in the
+  Dockerfile with the CVEs behind it. Same packages patched, a build you can
+  read.
+- Correcting 1.2.10's note: it was not only perl. The scan found twelve fixed
+  advisories across `gzip`, `libpcre2-8-0`, `libsqlite3-0` and `perl-base`.
+
 ## 1.2.10
 
 - **The image picks up Debian's security fixes at build time.** The base image

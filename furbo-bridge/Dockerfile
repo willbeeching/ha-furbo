@@ -25,12 +25,28 @@ ARG GO2RTC_VERSION="1.9.9"
 ARG GO2RTC_SHA256_AMD64="aca941066c816cd69f4d689bf556f924057f5087449c2fdd7d5854d9aaec8ea9"
 ARG GO2RTC_SHA256_ARM64="d13d4d692833d9606ac0d0e25675bba58e804f3f401e4f70761c867f38d2777a"
 
-# upgrade, not just install: the base image is pinned by digest so its content
-# is fixed, and Debian publishes fixes for packages inside it faster than the
-# image is rebuilt. Without this the build ships known-patchable packages, which
-# the CI vulnerability scan fails on -- correctly. Perl was the first to bite.
+# Named packages the base image carries at a version Debian has since patched,
+# upgraded explicitly rather than by a blanket `apt-get upgrade`. Docker's own
+# guidance is against upgrading the base in a build: it makes two builds of the
+# same Dockerfile produce different images, and it changes packages nobody in
+# this build asked about. Naming them keeps the build reviewable -- each entry
+# is here because a scan named a fixed CVE in it, and it can be removed again.
+#
+# The real fix is upstream rebuilding python:3.12-slim with these already in.
+# When that happens, repin FROM to the new digest and this list shrinks to
+# nothing. Until then the pinned digest is older than Debian's archive and the
+# gap has to be closed somewhere.
+#
+# Current entries, from the CI scan on 2026-09-12:
+#   gzip          CVE-2026-41992
+#   libpcre2-8-0  CVE-2026-86145, CVE-2026-89161
+#   libsqlite3-0  CVE-2026-11822, CVE-2026-11824
+#   perl-base     CVE-2026-13221, CVE-2026-42496, CVE-2026-42497, CVE-2026-8376,
+#                 CVE-2026-48962, CVE-2026-57432, CVE-2026-57433
+ARG SECURITY_UPGRADES="gzip libpcre2-8-0 libsqlite3-0 perl-base"
+
 RUN apt-get update \
-    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends --only-upgrade $SECURITY_UPGRADES \
     && apt-get install -y --no-install-recommends curl ca-certificates ffmpeg tini \
     && rm -rf /var/lib/apt/lists/*
 
