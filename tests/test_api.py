@@ -633,3 +633,93 @@ async def test_diary_rejects_a_malformed_report(
     aioclient_mock.post(DIARY, json={"Diaries": ["not-an-object"]})
     with pytest.raises(FurboConnectionError):
         await _client(hass, authed=True).get_diary()
+
+
+# --- events and the insight report ------------------------------------------
+
+EVENT_LIST = f"{EVENT_URL}/furbo_event/v2/list"
+INSIGHT = f"{PETGPT_URL}/v2/calendar/insight-report/get"
+
+
+async def test_events_are_returned_as_the_cloud_sends_them(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """The caller wants this data in order to use it, so it is not reshaped."""
+    body = {
+        "EventTypes": {"Barking": 1},
+        "Events": [
+            {
+                "Id": 91,
+                "DeviceId": c.DEVICE_ID,
+                "Caption": "standing in the doorway",
+                "Types": ["DogActivity"],
+                "Thumbnail": "https://example.invalid/t.jpg",
+                "Videos": ["https://example.invalid/a.mp4"],
+                "VideoCodec": "h264",
+            }
+        ],
+    }
+    aioclient_mock.post(EVENT_LIST, json=body)
+    events = await _client(hass, authed=True).get_events(start=100, end=200)
+    assert events[0]["Videos"] == ["https://example.invalid/a.mp4"]
+    assert events[0]["Caption"] == "standing in the doorway"
+
+
+async def test_events_send_the_window_as_the_app_does(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """JSON, not form-encoded, and the optional filters are left out when unset.
+
+    The diary endpoint on this host is form-encoded and this one is not, which
+    is the sort of difference that fails quietly.
+    """
+    aioclient_mock.post(EVENT_LIST, json={"Events": []})
+    await _client(hass, authed=True).get_events(start=100, end=200, limit=5)
+    sent = aioclient_mock.mock_calls[0][2]
+    assert sent["StartAfter"] == 100
+    assert sent["EndBefore"] == 200
+    assert sent["Limit"] == 5
+    assert "DeviceIds" not in sent
+    assert "EventNames" not in sent
+
+
+async def test_events_pass_the_filters_through(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Named cameras and event types reach the cloud as lists."""
+    aioclient_mock.post(EVENT_LIST, json={"Events": []})
+    await _client(hass, authed=True).get_events(
+        start=1, end=2, device_ids=[c.DEVICE_ID], event_names=["Barking"]
+    )
+    sent = aioclient_mock.mock_calls[0][2]
+    assert sent["DeviceIds"] == [c.DEVICE_ID]
+    assert sent["EventNames"] == ["Barking"]
+
+
+async def test_events_reject_a_malformed_list(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Events that is not a list of objects is a malformed response."""
+    aioclient_mock.post(EVENT_LIST, json={"Events": ["nope"]})
+    with pytest.raises(FurboConnectionError):
+        await _client(hass, authed=True).get_events(start=1, end=2)
+
+
+async def test_insight_report_is_keyed_by_date(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Each date maps to its reports, passed through as they arrive."""
+    aioclient_mock.post(
+        INSIGHT, json={"2026-09-12": [{"Type": "Sleep", "Daily": {"hours": 9}}]}
+    )
+    report = await _client(hass, authed=True).get_insight_report(["2026-09-12"])
+    assert report["2026-09-12"][0]["Daily"] == {"hours": 9}
+
+
+async def test_insight_report_rejects_a_malformed_day(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A date whose reports are not a list of objects is malformed."""
+    aioclient_mock.post(INSIGHT, json={"2026-09-12": "not-a-list"})
+    with pytest.raises(FurboConnectionError):
+        await _client(hass, authed=True).get_insight_report(["2026-09-12"])

@@ -44,6 +44,14 @@ PETGPT_URL = "https://pet-gpt.furbo.co"
 EVENT_URL = "https://event-handler.furbo.co"
 
 DIARY_PATH = "/doggie_diary/report"
+# The event list, which is where a clip's own video links live. Unlike the
+# diary this one is sent as JSON, not form-encoded: the app posts a body
+# object rather than named fields.
+EVENTS_PATH = "/furbo_event/v2/list"
+INSIGHT_PATH = "/v2/calendar/insight-report/get"
+# A day of events for one camera, with room to spare. The API takes a limit
+# and a caller can ask for less.
+EVENTS_DEFAULT_LIMIT = 200
 DIARY_LINKS = ("TimeLapseUrl", "SnapshotUrl", "SurveyUrl")
 # Enough days to see the pattern, few enough to sit in an entity attribute.
 DIARY_DAYS = 3
@@ -511,6 +519,54 @@ class FurboClient:
             path, {**self._base(), "Date": date}, base=PETGPT_URL, form=True
         )
         return _optional_str(data, "Summary", path) or ""
+
+    async def get_events(
+        self,
+        *,
+        start: int,
+        end: int,
+        device_ids: list[str] | None = None,
+        event_names: list[str] | None = None,
+        limit: int = EVENTS_DEFAULT_LIMIT,
+    ) -> list[dict[str, Any]]:
+        """Return the account's detected events between two moments.
+
+        Each event carries its own clip links and a thumbnail, so this is the
+        raw material behind the daily recap rather than the recap itself. The
+        window is the caller's to choose, which matters: Furbo's own recap
+        only covers 07:00 to 19:00, and nothing here imposes that.
+
+        Times are epoch seconds. Returned as the cloud sends them, because the
+        caller is asking for this data in order to use it.
+        """
+        payload: dict[str, Any] = {
+            **self._base(),
+            "StartAfter": start,
+            "EndBefore": end,
+            "Limit": limit,
+        }
+        if device_ids:
+            payload["DeviceIds"] = device_ids
+        if event_names:
+            payload["EventNames"] = event_names
+        data = await self._post(EVENTS_PATH, payload, base=EVENT_URL)
+        return _as_dict_list(data.get("Events", []), EVENTS_PATH, "Events")
+
+    async def get_insight_report(self, dates: list[str]) -> dict[str, Any]:
+        """Return the written daily report for each date (YYYY-MM-DD).
+
+        The app calls this the pet insight report; it is what the phone shows
+        as the day's recap card. Each date maps to a list of reports, and what
+        is inside one is not described by the app's model beyond Type, Daily
+        and Error, so it is passed through rather than reshaped.
+        """
+        data = await self._post(
+            INSIGHT_PATH, {**self._base(), "Dates": dates}, base=PETGPT_URL
+        )
+        return {
+            str(date): _as_dict_list(reports, INSIGHT_PATH, f"reports for {date}")
+            for date, reports in data.items()
+        }
 
     async def get_diary_report(self, language: str = "en") -> list[dict[str, Any]]:
         """Return the account's diary days as the cloud sends them.

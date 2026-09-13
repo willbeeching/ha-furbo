@@ -12,9 +12,10 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.typing import ConfigType
 
 from .api import FurboClient
 from .bridge import FurboBridgeClient
@@ -40,6 +41,7 @@ from .discovery import (
     async_discover_bridge,
     rtsp_password,
 )
+from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -181,6 +183,21 @@ def _retry_discovery(hass: HomeAssistant, entry: FurboConfigEntry) -> None:
             hass.config_entries.async_schedule_reload(entry.entry_id)
 
     entry.async_on_unload(async_track_time_interval(hass, _ask_again, DISCOVERY_RETRY))
+
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the integration's actions.
+
+    Here rather than in async_setup_entry so they exist whether or not an
+    entry is loaded: an automation referring to an action that vanishes with
+    its entry is harder to diagnose than one that says the entry is not
+    loaded.
+    """
+    async_setup_services(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: FurboConfigEntry) -> bool:

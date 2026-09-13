@@ -31,6 +31,28 @@ numbers: the two are released independently and their numbers do not line up.
   same partial file, and whichever finished first moved it out from under the
   other.
 
+## 1.5.0
+
+- **New: two actions that hand back Furbo data for your own automations.**
+  Asked for in #6, by someone who wants to build their own recap videos.
+  - `furbo.get_events` returns the detected events in a window you choose,
+    each with its own video clips and thumbnail. **The window is yours**, so
+    unlike Furbo's own daily recap this is not limited to 07:00-19:00, and
+    overnight activity is included if you ask for it.
+  - `furbo.get_insight_report` returns the written daily report the app shows
+    as a day's recap.
+
+  Both return their answer to the caller rather than storing it. That is
+  deliberate: an entity's attributes are written to the recorder, included in
+  diagnostics downloads and pasted into issue reports, and neither of these
+  has a fixed shape worth holding there. Your automation decides what to
+  download, where to put it and how long to keep it, which is the part of
+  "build my own recap" that is yours rather than the integration's.
+
+  Downloading and keeping a clip library is deliberately not included. That is
+  a media pipeline, not an integration, and these actions give an automation
+  everything it needs to do it the way you want.
+
 ## 1.4.2
 
 - **Home Assistant now tells you when the Furbo Bridge add-on needs a
