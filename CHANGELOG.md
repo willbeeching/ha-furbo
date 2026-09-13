@@ -31,6 +31,16 @@ numbers: the two are released independently and their numbers do not line up.
   same partial file, and whichever finished first moved it out from under the
   other.
 
+## 1.4.2
+
+- **Home Assistant now tells you when the Furbo Bridge add-on needs a
+  verification code.** The add-on cannot reach you, so when Furbo demands a
+  code it can only say so into its own log, every thirty seconds, where nobody
+  is looking. One installation sat like that for two days: the integration kept
+  asking for a sign-in it could not explain, and the camera went down when its
+  existing session finally dropped. A repair notice now appears with what to do,
+  and clears by itself once the add-on can hand over a token again.
+
 ## 1.4.1
 
 - **Signing in again no longer registers Home Assistant as a new device.**

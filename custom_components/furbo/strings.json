@@ -280,5 +280,11 @@
     "bridge_command_failed": {
       "message": "The Furbo bridge did not accept the command: {error}"
     }
+  },
+  "issues": {
+    "bridge_needs_code": {
+      "title": "Furbo Bridge needs a verification code",
+      "description": "The Furbo Bridge add-on could not sign in to Furbo: the cloud is asking for a verification code, and only you can supply one. Until it can sign in, the add-on cannot hand Home Assistant a fresh token, so Furbo will keep asking you to sign in again, and the camera will stop working once its current session drops.\n\nTo fix it: in the add-on's configuration turn **reset_session** on and restart the add-on. If it is already on, turn it off, restart, then turn it on again. Watch the add-on log for the message saying a code has been emailed, put that code in **mfa_code**, and restart the add-on once more. This notice clears by itself once the add-on can hand over a token again."
+    }
   }
 }

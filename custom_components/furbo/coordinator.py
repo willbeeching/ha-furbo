@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import Enum
+from http import HTTPStatus
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -14,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 from homeassistant.util.hass_dict import HassKey
@@ -53,6 +55,28 @@ MAX_RENEWAL_ATTEMPTS = 3
 # time and an entry whose token has died with no bridge to renew it retries
 # for ever instead of asking for a sign-in.
 RENEWALS_MISSED: HassKey[dict[str, int]] = HassKey(f"{DOMAIN}_renewals_missed")
+
+
+# Raised against the entry rather than logged, because the add-on has no way
+# to reach the user and its own log is where this went unread for two days.
+ISSUE_BRIDGE_NEEDS_CODE = "bridge_needs_code"
+
+
+def _async_needs_code(hass: HomeAssistant, entry_id: str) -> None:
+    """Tell the user the add-on is waiting for a verification code."""
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        f"{ISSUE_BRIDGE_NEEDS_CODE}_{entry_id}",
+        is_fixable=False,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key=ISSUE_BRIDGE_NEEDS_CODE,
+    )
+
+
+def _async_code_no_longer_needed(hass: HomeAssistant, entry_id: str) -> None:
+    """Take the notice down once the add-on can hand over a token again."""
+    ir.async_delete_issue(hass, DOMAIN, f"{ISSUE_BRIDGE_NEEDS_CODE}_{entry_id}")
 
 
 def clear_renewal_budget(hass: HomeAssistant, entry_id: str) -> None:
@@ -252,6 +276,13 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
             return _Renewal.UNAVAILABLE
         except FurboBridgeError as err:
             _LOGGER.debug("No cloud token from the bridge: %s", err)
+            if err.status == HTTPStatus.CONFLICT:
+                # The add-on holds the password and still could not log in:
+                # the cloud wants an emailed code, and only a person can give
+                # it one. It says so into its own log every thirty seconds,
+                # where nobody is watching, so put it where they will see it.
+                # Left up until a token is actually taken.
+                _async_needs_code(self.hass, self.config_entry.entry_id)
             return _Renewal.REFUSED
         if account_id != self.client.account_id:
             # A bridge signed in to a different Furbo account. Its token would
@@ -277,6 +308,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
             },
         )
         clear_renewal_budget(self.hass, self.config_entry.entry_id)
+        _async_code_no_longer_needed(self.hass, self.config_entry.entry_id)
         _LOGGER.info("Took a fresh cloud token from the Furbo Bridge add-on")
         return _Renewal.TAKEN
 

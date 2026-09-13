@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import UpdateFailed
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -26,6 +27,7 @@ from custom_components.furbo.const import (
     CONF_BRIDGES,
     CONF_COGNITO_TOKEN,
     CONF_TOKEN_ISSUED_AT,
+    DOMAIN,
 )
 from custom_components.furbo.coordinator import MAX_RENEWAL_ATTEMPTS
 
@@ -484,3 +486,66 @@ async def test_diary_is_skipped_when_events_are_off(
 
     assert mock_client.get_diary.await_count == 0
     assert mock_config_entry.runtime_data.coordinator.data.diary is None
+
+
+async def test_a_bridge_needing_a_code_raises_a_repair_issue(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """The add-on cannot reach the user, so say it where they will see it.
+
+    It reports this into its own log every thirty seconds and nothing surfaced
+    it, which is how an add-on sat waiting for a code for two days while the
+    camera went down.
+    """
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    coordinator.token_source = AsyncMock(
+        side_effect=FurboBridgeError("login_required", status=409)
+    )
+    mock_client.get_devices.side_effect = FurboAuthError("expired")
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+    registry = ir.async_get(hass)
+    issue = registry.async_get_issue(
+        DOMAIN, f"bridge_needs_code_{mock_config_entry.entry_id}"
+    )
+    assert issue is not None
+    assert issue.severity is ir.IssueSeverity.ERROR
+
+
+async def test_the_repair_issue_clears_once_a_token_arrives(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Nobody should have to dismiss a notice about a problem that is over."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    issue_id = f"bridge_needs_code_{mock_config_entry.entry_id}"
+
+    coordinator.token_source = AsyncMock(
+        side_effect=FurboBridgeError("login_required", status=409)
+    )
+    mock_client.get_devices.side_effect = FurboAuthError("expired")
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+
+    # The add-on is signed in again and hands a token over.
+    coordinator.token_source = AsyncMock(return_value=(c.ACCOUNT_ID, "FRESH-TOKEN"))
+    mock_client.get_devices.side_effect = None
+    mock_client.get_devices.return_value = [dict(c.DEVICE)]
+
+    attempts = 0
+
+    def _devices() -> list[dict[str, object]]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise FurboAuthError("expired")
+        return [dict(c.DEVICE)]
+
+    mock_client.get_devices.side_effect = _devices
+    await coordinator._async_update_data()
+
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
