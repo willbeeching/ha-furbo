@@ -6,31 +6,6 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
-## 1.4.0
-
-- **New: a Download Doggie Diary button** on the Furbo account device. Pressing
-  it saves any of the week's daily timelapse videos that are not already on
-  disk, into `furbo_diary` under Home Assistant's media folder, where they show
-  up in the media browser and play in the UI. Point a daily automation at it and
-  the videos arrive without the phone app, which is what #5 asked for.
-  Days already saved are skipped, so pressing it twice costs nothing, and a day
-  missed while Home Assistant was off is picked up on the next run because the
-  report covers a rolling week.
-  The report is read fresh on every press rather than reused: Furbo's links are
-  presigned and expire, so they are worth having only at the moment they are
-  used, and they never reach Home Assistant's stored state.
-- Each account saves into its own folder under `furbo_diary`. Two accounts
-  produce a video for the same date, and a shared folder would not merely mix
-  them up: the second account's video would be skipped as already saved and
-  never arrive.
-- Camera actions serialize per camera rather than across the whole button
-  platform, so a download cannot hold up a pan or a treat, and one camera's
-  action no longer waits on another's.
-- One diary download at a time per account. Two presses at once, a person and
-  an automation say, would otherwise fetch the same day together and write the
-  same partial file, and whichever finished first moved it out from under the
-  other.
-
 ## 1.5.0
 
 - **New: two actions that hand back Furbo data for your own automations.**
@@ -78,6 +53,31 @@ numbers: the two are released independently and their numbers do not line up.
   so how many bindings an account actually allows can be read rather than
   guessed at. The response carries no refresh token of any kind, which is now
   confirmed from a real login rather than assumed.
+
+## 1.4.0
+
+- **New: a Download Doggie Diary button** on the Furbo account device. Pressing
+  it saves any of the week's daily timelapse videos that are not already on
+  disk, into `furbo_diary` under Home Assistant's media folder, where they show
+  up in the media browser and play in the UI. Point a daily automation at it and
+  the videos arrive without the phone app, which is what #5 asked for.
+  Days already saved are skipped, so pressing it twice costs nothing, and a day
+  missed while Home Assistant was off is picked up on the next run because the
+  report covers a rolling week.
+  The report is read fresh on every press rather than reused: Furbo's links are
+  presigned and expire, so they are worth having only at the moment they are
+  used, and they never reach Home Assistant's stored state.
+- Each account saves into its own folder under `furbo_diary`. Two accounts
+  produce a video for the same date, and a shared folder would not merely mix
+  them up: the second account's video would be skipped as already saved and
+  never arrive.
+- Camera actions serialize per camera rather than across the whole button
+  platform, so a download cannot hold up a pan or a treat, and one camera's
+  action no longer waits on another's.
+- One diary download at a time per account. Two presses at once, a person and
+  an automation say, would otherwise fetch the same day together and write the
+  same partial file, and whichever finished first moved it out from under the
+  other.
 
 ## 1.3.2
 
