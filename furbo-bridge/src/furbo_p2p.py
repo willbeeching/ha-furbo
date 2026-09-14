@@ -468,6 +468,20 @@ def _stored_mobile_id() -> str | None:
     return None
 
 
+def _stored_mfa_auth_code() -> str | None:
+    """The proof of a completed verification, if this bridge has one.
+
+    Lives in the session file rather than the device file, so 'reset_session'
+    clears it: a reset is what someone does when the account itself has
+    changed under them, and a proof from the old one is worth nothing then.
+    """
+    try:
+        value = json.loads(SESSION_FILE.read_text()).get("mfa_auth_code")
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, str) and value else None
+
+
 def _remember_mobile_id(mobile_id: str) -> None:
     """Record the device id where a session reset will not remove it."""
     try:
@@ -533,7 +547,9 @@ async def cloud_login(code: str | None = None, send_only: bool = False) -> dict:
         else:
             enc = encrypt_password(password)
             mobile_id = _stored_mobile_id() or new_mobile_id()
-            candidate = await client.start_login(email, enc, mobile_id)
+            # Present an existing proof here too: someone re-running the login
+            # by hand should not be sent for a code they do not need.
+            candidate = await client.start_login(email, enc, mobile_id, _stored_mfa_auth_code())
             if candidate:
                 candidate = await client.send_mfa_code(candidate)
                 if send_only:
@@ -555,6 +571,9 @@ async def cloud_login(code: str | None = None, send_only: bool = False) -> dict:
         "account_id": client.account_id,
         "cognito_token": client.cognito_token,
         "mobile_id": mobile_id,
+        # The whole point of the emailed code just entered: kept so the next
+        # login can present it and nobody is asked for another.
+        "mfa_auth_code": client.mfa_auth_code,
         "devices": devices,
     }
     SESSION_FILE.write_text(json.dumps(session, indent=2))
@@ -672,9 +691,21 @@ async def _login_again() -> dict:
     if not email or not password:
         raise SystemExit("no stored credentials to log in with")
     mobile_id = _stored_mobile_id() or new_mobile_id()
+    enc = encrypt_password(password)
+    # Proof that this bridge has already passed a verification, kept from the
+    # last login. Without it, an account with two-step verification challenges
+    # every single login, so nothing here could ever get back in unattended.
+    proof = _stored_mfa_auth_code()
     async with aiohttp.ClientSession() as http:
         client = FurboClient(http)
-        candidate = await client.start_login(email, encrypt_password(password), mobile_id)
+        candidate = await client.start_login(email, enc, mobile_id, proof)
+        if candidate and proof:
+            # The stored proof was not accepted -- retired, or invalidated by
+            # a password change. Try once more without it, so a stale one
+            # cannot make this look permanently broken; the emailed-code path
+            # is then the honest answer rather than a puzzle.
+            log("the stored verification proof was not accepted; trying without it")
+            candidate = await client.start_login(email, enc, mobile_id)
         if candidate:
             raise MfaRequired("the cloud wants a verification code")
         devices = await client.get_devices()
@@ -683,6 +714,7 @@ async def _login_again() -> dict:
         "account_id": client.account_id,
         "cognito_token": client.cognito_token,
         "mobile_id": mobile_id,
+        "mfa_auth_code": client.mfa_auth_code or proof,
         "devices": devices,
     }
     SESSION_FILE.write_text(json.dumps(session, indent=2))

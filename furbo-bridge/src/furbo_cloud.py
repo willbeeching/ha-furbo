@@ -221,6 +221,7 @@ class FurboClient:
         self._session = session
         self.account_id = account_id
         self.cognito_token = cognito_token
+        self.mfa_auth_code: str | None = None
         self._headers = {
             "User-Agent": USER_AGENT,
             "Authorization": BASIC_AUTH,
@@ -285,14 +286,29 @@ class FurboClient:
 
     # --- login -------------------------------------------------------------
 
-    async def start_login(self, email: str, enc_password: str, mobile_id: str) -> str | None:
+    async def start_login(
+        self,
+        email: str,
+        enc_password: str,
+        mobile_id: str,
+        mfa_auth_code: str | None = None,
+    ) -> str | None:
         """Try to log in.
 
         Returns None when login completed without MFA, otherwise the
         MfaAuthCodeCandidate needed for the next step.
+
+        ``mfa_auth_code`` is the proof that this client has already completed
+        a verification, handed back in the login response and kept from then
+        on. On an account with two-step verification, a login without one is
+        challenged every single time, however well the cloud knows the
+        MobileId -- which is why the phone app is never asked twice and this
+        was, until it started sending the same thing back.
         """
         path = "/v5/account/read/login"
         payload = {"Email": email, "EncPassword": enc_password, "MobileId": mobile_id}
+        if mfa_auth_code:
+            payload["MfaAuthCode"] = mfa_auth_code
         try:
             data = await self._post(path, payload)
         except FurboMfaRequired as err:
@@ -355,6 +371,9 @@ class FurboClient:
         )
         self.account_id = _required_str(data, "AccountId", path)
         self.cognito_token = _required_str(data, "CognitoToken", path)
+        # Kept so the next login can present it instead of asking a person for
+        # an emailed code. A credential: never logged, only stored.
+        self.mfa_auth_code = _optional_str(data, "MfaAuthCode", path)
 
     # --- account and devices ---------------------------------------------
 

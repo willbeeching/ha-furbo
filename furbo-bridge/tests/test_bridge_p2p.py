@@ -635,3 +635,42 @@ def test_p2p_auth_treats_an_empty_string_as_absent() -> None:
     p2p = {"AuthKey": "", "P2PAccountId": "", "P2PAccountKey": ""}
     device = {"DeviceName": "cam", "P2PAccessToken": "tok"}
     assert fp.p2p_auth(device, p2p, "ACC1") == ("", "ACC1", "tok", True)
+
+
+def test_the_verification_proof_is_read_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Kept from the last login so the next one is not challenged."""
+    session = tmp_path / "furbo_session.json"
+    session.write_text('{"account_id": "A", "cognito_token": "T", "mfa_auth_code": "p1"}')
+    monkeypatch.setattr(fp, "SESSION_FILE", session)
+    assert fp._stored_mfa_auth_code() == "p1"
+
+
+def test_no_proof_when_there_is_no_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """A missing, corrupt or proof-less session is None, never a crash."""
+    missing = tmp_path / "none.json"
+    monkeypatch.setattr(fp, "SESSION_FILE", missing)
+    assert fp._stored_mfa_auth_code() is None
+    missing.write_text("{not json")
+    assert fp._stored_mfa_auth_code() is None
+    missing.write_text('{"account_id": "A"}')
+    assert fp._stored_mfa_auth_code() is None
+    missing.write_text('{"mfa_auth_code": ""}')
+    assert fp._stored_mfa_auth_code() is None
+
+
+def test_the_proof_is_cleared_by_a_session_reset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Unlike the device id, this one goes when the session does.
+
+    A reset is what someone does when the account has changed under them, and
+    a proof earned against the old one is worth nothing.
+    """
+    session = tmp_path / "furbo_session.json"
+    session.write_text('{"account_id": "A", "mfa_auth_code": "p1"}')
+    monkeypatch.setattr(fp, "SESSION_FILE", session)
+    assert fp._stored_mfa_auth_code() == "p1"
+    session.unlink()  # what reset_session does
+    assert fp._stored_mfa_auth_code() is None

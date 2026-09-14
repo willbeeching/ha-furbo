@@ -3,6 +3,27 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.0
+
+- **The add-on stops asking for a verification code every time its session
+  lapses.** Furbo's login response carries an `MfaAuthCode`: proof that this
+  client has already passed a verification. The phone app keeps that and
+  presents it on every later login, which is exactly why the app never asks
+  you to verify twice. The add-on read the same response, took the account id
+  and the token, and threw the proof away, so each login looked like a
+  first-ever login on an account with two-step verification and earned a fresh
+  emailed code.
+
+  It is now kept and presented. On an account with two-step verification this
+  is the difference between a bridge that can get back in by itself and one
+  that needs a person every time its token dies.
+- A stored proof the cloud no longer accepts (retired, or a changed password)
+  is not a dead end: the login is retried once without it, and the emailed
+  code is then asked for as before rather than the bridge appearing broken.
+- The proof is cleared by `reset_session`, unlike the device id. A reset is
+  what you do when the account has changed under you, and a proof earned
+  against the old one is worth nothing.
+
 ## 1.2.12
 
 - **FB002 video no longer stalls a few seconds after the stream starts.**

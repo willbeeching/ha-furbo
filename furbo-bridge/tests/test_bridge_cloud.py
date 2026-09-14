@@ -40,9 +40,11 @@ class FakeSession:
     def __init__(self, responses: list[FakeResponse]) -> None:
         self._responses = responses
         self.calls: list[str] = []
+        self.bodies: list[Any] = []
 
     def post(self, url: str, **_kwargs: Any) -> FakeResponse:
         self.calls.append(url)
+        self.bodies.append(_kwargs.get("json") or _kwargs.get("data"))
         return self._responses.pop(0)
 
 
@@ -341,5 +343,58 @@ def test_rate_limit_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> No
         assert summary == "all calm"
         # The single back-off was clamped to the 120s ceiling, not 99999s.
         assert slept == [120.0]
+
+    asyncio.run(go())
+
+
+def test_login_keeps_the_proof_that_verification_was_done() -> None:
+    """MfaAuthCode comes back in the login response and must be kept.
+
+    It is the whole reason the phone app is never asked to verify twice: it
+    presents this on every later login. The bridge read the response, took the
+    account id and token, and dropped this one on the floor.
+    """
+    resp = FakeResponse(200, {"AccountId": "acc", "CognitoToken": "tok", "MfaAuthCode": "proof-1"})
+    client = fc.FurboClient(FakeSession([resp]))  # type: ignore[arg-type]
+
+    async def go() -> None:
+        await client.start_login("e", "enc", "mob")
+        assert client.mfa_auth_code == "proof-1"
+
+    asyncio.run(go())
+
+
+def test_a_login_presents_the_proof_it_was_given() -> None:
+    """Sent on the way out, or the cloud challenges every login."""
+    session = FakeSession([FakeResponse(200, {"AccountId": "a", "CognitoToken": "t"})])
+    client = fc.FurboClient(session)  # type: ignore[arg-type]
+
+    async def go() -> None:
+        await client.start_login("e", "enc", "mob", "proof-1")
+        assert session.bodies[0]["MfaAuthCode"] == "proof-1"
+
+    asyncio.run(go())
+
+
+def test_a_login_without_a_proof_does_not_send_the_field() -> None:
+    """A first login has nothing to present, and an empty field is not nothing."""
+    session = FakeSession([FakeResponse(200, {"AccountId": "a", "CognitoToken": "t"})])
+    client = fc.FurboClient(session)  # type: ignore[arg-type]
+
+    async def go() -> None:
+        await client.start_login("e", "enc", "mob")
+        assert "MfaAuthCode" not in session.bodies[0]
+
+    asyncio.run(go())
+
+
+def test_a_login_response_without_a_proof_leaves_it_unset() -> None:
+    """Not every response carries one; absence is not a malformed reply."""
+    resp = FakeResponse(200, {"AccountId": "acc", "CognitoToken": "tok"})
+    client = fc.FurboClient(FakeSession([resp]))  # type: ignore[arg-type]
+
+    async def go() -> None:
+        await client.start_login("e", "enc", "mob")
+        assert client.mfa_auth_code is None
 
     asyncio.run(go())
