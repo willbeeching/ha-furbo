@@ -3,6 +3,19 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.2.12
+
+- **FB002 video no longer stalls a few seconds after the stream starts.**
+  1.2.6 set `auth_type = 1` on the legacy path, from a matrix run against real
+  hardware. It did authenticate, but the video then dried up (`-20012` until
+  the bridge gave up) and the camera sometimes closed the session. The Furbo
+  app never assigns that field for any camera, so it sends 0, and an A/B on
+  the same FB002 confirms it: 0 authenticates just as well and the stream
+  keeps running. The bridge now leaves it at 0 everywhere, as the app does.
+  Found, tested and confirmed on the hardware by @scotthalldumarey in #3.
+- Nothing changes for a camera the cloud issues P2P credentials for. That path
+  already sent 0.
+
 ## 1.2.11
 
 - **The security upgrade in 1.2.10 is now four named packages rather than

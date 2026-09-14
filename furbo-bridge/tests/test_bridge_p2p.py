@@ -559,8 +559,10 @@ def test_a_modern_camera_still_connects_with_its_auth_key() -> None:
     ("creds", "security_mode", "auth_type", "identity", "secret"),
     [
         # Verified against FB002 hardware in #3: the account id and the
-        # device's P2PAccessToken, in the clear, auth_type 1.
-        (LEGACY, 0, 1, b"ACC0000000001", b"p2p-access-token"),
+        # device's P2PAccessToken, in the clear. auth_type is 0 here as it is
+        # everywhere -- 1 authenticated but the stream stalled, and the A/B on
+        # that hardware picked 0, which is what the app sends for every camera.
+        (LEGACY, 0, 0, b"ACC0000000001", b"p2p-access-token"),
         # Unchanged: DTLS with the cloud's per-session P2P credentials.
         (MODERN, 1, 0, b"p2p-account", b"p2p-key"),
     ],

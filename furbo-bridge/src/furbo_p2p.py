@@ -18,7 +18,7 @@ A legacy camera (an FB002) is given none of those credentials: the cloud
 answers AuthKey, P2PAccountId and P2PAccountKey as null, and the camera
 authenticates from its own device record instead -- IOTC_Connect_ByUID_Parallel
 with no auth key, then avClientStartEx with the account id and the device's
-P2PAccessToken, in the clear (security_mode 0, auth_type 1). Steps 1 and 4 are
+P2PAccessToken, in the clear (security_mode 0). Steps 1 and 4 are
 the same either way. Which path is taken follows from the missing AuthKey, not
 from the model, so a camera the cloud issues credentials for cannot reach it.
 Contributed with working hardware values in #3; see p2p_auth().
@@ -992,11 +992,17 @@ class FurboP2P:
         cin.password_or_token = creds["password"].encode()
         cin.resend = 1
         # A legacy camera authenticates in the clear with the account id and
-        # the device's P2PAccessToken. auth_type 1 is an empirical result from
-        # the hardware in #3, not a value read off a matching TUTK header:
-        # ours are older and do not define the field at all.
+        # the device's P2PAccessToken.
+        #
+        # auth_type stays 0 for every camera, which is what the Furbo app does:
+        # its own struct declares the field and never assigns it. 1.2.6 sent 1
+        # on the legacy path, taken from a matrix run against real hardware in
+        # #3, and it did authenticate -- but the stream then stalled after the
+        # AV channel opened, -20012 until the bridge gave up. The A/B on that
+        # same FB002 settles it: 0 authenticates just as well and the video
+        # sustains. An empirical result that disagreed with the reference was
+        # the reference being right.
         cin.security_mode = 0 if legacy else 1  # else DTLS, as the app does
-        cin.auth_type = 1 if legacy else 0
         cin.sync_recv_data = 0
         cout = AVClientStartOutConfig()
         cout.cb = sizeof(cout)
