@@ -17,6 +17,14 @@ numbers: the two are released independently and their numbers do not line up.
 - A new day that cannot be fetched reads zero rather than yesterday's numbers.
   Carrying values over is right within a day and wrong across one. The hourly
   backoff is unaffected, so a rate-limited account still gets one attempt.
+- **Signing back in around midnight no longer restores yesterday's counts.**
+  The figures kept between fetches are now held with the date they counted,
+  rather than read back off the last stored update. That stored update is only
+  replaced when a whole refresh succeeds, so a refresh that read the calendar
+  and then failed on something later left the previous day's numbers in place
+  to be picked up and relabelled. A dead token also no longer spends the hour:
+  it is not this host refusing us, so the refresh after renewal can ask
+  again rather than sitting the hour out on nothing.
 - **Signing back in through the add-on clears the add-on's warning.** The
   notice about it waiting for a verification code stayed up after a recovery
   that had visibly just worked, with nothing to press. A password sign-in

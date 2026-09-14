@@ -137,6 +137,22 @@ class FurboDeviceData:
 
 
 @dataclass(slots=True)
+class _Calendar:
+    """One day's calendar figures and the day they belong to.
+
+    Held here rather than read back off the last FurboData, because that is
+    only replaced when a whole refresh succeeds. A refresh that got the
+    calendar and then failed on the diary leaves the previous day's FurboData
+    in place, and reading figures out of it labels them today.
+    """
+
+    day: date
+    summary: str
+    activity: dict[str, int]
+    events: list[dict[str, Any]]
+
+
+@dataclass(slots=True)
 class FurboData:
     """Everything one coordinator refresh produces."""
 
@@ -182,7 +198,8 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         self._diary: dict[str, Any] | None = None
         self._diary_at: float | None = None
         self._calendar_at: float | None = None
-        self._calendar_day: date | None = None
+        self._calendar_tried: date | None = None
+        self._calendar: _Calendar | None = None
         # One diary download at a time for this account. Two presses -- a
         # person and an automation, say -- otherwise fetch the same day at
         # once and write the same partial file, and the first to finish moves
@@ -383,38 +400,38 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         if not self.events_enabled:
             return "", {}, 0
         today = self._today()
-        # Midnight in the account's timezone ends the day these figures count,
-        # whatever the clock since the last call says. Without this, a fetch at
-        # half past eleven carried yesterday's totals into the new day for the
-        # rest of the hour, under a name that says today.
-        new_day = self._calendar_day != today
         now = time.monotonic()
         waited = None if self._calendar_at is None else now - self._calendar_at
-        if (
-            not new_day
-            and waited is not None
-            and waited < (CALENDAR_INTERVAL.total_seconds())
-        ):
-            return self._carry_over_calendar(devices)
-        self._calendar_at = now
-        self._calendar_day = today
+        # Midnight in the account's timezone earns one prompt attempt, whatever
+        # the clock since the last one says; after that the hour applies again,
+        # so a rollover cannot become a way around the backoff.
+        due = (
+            self._calendar_tried != today
+            or waited is None
+            or waited >= CALENDAR_INTERVAL.total_seconds()
+        )
+        if not due:
+            return self._cached_calendar(devices, today)
+        was_at, was_tried = self._calendar_at, self._calendar_tried
+        self._calendar_at, self._calendar_tried = now, today
         day = today.isoformat()
         try:
             report = await self.client.get_activity_report([day])
             summary = await self.client.get_daily_summary(day)
             events = await self.client.get_notable_events(day)
         except FurboAuthError as err:
+            # Not this host refusing us: the token was dead. Give the attempt
+            # back, so the refresh that follows renewing it fetches today's
+            # figures rather than sitting out the hour on nothing.
+            self._calendar_at, self._calendar_tried = was_at, was_tried
             raise ConfigEntryAuthFailed from err
         except FurboError as err:
             _LOGGER.warning("Calendar data unavailable this hour: %s", err)
-            if new_day:
-                # Nothing has been counted today yet, and yesterday's totals
-                # are not an estimate of it. Zero is what a daily counter reads
-                # before its first reading, and the hour's backoff still holds.
-                return "", {}, 0
-            return self._carry_over_calendar(devices)
+            return self._cached_calendar(devices, today)
+        activity = report.get(day, {})
+        self._calendar = _Calendar(today, summary, activity, events)
         self._apply_events(devices, events)
-        return summary, report.get(day, {}), len(events)
+        return summary, activity, len(events)
 
     async def _async_diary(self) -> dict[str, Any] | None:
         """Return the diary's shape, asking the cloud at most hourly.
@@ -427,32 +444,33 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         if waited is not None and waited < DIARY_INTERVAL.total_seconds():
             return self._diary
         # Set before the call, so a refusal backs off for the same hour.
+        was_at = self._diary_at
         self._diary_at = now
         try:
             self._diary = await self.client.get_diary()
         except FurboAuthError as err:
+            # A dead token is not this endpoint refusing, so it does not spend
+            # the hour: the refresh after renewal should be able to ask again.
+            self._diary_at = was_at
             raise ConfigEntryAuthFailed from err
         except FurboError as err:
             _LOGGER.debug("Doggie Diary unavailable this cycle: %s", err)
         return self._diary
 
-    def _carry_over_calendar(
-        self, devices: dict[str, FurboDeviceData]
+    def _cached_calendar(
+        self, devices: dict[str, FurboDeviceData], today: date
     ) -> tuple[str, dict[str, int], int]:
-        """Reuse the previous cycle's calendar data when this one is unavailable."""
-        previous = self.data
-        if previous is None:
+        """Reuse this day's figures, or report nothing counted yet.
+
+        Only ever this day's. Carrying figures over is right within a day and
+        wrong across one: a count of today's barking that is really yesterday's
+        is not a stale reading, it is a false one.
+        """
+        cached = self._calendar
+        if cached is None or cached.day != today:
             return "", {}, 0
-        for device_id, device in devices.items():
-            prior = previous.devices.get(device_id)
-            if prior is not None:
-                device.last_event = prior.last_event
-                device.last_event_at = prior.last_event_at
-        return (
-            previous.daily_summary,
-            previous.activity_today,
-            previous.notable_events_today,
-        )
+        self._apply_events(devices, cached.events)
+        return cached.summary, cached.activity, len(cached.events)
 
     def _apply_events(
         self, devices: dict[str, FurboDeviceData], events: list[dict[str, Any]]

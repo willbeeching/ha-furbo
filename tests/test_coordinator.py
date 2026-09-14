@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 import logging
 import time
+from typing import Any
 from unittest.mock import AsyncMock
 
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
@@ -629,6 +630,19 @@ async def test_a_refused_calendar_waits_its_hour_out_too(
     assert mock_client.get_daily_summary.await_count == refused_at
 
 
+def _roll_past_midnight(coordinator: Any) -> None:
+    """Age the calendar state by a day, as the clock passing midnight does.
+
+    Both halves move: the day the last attempt was made on, and the day the
+    cached figures belong to. Ageing only one of them tests a state the clock
+    cannot produce.
+    """
+    yesterday = coordinator._today() - timedelta(days=1)
+    coordinator._calendar_tried = yesterday
+    if coordinator._calendar is not None:
+        coordinator._calendar.day = yesterday
+
+
 async def test_midnight_ends_the_day_the_figures_belong_to(
     hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
 ) -> None:
@@ -647,7 +661,7 @@ async def test_midnight_ends_the_day_the_figures_belong_to(
     assert mock_client.get_daily_summary.await_count == fetched
 
     # The clock rolls over. The hour has not elapsed, but the day has.
-    coordinator._calendar_day = coordinator._today() - timedelta(days=1)
+    _roll_past_midnight(coordinator)
     await coordinator.async_refresh()
     assert mock_client.get_daily_summary.await_count == fetched + 1
 
@@ -666,7 +680,7 @@ async def test_a_new_day_that_cannot_be_fetched_reads_zero_not_yesterday(
     assert coordinator.data.activity_today["Barking"] == 6
 
     mock_client.get_daily_summary.side_effect = FurboError("rate", code=80002)
-    coordinator._calendar_day = coordinator._today() - timedelta(days=1)
+    _roll_past_midnight(coordinator)
     await coordinator.async_refresh()
 
     assert coordinator.data.activity_today == {}
@@ -682,10 +696,69 @@ async def test_a_new_day_still_backs_off_after_being_refused(
     coordinator = mock_config_entry.runtime_data.coordinator
     mock_client.get_daily_summary.side_effect = FurboError("rate", code=80002)
 
-    coordinator._calendar_day = coordinator._today() - timedelta(days=1)
+    _roll_past_midnight(coordinator)
     await coordinator.async_refresh()
     attempted = mock_client.get_daily_summary.await_count
 
     for _ in range(3):
         await coordinator.async_refresh()
     assert mock_client.get_daily_summary.await_count == attempted
+
+
+async def test_a_token_recovered_mid_calendar_does_not_restore_yesterday(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A dead token must not cost the new day its first real reading.
+
+    The attempt is recorded before the call so that a refusal backs off. A
+    refused token is not a refusal by this host, though, and counting it as
+    one left the refresh that follows renewal inside the hour, reaching for
+    figures that belonged to yesterday.
+    """
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    assert coordinator.data.activity_today["Barking"] == 6
+    _roll_past_midnight(coordinator)
+
+    # A new day with its own, distinguishable figures.
+    mock_client.get_activity_report.side_effect = FurboAuthError("expired")
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+    mock_client.get_activity_report.side_effect = lambda dates: {
+        day: {"Barking": 99} for day in dates
+    }
+    data = await coordinator._async_update_data()
+
+    assert data.activity_today == {"Barking": 99}
+
+
+async def test_a_token_recovered_mid_diary_does_not_restore_yesterday(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """The calendar succeeded, the diary did not, and the refresh was lost.
+
+    Nothing reaches the entry's data unless the whole refresh returns, so a
+    diary failure discards a perfectly good calendar read. Taking the figures
+    back off the last stored data is what turned that into yesterday's counts
+    wearing today's date.
+    """
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    assert coordinator.data.activity_today["Barking"] == 6
+    _roll_past_midnight(coordinator)
+
+    mock_client.get_activity_report.side_effect = lambda dates: {
+        day: {"Barking": 99} for day in dates
+    }
+    # The diary keeps its own hour, and setup has just spent it.
+    coordinator._diary_at = time.monotonic() - 3601
+    mock_client.get_diary.side_effect = FurboAuthError("expired")
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+    mock_client.get_diary.side_effect = None
+    data = await coordinator._async_update_data()
+
+    # Today's own figures, not the ones still sitting in the entry's data.
+    assert data.activity_today == {"Barking": 99}
