@@ -8,6 +8,7 @@ from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import issue_registry as ir
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
@@ -687,3 +688,70 @@ async def test_reauth_will_not_adopt_another_accounts_token(
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "reauth_confirm"
     assert mock_config_entry.data["cognito_token"] == before
+
+
+async def test_bridge_reauth_takes_down_the_add_ons_warning(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """A token from the add-on proves it is no longer waiting for a code.
+
+    The notice is raised when the add-on answers 409, and nothing in the new
+    path took it down again, so a recovery that visibly worked left an error
+    standing with nothing to press.
+    """
+    await setup_integration(hass, mock_config_entry, options=BRIDGE_OPTIONS)
+    issue_id = f"bridge_needs_code_{mock_config_entry.entry_id}"
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=False,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key="bridge_needs_code",
+    )
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+    mock_bridge.async_get_cloud_token.return_value = (c.ACCOUNT_ID, "from-the-addon")
+
+    result = await mock_config_entry.start_reauth_flow(hass)
+
+    assert result["reason"] == "reauth_successful"
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_a_password_reauth_leaves_the_add_ons_warning_alone(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Signing in by hand says nothing about the add-on's own predicament.
+
+    The notice is about the add-on needing a code, not about this entry, and
+    a person signing in here has not given it one.
+    """
+    await setup_integration(hass, mock_config_entry, options=BRIDGE_OPTIONS)
+    issue_id = f"bridge_needs_code_{mock_config_entry.entry_id}"
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=False,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key="bridge_needs_code",
+    )
+    mock_bridge.async_get_cloud_token.side_effect = FurboBridgeUnavailable("down")
+    mock_client.cognito_token = "typed-in-by-hand"
+
+    result = await mock_config_entry.start_reauth_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_MFA_CODE: "1234"}
+    )
+
+    assert result["reason"] == "reauth_successful"
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None

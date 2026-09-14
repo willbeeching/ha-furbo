@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 import logging
 import time
 from unittest.mock import AsyncMock
@@ -626,3 +627,65 @@ async def test_a_refused_calendar_waits_its_hour_out_too(
     for _ in range(3):
         await coordinator.async_refresh()
     assert mock_client.get_daily_summary.await_count == refused_at
+
+
+async def test_midnight_ends_the_day_the_figures_belong_to(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """The hour's cache must not outlive the day it counted.
+
+    A fetch shortly before midnight sits inside its hour well past midnight,
+    so without a date on the cached values yesterday's totals were served as
+    today's for the rest of that hour, under a name that says today.
+    """
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    fetched = mock_client.get_daily_summary.await_count
+
+    # Still the same day, well inside the hour: no call, as designed.
+    await coordinator.async_refresh()
+    assert mock_client.get_daily_summary.await_count == fetched
+
+    # The clock rolls over. The hour has not elapsed, but the day has.
+    coordinator._calendar_day = coordinator._today() - timedelta(days=1)
+    await coordinator.async_refresh()
+    assert mock_client.get_daily_summary.await_count == fetched + 1
+
+
+async def test_a_new_day_that_cannot_be_fetched_reads_zero_not_yesterday(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Yesterday's totals are not an estimate of today's.
+
+    Carrying them over is right within a day and wrong across one: a daily
+    counter reads zero until it has been read, and a rate-limited account must
+    not be handed stale figures wearing today's date.
+    """
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    assert coordinator.data.activity_today["Barking"] == 6
+
+    mock_client.get_daily_summary.side_effect = FurboError("rate", code=80002)
+    coordinator._calendar_day = coordinator._today() - timedelta(days=1)
+    await coordinator.async_refresh()
+
+    assert coordinator.data.activity_today == {}
+    assert coordinator.data.notable_events_today == 0
+    assert coordinator.data.daily_summary == ""
+
+
+async def test_a_new_day_still_backs_off_after_being_refused(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Rollover buys one attempt, not a way around the hour."""
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    mock_client.get_daily_summary.side_effect = FurboError("rate", code=80002)
+
+    coordinator._calendar_day = coordinator._today() - timedelta(days=1)
+    await coordinator.async_refresh()
+    attempted = mock_client.get_daily_summary.await_count
+
+    for _ in range(3):
+        await coordinator.async_refresh()
+    assert mock_client.get_daily_summary.await_count == attempted

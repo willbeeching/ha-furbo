@@ -6,6 +6,22 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.6.1
+
+- **Today's activity counts no longer start the day holding yesterday's.**
+  The calendar is read at most hourly, and that hour was counted in elapsed
+  time alone. A reading taken shortly before midnight therefore sat inside its
+  hour well past midnight, serving yesterday's totals and summary under a name
+  that says today. The cached figures now carry the date they counted, and
+  midnight in your account's timezone ends it.
+- A new day that cannot be fetched reads zero rather than yesterday's numbers.
+  Carrying values over is right within a day and wrong across one. The hourly
+  backoff is unaffected, so a rate-limited account still gets one attempt.
+- **Signing back in through the add-on clears the add-on's warning.** The
+  notice about it waiting for a verification code stayed up after a recovery
+  that had visibly just worked, with nothing to press. A password sign-in
+  still leaves it alone, because that says nothing about the add-on.
+
 ## 1.6.0
 
 - **Signing in again no longer asks for your password and an emailed code.**

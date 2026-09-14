@@ -182,6 +182,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         self._diary: dict[str, Any] | None = None
         self._diary_at: float | None = None
         self._calendar_at: float | None = None
+        self._calendar_day: date | None = None
         # One diary download at a time for this account. Two presses -- a
         # person and an automation, say -- otherwise fetch the same day at
         # once and write the same partial file, and the first to finish moves
@@ -381,23 +382,39 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         """
         if not self.events_enabled:
             return "", {}, 0
+        today = self._today()
+        # Midnight in the account's timezone ends the day these figures count,
+        # whatever the clock since the last call says. Without this, a fetch at
+        # half past eleven carried yesterday's totals into the new day for the
+        # rest of the hour, under a name that says today.
+        new_day = self._calendar_day != today
         now = time.monotonic()
         waited = None if self._calendar_at is None else now - self._calendar_at
-        if waited is not None and waited < CALENDAR_INTERVAL.total_seconds():
+        if (
+            not new_day
+            and waited is not None
+            and waited < (CALENDAR_INTERVAL.total_seconds())
+        ):
             return self._carry_over_calendar(devices)
         self._calendar_at = now
+        self._calendar_day = today
+        day = today.isoformat()
         try:
-            today = self._today().isoformat()
-            report = await self.client.get_activity_report([today])
-            summary = await self.client.get_daily_summary(today)
-            events = await self.client.get_notable_events(today)
+            report = await self.client.get_activity_report([day])
+            summary = await self.client.get_daily_summary(day)
+            events = await self.client.get_notable_events(day)
         except FurboAuthError as err:
             raise ConfigEntryAuthFailed from err
         except FurboError as err:
             _LOGGER.warning("Calendar data unavailable this hour: %s", err)
+            if new_day:
+                # Nothing has been counted today yet, and yesterday's totals
+                # are not an estimate of it. Zero is what a daily counter reads
+                # before its first reading, and the hour's backoff still holds.
+                return "", {}, 0
             return self._carry_over_calendar(devices)
         self._apply_events(devices, events)
-        return summary, report.get(today, {}), len(events)
+        return summary, report.get(day, {}), len(events)
 
     async def _async_diary(self) -> dict[str, Any] | None:
         """Return the diary's shape, asking the cloud at most hourly.

@@ -59,6 +59,7 @@ from .const import (
     MIN_SCAN_INTERVAL_SECONDS,
     STREAM_URL_SCHEMES,
 )
+from .coordinator import clear_needs_code
 from .discovery import DiscoveredBridge, async_discover_bridge
 
 _LOGGER = logging.getLogger(__name__)
@@ -270,6 +271,10 @@ class FurboConfigFlow(ConfigFlow, domain=DOMAIN):
             return None
         await self.async_set_unique_id(account_id)
         self._abort_if_unique_id_mismatch(reason="wrong_account")
+        # The add-on just handed over a working token, which is proof it is not
+        # waiting for a verification code any more. Nobody should have to
+        # dismiss a warning about a problem that has visibly just ended.
+        clear_needs_code(self.hass, entry.entry_id)
         return self.async_update_reload_and_abort(
             entry,
             data={
