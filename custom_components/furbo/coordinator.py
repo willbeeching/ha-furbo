@@ -107,6 +107,12 @@ class _Renewal(Enum):
 # of the account is polled. A failed attempt waits the same hour: an account
 # without the subscription would otherwise be refused on every cycle.
 DIARY_INTERVAL = timedelta(hours=1)
+# The calendar shares the diary's host and the diary's problem. Its three
+# calls were made on every refresh, which at the default poll is better than
+# thirty an hour against something that rate-limits hard, and each refusal was
+# retried five minutes later for as long as the entry stayed loaded. Today's
+# figures do not change fast enough to be worth any of that.
+CALENDAR_INTERVAL = timedelta(hours=1)
 
 
 @dataclass(slots=True)
@@ -175,6 +181,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         self._timezone_name: str | None = None
         self._diary: dict[str, Any] | None = None
         self._diary_at: float | None = None
+        self._calendar_at: float | None = None
         # One diary download at a time for this account. Two presses -- a
         # person and an automation, say -- otherwise fetch the same day at
         # once and write the same partial file, and the first to finish moves
@@ -345,28 +352,7 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
         except FurboError as err:
             raise UpdateFailed(str(err)) from err
 
-        summary = ""
-        activity: dict[str, int] = {}
-        event_count = 0
-        if self.events_enabled:
-            # The calendar host (pet-gpt) rate-limits repeat calls hard (code
-            # 80002) and is not needed for the camera, alert switches or device
-            # sensors. Treat it as best-effort: on a non-auth failure, keep the
-            # previous cycle's values and try again next time, rather than
-            # failing the whole config entry's setup.
-            try:
-                today = self._today().isoformat()
-                report = await self.client.get_activity_report([today])
-                activity = report.get(today, {})
-                summary = await self.client.get_daily_summary(today)
-                events = await self.client.get_notable_events(today)
-                event_count = len(events)
-                self._apply_events(devices, events)
-            except FurboAuthError as err:
-                raise ConfigEntryAuthFailed from err
-            except FurboError as err:
-                _LOGGER.warning("Calendar data unavailable this cycle: %s", err)
-                summary, activity, event_count = self._carry_over_calendar(devices)
+        summary, activity, event_count = await self._async_calendar(devices)
 
         return FurboData(
             devices=devices,
@@ -376,6 +362,42 @@ class FurboCoordinator(DataUpdateCoordinator[FurboData]):
             account_timezone=self._timezone_name,
             diary=await self._async_diary() if self.events_enabled else None,
         )
+
+    async def _async_calendar(
+        self, devices: dict[str, FurboDeviceData]
+    ) -> tuple[str, dict[str, int], int]:
+        """Return today's calendar figures, asking the cloud at most hourly.
+
+        Three calls to the pet-gpt host, which rate-limits repeat calls hard
+        (code 80002) and serves nothing the camera, the alert switches or the
+        device sensors need. None of it is worth asking for every few minutes:
+        it is a running count for today, and an hour old is no worse.
+
+        Best-effort on a non-auth failure, keeping the previous cycle's values
+        rather than failing the entry's setup. The hour is counted from the
+        attempt, not from a success, so being refused backs off too. Without
+        that, a rate-limited account is asked again on every refresh, which is
+        both useless and the surest way to stay rate-limited.
+        """
+        if not self.events_enabled:
+            return "", {}, 0
+        now = time.monotonic()
+        waited = None if self._calendar_at is None else now - self._calendar_at
+        if waited is not None and waited < CALENDAR_INTERVAL.total_seconds():
+            return self._carry_over_calendar(devices)
+        self._calendar_at = now
+        try:
+            today = self._today().isoformat()
+            report = await self.client.get_activity_report([today])
+            summary = await self.client.get_daily_summary(today)
+            events = await self.client.get_notable_events(today)
+        except FurboAuthError as err:
+            raise ConfigEntryAuthFailed from err
+        except FurboError as err:
+            _LOGGER.warning("Calendar data unavailable this hour: %s", err)
+            return self._carry_over_calendar(devices)
+        self._apply_events(devices, events)
+        return summary, report.get(today, {}), len(events)
 
     async def _async_diary(self) -> dict[str, Any] | None:
         """Return the diary's shape, asking the cloud at most hourly.

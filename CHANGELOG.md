@@ -6,6 +6,20 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.5.2
+
+- **The calendar is asked for at most once an hour, instead of on every
+  poll.** Its three calls go to a host that rate-limits repeat requests hard,
+  which the code has said in a comment since the day it was written, and then
+  it asked on every refresh anyway: better than thirty calls an hour at the
+  default interval. Worse, a refusal was retried at the next poll, so a
+  rate-limited account stayed rate-limited by the retrying. Found in a live
+  log where that host answered `80002` on every single poll for seven hours.
+  Today's counts do not change fast enough for any of that to be worth it.
+- The hour is counted from the attempt rather than from a success, so being
+  refused backs off too. This is what the Doggie Diary has always done; the
+  calendar was simply never given the same treatment.
+
 ## 1.5.1
 
 - **`furbo.get_events` did not work at all in 1.5.0.** Every call came back as

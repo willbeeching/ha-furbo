@@ -180,6 +180,9 @@ async def test_calendar_failure_carries_over_previous(
     last_before = hass.states.get("sensor.test_camera_last_event").state
 
     mock_client.get_activity_report.side_effect = FurboError("rate", code=80002)
+    # Setup has already spent this hour's calendar call, and without this the
+    # refresh below skips the fetch and the test passes without reaching it.
+    coordinator._calendar_at = time.monotonic() - 3601
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
@@ -196,6 +199,7 @@ async def test_calendar_auth_error_triggers_reauth(
     await setup_integration(hass, mock_config_entry)
     coordinator = mock_config_entry.runtime_data.coordinator
     mock_client.get_notable_events.side_effect = FurboAuthError("bad token")
+    coordinator._calendar_at = time.monotonic() - 3601
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_update_data()
 
@@ -578,3 +582,47 @@ async def test_the_repair_issue_goes_when_the_account_does(
     await hass.async_block_till_done()
 
     assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_the_calendar_is_asked_for_at_most_once_an_hour(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Three calls an hour on the rate-limiting host, not three every refresh.
+
+    Reported from a live installation: the calendar host answered 80002 on
+    every poll for seven hours straight, because nothing counted the hour and
+    each refusal was simply retried at the next refresh.
+    """
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    after_setup = mock_client.get_daily_summary.await_count
+
+    for _ in range(5):
+        await coordinator.async_refresh()
+    assert mock_client.get_daily_summary.await_count == after_setup
+
+    coordinator._calendar_at = time.monotonic() - 3601
+    await coordinator.async_refresh()
+    assert mock_client.get_daily_summary.await_count == after_setup + 1
+
+
+async def test_a_refused_calendar_waits_its_hour_out_too(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Being rate-limited must not become a reason to ask more often.
+
+    The hour is counted from the attempt rather than from a success. Counting
+    it from a success would leave a refused account retrying on every refresh,
+    which is what kept it refused.
+    """
+    await setup_integration(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data.coordinator
+    mock_client.get_daily_summary.side_effect = FurboError("rate", code=80002)
+
+    coordinator._calendar_at = time.monotonic() - 3601
+    await coordinator.async_refresh()
+    refused_at = mock_client.get_daily_summary.await_count
+
+    for _ in range(3):
+        await coordinator.async_refresh()
+    assert mock_client.get_daily_summary.await_count == refused_at
