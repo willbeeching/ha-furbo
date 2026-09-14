@@ -19,6 +19,7 @@ from custom_components.furbo.api import (
     FurboLoginError,
     FurboMfaError,
 )
+from custom_components.furbo.bridge import FurboBridgeUnavailable
 from custom_components.furbo.const import (
     CONF_ACCOUNT_ID,
     CONF_BRIDGE_TOKEN,
@@ -617,3 +618,72 @@ async def test_a_new_setup_still_registers_a_new_identity(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"]["mobile_id"]
+
+
+BRIDGE_OPTIONS = {
+    CONF_BRIDGES: {c.DEVICE_ID: {CONF_BRIDGE_URL: "http://bridge.invalid:8791"}}
+}
+
+
+async def test_reauth_takes_the_add_ons_token_without_asking(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """No password, no emailed code, when the add-on can supply a token.
+
+    This account demands a code for every password login, from a device it
+    already knows, so the sign-in prompt is the one step nothing can automate.
+    The add-on is signed in to the same account and holds a current token, and
+    using it means the prompt never has to appear.
+    """
+    await setup_integration(hass, mock_config_entry, options=BRIDGE_OPTIONS)
+    mock_bridge.async_get_cloud_token.return_value = (c.ACCOUNT_ID, "from-the-addon")
+
+    result = await mock_config_entry.start_reauth_flow(hass)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert mock_config_entry.data["cognito_token"] == "from-the-addon"
+    # The cloud was never asked to log in: that is the whole point.
+    assert mock_client.start_login.await_count == 0
+
+
+async def test_reauth_asks_for_a_password_when_the_bridge_cannot_help(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """A bridge that is down or signed out falls back to the form."""
+    await setup_integration(hass, mock_config_entry, options=BRIDGE_OPTIONS)
+    mock_bridge.async_get_cloud_token.side_effect = FurboBridgeUnavailable("down")
+
+    result = await mock_config_entry.start_reauth_flow(hass)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+
+
+async def test_reauth_will_not_adopt_another_accounts_token(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """A bridge signed in elsewhere must not repoint this entry.
+
+    Its token would authenticate perfectly well, and every poll afterwards
+    would read a stranger's cameras through entities and a device registry
+    that belong to this account.
+    """
+    await setup_integration(hass, mock_config_entry, options=BRIDGE_OPTIONS)
+    mock_bridge.async_get_cloud_token.return_value = ("SOMEONE-ELSE", "their-token")
+    before = mock_config_entry.data["cognito_token"]
+
+    result = await mock_config_entry.start_reauth_flow(hass)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+    assert mock_config_entry.data["cognito_token"] == before

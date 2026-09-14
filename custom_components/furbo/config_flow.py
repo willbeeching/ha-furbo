@@ -26,7 +26,7 @@ from homeassistant.helpers.selector import (
 )
 import voluptuous as vol
 
-from . import FurboConfigEntry
+from . import FurboConfigEntry, _token_source
 from .api import (
     CODE_TOO_MANY_ATTEMPTS,
     FurboClient,
@@ -37,6 +37,7 @@ from .api import (
     encrypt_password,
     new_mobile_id,
 )
+from .bridge import FurboBridgeError
 from .const import (
     BRIDGE_URL_SCHEMES,
     CONF_ACCOUNT_ID,
@@ -233,11 +234,60 @@ class FurboConfigFlow(ConfigFlow, domain=DOMAIN):
         self._email = entry_data.get(CONF_EMAIL, "")
         return await self.async_step_reauth_confirm()
 
+    async def _async_token_from_bridge(self) -> ConfigFlowResult | None:
+        """Re-authenticate from the add-on's session instead of a password.
+
+        The account this integration talks to demands an emailed code for
+        every password login, including from a device it already knows, so
+        signing in by hand is the one step nothing can automate. The add-on is
+        already signed in to the same account and will hand over a current
+        token, which makes the prompt unnecessary in the common case.
+
+        It also leaves one login on the account rather than two. Two logins
+        cannot renew each other and each needs its own code when it lapses,
+        which is twice the chances of ending up back here.
+
+        Returns None when there is no bridge, it cannot answer, or it is
+        signed in elsewhere, and the password form is then shown as before.
+        """
+        entry = self._get_reauth_entry()
+        discovered = await async_discover_bridge(self.hass)
+        source = _token_source(self.hass, entry, discovered)
+        if source is None:
+            return None
+        try:
+            account_id, token = await source()
+        except FurboBridgeError as err:
+            # Unreachable, still starting, or holding a token the cloud has
+            # refused and unable to get another without a code of its own.
+            _LOGGER.debug("The bridge could not re-authenticate this entry: %s", err)
+            return None
+        if account_id != entry.data.get(CONF_ACCOUNT_ID):
+            # A bridge signed in to a different Furbo account. Its token would
+            # work and would quietly repoint this entry at someone else's
+            # cameras, so the password form is the right answer here.
+            _LOGGER.debug("The bridge is signed in to a different account")
+            return None
+        await self.async_set_unique_id(account_id)
+        self._abort_if_unique_id_mismatch(reason="wrong_account")
+        return self.async_update_reload_and_abort(
+            entry,
+            data={
+                **entry.data,
+                CONF_COGNITO_TOKEN: token,
+                CONF_TOKEN_ISSUED_AT: time.time(),
+            },
+        )
+
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Ask for credentials again during reauth."""
+        """Take a token from the add-on, or ask for credentials again."""
         errors: dict[str, str] = {}
+        if user_input is None:
+            from_bridge = await self._async_token_from_bridge()
+            if from_bridge is not None:
+                return from_bridge
         if user_input is not None:
             errors = await self._async_try_login(
                 user_input[CONF_EMAIL], user_input[CONF_PASSWORD]

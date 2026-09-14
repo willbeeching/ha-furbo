@@ -6,6 +6,26 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.6.0
+
+- **Signing in again no longer asks for your password and an emailed code.**
+  When the Furbo Bridge add-on is set up and signed in to the same account,
+  re-authentication now takes a current token from it and finishes without a
+  form. The password prompt remains for anyone without the add-on, and for
+  when it cannot answer.
+
+  Why this matters more than it sounds. Furbo demands an emailed verification
+  code for **every** password login on an account with two-step verification,
+  including from a device it already knows, so a sign-in is the one step that
+  can never be automated. Home Assistant was doing that login twice: once in
+  the integration and once in the add-on, two separate sessions on one
+  account, neither able to renew the other, each needing its own code when it
+  lapsed. Now there is one, held by the add-on, and the integration follows it.
+- A bridge signed in to a **different** Furbo account is refused and the
+  password form is shown instead. Its token would authenticate, and every poll
+  after it would read another account's cameras through entities and a device
+  registry belonging to this one.
+
 ## 1.5.2
 
 - **The calendar is asked for at most once an hour, instead of on every
