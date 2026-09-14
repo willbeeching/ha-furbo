@@ -660,7 +660,9 @@ async def test_events_are_returned_as_the_cloud_sends_them(
         ],
     }
     aioclient_mock.post(EVENT_LIST, json=body)
-    events = await _client(hass, authed=True).get_events(start=100, end=200)
+    events = await _client(hass, authed=True).get_events(
+        start=100, end=200, device_ids=[c.DEVICE_ID]
+    )
     assert events[0]["Videos"] == ["https://example.invalid/a.mp4"]
     assert events[0]["Caption"] == "standing in the doorway"
 
@@ -668,18 +670,22 @@ async def test_events_are_returned_as_the_cloud_sends_them(
 async def test_events_send_the_window_as_the_app_does(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    """JSON, not form-encoded, and the optional filters are left out when unset.
+    """DeviceIds always goes, and EventNames only when asked for.
 
-    The diary endpoint on this host is form-encoded and this one is not, which
-    is the sort of difference that fails quietly.
+    DeviceIds is required by the cloud, which says so only as a bare 12001 --
+    the same code it gives for any missing field, with nothing to name the
+    one it meant. Sending it unconditionally is the whole fix, so it is
+    asserted here rather than left to the caller.
     """
     aioclient_mock.post(EVENT_LIST, json={"Events": []})
-    await _client(hass, authed=True).get_events(start=100, end=200, limit=5)
+    await _client(hass, authed=True).get_events(
+        start=100, end=200, limit=5, device_ids=[c.DEVICE_ID]
+    )
     sent = aioclient_mock.mock_calls[0][2]
     assert sent["StartAfter"] == 100
     assert sent["EndBefore"] == 200
     assert sent["Limit"] == 5
-    assert "DeviceIds" not in sent
+    assert sent["DeviceIds"] == [c.DEVICE_ID]
     assert "EventNames" not in sent
 
 
@@ -702,7 +708,9 @@ async def test_events_reject_a_malformed_list(
     """Events that is not a list of objects is a malformed response."""
     aioclient_mock.post(EVENT_LIST, json={"Events": ["nope"]})
     with pytest.raises(FurboConnectionError):
-        await _client(hass, authed=True).get_events(start=1, end=2)
+        await _client(hass, authed=True).get_events(
+            start=1, end=2, device_ids=[c.DEVICE_ID]
+        )
 
 
 async def test_insight_report_is_keyed_by_date(

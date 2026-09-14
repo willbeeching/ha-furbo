@@ -34,7 +34,7 @@ from homeassistant.util import dt as dt_util
 import voluptuous as vol
 
 from .api import EVENTS_DEFAULT_LIMIT, FurboError
-from .const import DOMAIN
+from .const import ALERT_KEYS, DOMAIN
 
 if TYPE_CHECKING:
     from . import FurboConfigEntry
@@ -56,7 +56,10 @@ GET_EVENTS_SCHEMA: Final = vol.Schema(
         vol.Required(ATTR_START): cv.datetime,
         vol.Required(ATTR_END): cv.datetime,
         vol.Optional(ATTR_DEVICE_IDS): vol.All(cv.ensure_list, [cv.string]),
-        vol.Optional(ATTR_EVENT_NAMES): vol.All(cv.ensure_list, [cv.string]),
+        # Checked here rather than sent on, because the cloud's answer to a
+        # name it does not know is the same bare 12001 it gives for a missing
+        # field, with nothing to say which one was wrong.
+        vol.Optional(ATTR_EVENT_NAMES): vol.All(cv.ensure_list, [vol.In(ALERT_KEYS)]),
         vol.Optional(ATTR_LIMIT, default=EVENTS_DEFAULT_LIMIT): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=1000)
         ),
@@ -116,11 +119,20 @@ async def _async_get_events(call: ServiceCall) -> ServiceResponse:
         raise ServiceValidationError(
             translation_domain=DOMAIN, translation_key="end_before_start"
         )
+    coordinator = entry.runtime_data.coordinator
+    # Required by the cloud, which refuses a request without it as plainly
+    # "missing parameters" and says no more. Left to the caller it was simply
+    # omitted, so every call failed. Unset means the whole account.
+    device_ids = call.data.get(ATTR_DEVICE_IDS) or list(coordinator.data.devices)
+    if not device_ids:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN, translation_key="no_cameras"
+        )
     try:
-        events = await entry.runtime_data.coordinator.client.get_events(
+        events = await coordinator.client.get_events(
             start=int(start.timestamp()),
             end=int(end.timestamp()),
-            device_ids=call.data.get(ATTR_DEVICE_IDS),
+            device_ids=device_ids,
             event_names=call.data.get(ATTR_EVENT_NAMES),
             limit=call.data[ATTR_LIMIT],
         )

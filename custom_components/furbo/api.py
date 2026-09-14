@@ -525,7 +525,7 @@ class FurboClient:
         *,
         start: int,
         end: int,
-        device_ids: list[str] | None = None,
+        device_ids: list[str],
         event_names: list[str] | None = None,
         limit: int = EVENTS_DEFAULT_LIMIT,
     ) -> list[dict[str, Any]]:
@@ -538,6 +538,14 @@ class FurboClient:
 
         Times are epoch seconds. Returned as the cloud sends them, because the
         caller is asking for this data in order to use it.
+
+        DeviceIds is required and the endpoint says so only as a bare 12001,
+        the same code it gives for any missing field. Established by probing
+        it field by field with junk credentials: without DeviceIds it answers
+        12001, with it the request reaches token validation. The window is
+        optional to the cloud, and EventNames is checked against a vocabulary
+        (an unknown name is another bare 12001), so both are validated before
+        the call rather than after.
         """
         payload: dict[str, Any] = {
             **self._base(),
@@ -545,8 +553,7 @@ class FurboClient:
             "EndBefore": end,
             "Limit": limit,
         }
-        if device_ids:
-            payload["DeviceIds"] = device_ids
+        payload["DeviceIds"] = device_ids
         if event_names:
             payload["EventNames"] = event_names
         data = await self._post(EVENTS_PATH, payload, base=EVENT_URL)

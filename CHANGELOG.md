@@ -8,6 +8,15 @@ numbers: the two are released independently and their numbers do not line up.
 
 ## 1.5.1
 
+- **`furbo.get_events` did not work at all in 1.5.0.** Every call came back as
+  `Furbo API error 400 (code 12001)`. The cloud requires the list of cameras
+  and 1.5.0 treated it as optional, so a call that did not name one was
+  refused. It now defaults to every camera on the account, and naming one
+  still narrows it. Found by the reporter in #6 testing it the day it shipped.
+- **Event names are checked before the call.** Furbo answers a name it does
+  not recognise with the same bare `12001` it gives for a missing field, so a
+  typo was indistinguishable from a bug. The field is now a dropdown of the
+  names Furbo accepts.
 - **`furbo.get_events` read a plain time in the wrong timezone.** A window
   written without an offset, which is how most people write one, was read in
   the timezone of the machine Home Assistant runs on rather than the timezone

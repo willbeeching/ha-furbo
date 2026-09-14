@@ -291,6 +291,9 @@
     },
     "end_before_start": {
       "message": "The end of the window must be after its start."
+    },
+    "no_cameras": {
+      "message": "This Furbo account has no cameras to fetch events for."
     }
   },
   "issues": {

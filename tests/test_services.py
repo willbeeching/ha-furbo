@@ -11,6 +11,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+import voluptuous as vol
 
 from custom_components.furbo import async_setup
 from custom_components.furbo.api import FurboError
@@ -253,3 +254,69 @@ async def test_a_refused_insight_report_reaches_the_caller(
             "get_insight_report",
             {"config_entry_id": mock_config_entry.entry_id, "dates": ["2026-09-12"]},
         )
+
+
+async def test_the_account_is_the_default_camera_list(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A call that names no camera still names every camera.
+
+    The cloud requires DeviceIds and refuses a request without it as a bare
+    12001, the same code it gives for any missing field. Leaving it to the
+    caller meant every call made from the UI, where it is not obvious the
+    field matters, failed with nothing to explain it.
+    """
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    await _call(
+        hass, "get_events", {"config_entry_id": mock_config_entry.entry_id, **WINDOW}
+    )
+
+    assert mock_client.get_events.await_args.kwargs["device_ids"] == [c.DEVICE_ID]
+
+
+async def test_a_named_camera_wins_over_the_default(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Asking for one camera does not quietly widen to the whole account."""
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    await _call(
+        hass,
+        "get_events",
+        {
+            "config_entry_id": mock_config_entry.entry_id,
+            "device_ids": ["a-named-camera"],
+            **WINDOW,
+        },
+    )
+
+    assert mock_client.get_events.await_args.kwargs["device_ids"] == ["a-named-camera"]
+
+
+async def test_an_event_name_the_cloud_does_not_know_is_refused_here(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Caught locally, because the cloud's answer names nothing.
+
+    An unknown event name comes back as the same bare 12001 as a missing
+    field, so a typo would otherwise be indistinguishable from a bug.
+    """
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+
+    with pytest.raises(vol.Invalid):
+        await _call(
+            hass,
+            "get_events",
+            {
+                "config_entry_id": mock_config_entry.entry_id,
+                "event_names": ["NotARealEvent"],
+                **WINDOW,
+            },
+        )
+    assert mock_client.get_events.await_count == 0
