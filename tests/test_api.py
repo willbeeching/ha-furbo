@@ -812,3 +812,20 @@ async def test_an_empty_day_is_not_reported_as_a_missing_key(
 
     assert events == []
     assert "returned 0 event(s)" in caplog.text
+
+
+async def test_an_absent_window_is_left_out_of_the_request(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Not sent as null, not sent as zero: not sent.
+
+    A window the cloud does not filter on the way we expect looks exactly
+    like a quiet week, so being able to ask with none at all is what tells
+    the two apart.
+    """
+    aioclient_mock.post(EVENT_LIST, json={"Events": []})
+    await _client(hass, authed=True).get_events(device_ids=[c.DEVICE_ID])
+    sent = aioclient_mock.mock_calls[0][2]
+    assert "StartAfter" not in sent
+    assert "EndBefore" not in sent
+    assert sent["DeviceIds"] == [c.DEVICE_ID]

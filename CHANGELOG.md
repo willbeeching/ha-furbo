@@ -6,6 +6,18 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.7.0
+
+- **The window on `furbo.get_events` is now optional.** Leave `start` and
+  `end` out and you get the most recent events with no time filter at all;
+  give one end alone for everything since, or until, a moment.
+- Why this matters beyond convenience: the action still returns nothing on at
+  least one account, and a window the cloud does not filter the way this
+  integration expects is indistinguishable from a week with nothing in it.
+  Both come back as an empty list. Asking with no window at all is the one
+  call that separates them, and until now the action would not let you make
+  it. Refs #6.
+
 ## 1.6.2
 
 - **`furbo.get_events` stops reporting a response it cannot read as an empty

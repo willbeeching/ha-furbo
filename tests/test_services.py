@@ -320,3 +320,43 @@ async def test_an_event_name_the_cloud_does_not_know_is_refused_here(
             },
         )
     assert mock_client.get_events.await_count == 0
+
+
+async def test_a_call_with_no_window_asks_for_no_window(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Both ends may be left out, and then neither is sent.
+
+    The cloud accepts a call with no window, and asking that way is the only
+    test that separates a window we are sending wrongly from a week with
+    nothing in it: both otherwise come back as no events at all.
+    """
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    await _call(hass, "get_events", {"config_entry_id": mock_config_entry.entry_id})
+
+    sent = mock_client.get_events.await_args.kwargs
+    assert sent["start"] is None
+    assert sent["end"] is None
+    assert sent["device_ids"] == [c.DEVICE_ID]
+
+
+async def test_one_end_of_the_window_may_be_given_alone(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Everything since a moment, with no end to it."""
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    await _call(
+        hass,
+        "get_events",
+        {"config_entry_id": mock_config_entry.entry_id, "start": WINDOW["start"]},
+    )
+
+    sent = mock_client.get_events.await_args.kwargs
+    assert sent["start"] == LONDON_START
+    assert sent["end"] is None

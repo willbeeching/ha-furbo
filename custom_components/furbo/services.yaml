@@ -6,12 +6,10 @@ get_events:
         config_entry:
           integration: furbo
     start:
-      required: true
       example: "2026-09-12 19:00:00"
       selector:
         datetime:
     end:
-      required: true
       example: "2026-09-13 07:00:00"
       selector:
         datetime:

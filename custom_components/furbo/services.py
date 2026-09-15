@@ -53,8 +53,8 @@ ATTR_DATES: Final = "dates"
 GET_EVENTS_SCHEMA: Final = vol.Schema(
     {
         vol.Required(ATTR_CONFIG_ENTRY_ID): cv.string,
-        vol.Required(ATTR_START): cv.datetime,
-        vol.Required(ATTR_END): cv.datetime,
+        vol.Optional(ATTR_START): cv.datetime,
+        vol.Optional(ATTR_END): cv.datetime,
         vol.Optional(ATTR_DEVICE_IDS): vol.All(cv.ensure_list, [cv.string]),
         # Checked here rather than sent on, because the cloud's answer to a
         # name it does not know is the same bare 12001 it gives for a missing
@@ -102,20 +102,30 @@ def _failed(err: FurboError) -> ServiceValidationError:
     )
 
 
+def _moment(value: datetime | None) -> int | None:
+    """Turn one end of a window into epoch seconds, or leave it unset.
+
+    cv.datetime hands back whatever was written: a time with an offset keeps
+    it, a bare "2026-09-12 19:00:00" arrives with no timezone at all. Left
+    alone, the naive one is read in the timezone of whatever machine Home
+    Assistant happens to run on, which for a container is UTC and for the
+    person writing the automation is their own clock. as_utc reads a naive
+    time in the timezone Home Assistant is configured for, which is the one
+    the automation was written against.
+    """
+    if value is None:
+        return None
+    return int(dt_util.as_utc(value).timestamp())
+
+
 async def _async_get_events(call: ServiceCall) -> ServiceResponse:
     """Return the events in a window, each with its own clip links."""
     entry = _entry(call.hass, call)
-    # cv.datetime hands back whatever was written: a time with an offset keeps
-    # it, a bare "2026-09-12 19:00:00" arrives with no timezone at all. Left
-    # alone, the naive one is read in the timezone of whatever machine Home
-    # Assistant happens to run on, which for a container is UTC and for the
-    # person writing the automation is their own clock. as_utc reads a naive
-    # time in the timezone Home Assistant is configured for, which is the one
-    # the automation was written against, and normalises both so the
-    # comparison below cannot raise on a mixed pair.
-    start: datetime = dt_util.as_utc(call.data[ATTR_START])
-    end: datetime = dt_util.as_utc(call.data[ATTR_END])
-    if end <= start:
+    # Both ends optional: see _moment, and the note in get_events about why
+    # asking with no window at all is worth being able to do.
+    start = _moment(call.data.get(ATTR_START))
+    end = _moment(call.data.get(ATTR_END))
+    if start is not None and end is not None and end <= start:
         raise ServiceValidationError(
             translation_domain=DOMAIN, translation_key="end_before_start"
         )
@@ -130,8 +140,8 @@ async def _async_get_events(call: ServiceCall) -> ServiceResponse:
         )
     try:
         events = await coordinator.client.get_events(
-            start=int(start.timestamp()),
-            end=int(end.timestamp()),
+            start=start,
+            end=end,
             device_ids=device_ids,
             event_names=call.data.get(ATTR_EVENT_NAMES),
             limit=call.data[ATTR_LIMIT],

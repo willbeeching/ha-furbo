@@ -537,8 +537,8 @@ class FurboClient:
     async def get_events(
         self,
         *,
-        start: int,
-        end: int,
+        start: int | None = None,
+        end: int | None = None,
         device_ids: list[str],
         event_names: list[str] | None = None,
         limit: int = EVENTS_DEFAULT_LIMIT,
@@ -561,13 +561,16 @@ class FurboClient:
         (an unknown name is another bare 12001), so both are validated before
         the call rather than after.
         """
-        payload: dict[str, Any] = {
-            **self._base(),
-            "StartAfter": start,
-            "EndBefore": end,
-            "Limit": limit,
-        }
+        payload: dict[str, Any] = {**self._base(), "Limit": limit}
         payload["DeviceIds"] = device_ids
+        # Omitted entirely when not asked for. The cloud accepts a call with
+        # neither end, and a window it does not apply the way we expect is
+        # indistinguishable from a quiet week: both come back as no events.
+        # Leaving it out is the one way to ask that question.
+        if start is not None:
+            payload["StartAfter"] = start
+        if end is not None:
+            payload["EndBefore"] = end
         if event_names:
             payload["EventNames"] = event_names
         data = await self._post(EVENTS_PATH, payload, base=EVENT_URL)
