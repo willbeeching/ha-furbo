@@ -187,6 +187,20 @@ def _binding_limit(data: dict[str, Any]) -> object:
     return value
 
 
+def _field_names(data: dict[str, Any], limit: int = 20) -> str:
+    """Describe a response by the fields it carried, never their values.
+
+    Bounded on both axes, because this reaches an error message: a response
+    in an unexpected shape is exactly the one with no guarantees about how
+    many fields it has or how long their names are.
+    """
+    names = sorted(data)[:limit]
+    shown = ", ".join(name[:40] for name in names)
+    if len(data) > limit:
+        shown += f", and {len(data) - limit} more"
+    return shown or "nothing at all"
+
+
 def _malformed(path: str, what: str) -> FurboConnectionError:
     """Build the error raised for a response that does not fit the contract."""
     return FurboConnectionError(f"Malformed response from {path}: {what}")
@@ -558,18 +572,17 @@ class FurboClient:
             payload["EventNames"] = event_names
         data = await self._post(EVENTS_PATH, payload, base=EVENT_URL)
         events = data.get("Events")
-        if events is None:
-            # Reading a name we assumed and silently getting nothing is how
-            # this endpoint came to return an empty list with no complaint:
-            # an absent key and an empty day look identical to .get(). The
-            # response's own field names say which one it is. Names only,
-            # never values: this body carries links into someone's home.
-            _LOGGER.debug(
-                "No Events in the response from %s; it carried: %s",
+        if not isinstance(events, list):
+            # Absent, null, or something else entirely. Reported as an error
+            # rather than as an empty day, because those are different facts
+            # and an automation cannot act on the difference if both arrive
+            # as nothing. The response's own field names go in the message:
+            # whoever hits this needs them, and they should not have to turn
+            # on debug logging to be told what the cloud actually sent.
+            raise _malformed(
                 EVENTS_PATH,
-                ", ".join(sorted(data)) or "nothing at all",
+                f"no Events list; the response carried: {_field_names(data)}",
             )
-            return []
         found = _as_dict_list(events, EVENTS_PATH, "Events")
         _LOGGER.debug(
             "%s returned %d event(s) for %d camera(s) between %s and %s",

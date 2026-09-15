@@ -733,27 +733,68 @@ async def test_insight_report_rejects_a_malformed_day(
         await _client(hass, authed=True).get_insight_report(["2026-09-12"])
 
 
-async def test_events_says_what_came_back_when_there_are_none(
-    hass: HomeAssistant,
-    aioclient_mock: AiohttpClientMocker,
-    caplog: pytest.LogCaptureFixture,
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"SomethingElse": [], "Total": 0},
+        {"Events": None},
+        {},
+    ],
+    ids=["missing", "null", "empty-body"],
+)
+async def test_an_unexpected_event_response_is_an_error_not_a_quiet_day(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, body: dict[str, Any]
 ) -> None:
-    """An absent Events key must not look like a quiet, empty day.
+    """No Events list is a malformed response, not news of a quiet afternoon.
 
-    Reported in #6: the call stopped erroring and started returning nothing,
-    which is what .get("Events", []) does whether the key is missing or the
-    day really was empty. The response's own field names separate the two.
+    Reported in #6: the call returned nothing at all over every window tried,
+    because .get("Events", []) cannot tell an absent key from an empty day.
+    Returning [] for both leaves an automation no way to tell a parse failure
+    from a real answer, so the shapes we do not understand say so.
     """
-    caplog.set_level(logging.DEBUG, logger="custom_components.furbo.api")
-    aioclient_mock.post(EVENT_LIST, json={"SomethingElse": [], "Total": 0})
+    aioclient_mock.post(EVENT_LIST, json=body)
+    with pytest.raises(FurboConnectionError) as err:
+        await _client(hass, authed=True).get_events(
+            start=1, end=2, device_ids=[c.DEVICE_ID]
+        )
+    assert "Events" in str(err.value)
 
-    events = await _client(hass, authed=True).get_events(
-        start=1, end=2, device_ids=[c.DEVICE_ID]
+
+async def test_the_error_names_the_fields_that_did_arrive(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """The message carries the response's own field names, and no values.
+
+    Whoever hits this needs to know what the cloud actually sent, and should
+    not have to turn on debug logging to find out. Names only: the values in
+    this body are links into someone's home.
+    """
+    aioclient_mock.post(
+        EVENT_LIST,
+        json={"Items": [{"Videos": ["https://secret.invalid/a.mp4"]}], "Total": 1},
     )
+    with pytest.raises(FurboConnectionError) as err:
+        await _client(hass, authed=True).get_events(
+            start=1, end=2, device_ids=[c.DEVICE_ID]
+        )
 
-    assert events == []
-    assert "SomethingElse" in caplog.text
-    assert "Total" in caplog.text
+    message = str(err.value)
+    assert "Items" in message
+    assert "Total" in message
+    assert "secret.invalid" not in message
+
+
+async def test_a_long_response_does_not_make_a_long_error(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A shape we do not understand has no guarantees about its own size."""
+    aioclient_mock.post(EVENT_LIST, json={f"Field{i:03d}": i for i in range(60)})
+    with pytest.raises(FurboConnectionError) as err:
+        await _client(hass, authed=True).get_events(
+            start=1, end=2, device_ids=[c.DEVICE_ID]
+        )
+    assert "and 40 more" in str(err.value)
+    assert len(str(err.value)) < 500
 
 
 async def test_an_empty_day_is_not_reported_as_a_missing_key(
@@ -770,5 +811,4 @@ async def test_an_empty_day_is_not_reported_as_a_missing_key(
     )
 
     assert events == []
-    assert "No Events in the response" not in caplog.text
     assert "returned 0 event(s)" in caplog.text

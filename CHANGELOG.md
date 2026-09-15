@@ -8,14 +8,16 @@ numbers: the two are released independently and their numbers do not line up.
 
 ## 1.6.2
 
-- **`furbo.get_events` now says what the cloud actually sent back.** It stopped
-  erroring in 1.5.1 and started returning nothing instead, which is the same
-  thing an empty day looks like: the response was read for a field named
-  `Events` and, when that name was absent, quietly produced an empty list. At
-  debug level it now names the fields the response really carried, so a key
-  we guessed wrong can be told apart from a day with no events in it.
-  Diagnostic only, reported in #6; the field names are the next thing to fix
-  once we can see them.
+- **`furbo.get_events` stops reporting a response it cannot read as an empty
+  day.** It stopped erroring in 1.5.1 and started returning nothing instead,
+  because the response was read for a field named `Events` and an absent name
+  produced an empty list, exactly as a quiet afternoon would. Those are
+  different facts and an automation cannot act on the difference if both
+  arrive as nothing, so a response with no `Events` list now fails, and says
+  in the error which fields it did carry. Field names only: the values in that
+  body are video links into your home.
+  Reported in #6. This does not yet make the action return your events; it
+  makes the reason visible so the request can be corrected.
 
 ## 1.6.1
 
