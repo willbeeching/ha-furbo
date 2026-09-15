@@ -604,10 +604,19 @@ class FurboClient:
         # is wrong with the response, the request is accepted, and the only
         # thing left to look at is which fields each side named. Four rounds
         # of guessing went by without anyone being able to see this.
+        # The window by value as well as by name. It is the caller's own
+        # choice of times, not a secret, and it is the one thing that says
+        # which build is running: a window in seconds is the bug, the same
+        # window times a million is the fix. Names alone could not tell those
+        # apart, which is exactly what was needed when this was still failing
+        # for one account after it started working for another.
         _LOGGER.debug(
-            "%s: sent %s, got %s, %d event(s) for %d camera(s)",
+            "%s: sent %s (StartAfter=%s EndBefore=%s), got %s, "
+            "%d event(s) for %d camera(s)",
             EVENTS_PATH,
             _field_names(payload),
+            payload.get("StartAfter"),
+            payload.get("EndBefore"),
             _field_names(data),
             len(found),
             len(device_ids),

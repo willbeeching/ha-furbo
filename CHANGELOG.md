@@ -6,6 +6,16 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.7.3
+
+- **The debug line for `furbo.get_events` now includes the window it sent, by
+  value.** Field names alone could not distinguish a build sending seconds
+  from one sending microseconds, which is the difference between 1.7.1 and
+  1.7.2 and therefore the first thing worth checking when the action returns
+  nothing on one install while working on another. The window is the caller's
+  own choice of times, not a secret. Everything else in that line stays names
+  only. Refs #6.
+
 ## 1.7.2
 
 - **`furbo.get_events` returns your events.** It had never returned any. The

@@ -819,6 +819,8 @@ async def test_an_empty_day_is_not_reported_as_a_missing_key(
     # returns nothing leaves the field names as the only thing to compare.
     assert "sent" in caplog.text
     assert "StartAfter" in caplog.text
+    # By value too: seconds mean the old build, microseconds the fixed one.
+    assert "StartAfter=1000000" in caplog.text
     assert "Events" in caplog.text
     # Names, never values. The token is a field name here and nothing more.
     assert c.COGNITO_TOKEN not in caplog.text
