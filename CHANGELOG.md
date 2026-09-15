@@ -6,6 +6,18 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.7.2
+
+- **`furbo.get_events` returns your events.** It had never returned any. The
+  endpoint filters on an event's `Id`, which is a microsecond timestamp, so
+  its window is in microseconds; this integration sent seconds. Every window
+  therefore landed in January 1970, matched nothing, and came back as an
+  empty list with no error at all, because the request was perfectly valid
+  and simply selected no events.
+  Found by reading the Furbo app's own request model after four rounds of
+  guessing failed to. Reported and patiently retested throughout by
+  @renaybbbb in #6.
+
 ## 1.7.1
 
 - **`furbo.get_events` now records both sides of the exchange at debug level**,

@@ -682,8 +682,11 @@ async def test_events_send_the_window_as_the_app_does(
         start=100, end=200, limit=5, device_ids=[c.DEVICE_ID]
     )
     sent = aioclient_mock.mock_calls[0][2]
-    assert sent["StartAfter"] == 100
-    assert sent["EndBefore"] == 200
+    # Microseconds on the wire: the endpoint filters on an event's Id, which
+    # is a microsecond timestamp. Sending seconds put the window in 1970 and
+    # selected nothing, with no error to say so.
+    assert sent["StartAfter"] == 100 * 1_000_000
+    assert sent["EndBefore"] == 200 * 1_000_000
     assert sent["Limit"] == 5
     assert sent["DeviceIds"] == [c.DEVICE_ID]
     assert "EventNames" not in sent
@@ -836,3 +839,21 @@ async def test_an_absent_window_is_left_out_of_the_request(
     assert "StartAfter" not in sent
     assert "EndBefore" not in sent
     assert sent["DeviceIds"] == [c.DEVICE_ID]
+
+
+async def test_the_window_goes_out_in_microseconds(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A real moment, at the scale the endpoint's own ids use.
+
+    2026-09-12T18:00:00Z is 1789236000 seconds. Sent as seconds, this endpoint
+    reads it as half past midnight on 1 January 1970, matches no events and
+    returns an empty list without complaint. That is #6.
+    """
+    aioclient_mock.post(EVENT_LIST, json={"Events": []})
+    await _client(hass, authed=True).get_events(
+        start=1789236000, end=1789279200, device_ids=[c.DEVICE_ID]
+    )
+    sent = aioclient_mock.mock_calls[0][2]
+    assert sent["StartAfter"] == 1789236000000000
+    assert sent["EndBefore"] == 1789279200000000

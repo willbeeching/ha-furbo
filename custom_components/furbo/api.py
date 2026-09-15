@@ -52,6 +52,11 @@ INSIGHT_PATH = "/v2/calendar/insight-report/get"
 # A day of events for one camera, with room to spare. The API takes a limit
 # and a caller can ask for less.
 EVENTS_DEFAULT_LIMIT = 200
+# The event list filters on an event's Id, which is a microsecond timestamp,
+# so its window is in microseconds too. Read from the app: its own preview
+# data uses 1703463631000000 for a moment in 2023, and SmartAlertEvent
+# divides a difference of these by 1000000 to get seconds.
+MICROSECONDS = 1_000_000
 DIARY_LINKS = ("TimeLapseUrl", "SnapshotUrl", "SurveyUrl")
 # Enough days to see the pattern, few enough to sit in an entity attribute.
 DIARY_DAYS = 3
@@ -553,6 +558,9 @@ class FurboClient:
         Times are epoch seconds. Returned as the cloud sends them, because the
         caller is asking for this data in order to use it.
 
+        Times are given here in epoch seconds and sent in microseconds, which
+        is the unit the endpoint's own window uses; see MICROSECONDS.
+
         DeviceIds is required and the endpoint says so only as a bare 12001,
         the same code it gives for any missing field. Established by probing
         it field by field with junk credentials: without DeviceIds it answers
@@ -567,10 +575,14 @@ class FurboClient:
         # neither end, and a window it does not apply the way we expect is
         # indistinguishable from a quiet week: both come back as no events.
         # Leaving it out is the one way to ask that question.
+        # Seconds in, microseconds out. Sending seconds put every window in
+        # January 1970, which matched nothing and came back as an empty list
+        # with no error: the request was accepted and simply selected no
+        # events. Four rounds of #6 went by on that.
         if start is not None:
-            payload["StartAfter"] = start
+            payload["StartAfter"] = start * MICROSECONDS
         if end is not None:
-            payload["EndBefore"] = end
+            payload["EndBefore"] = end * MICROSECONDS
         if event_names:
             payload["EventNames"] = event_names
         data = await self._post(EVENTS_PATH, payload, base=EVENT_URL)
