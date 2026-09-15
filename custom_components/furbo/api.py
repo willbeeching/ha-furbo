@@ -587,13 +587,18 @@ class FurboClient:
                 f"no Events list; the response carried: {_field_names(data)}",
             )
         found = _as_dict_list(events, EVENTS_PATH, "Events")
+        # Both sides of the exchange, by field name, on every call and not
+        # only when it fails. An empty Events list is the hard case: nothing
+        # is wrong with the response, the request is accepted, and the only
+        # thing left to look at is which fields each side named. Four rounds
+        # of guessing went by without anyone being able to see this.
         _LOGGER.debug(
-            "%s returned %d event(s) for %d camera(s) between %s and %s",
+            "%s: sent %s, got %s, %d event(s) for %d camera(s)",
             EVENTS_PATH,
+            _field_names(payload),
+            _field_names(data),
             len(found),
             len(device_ids),
-            start,
-            end,
         )
         return found
 

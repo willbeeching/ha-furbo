@@ -6,6 +6,17 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.7.1
+
+- **`furbo.get_events` now records both sides of the exchange at debug level**,
+  on every call rather than only when the response cannot be read. Field names
+  only, never values.
+  The action returns no events on two unrelated accounts while the request is
+  accepted, the camera is recognised and the window makes no difference. An
+  empty list with nothing wrong is the hard case: the only thing left to
+  compare is which fields each side named, and until now nobody could see
+  them. Refs #6.
+
 ## 1.7.0
 
 - **The window on `furbo.get_events` is now optional.** Leave `start` and

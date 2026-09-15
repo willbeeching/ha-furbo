@@ -811,7 +811,14 @@ async def test_an_empty_day_is_not_reported_as_a_missing_key(
     )
 
     assert events == []
-    assert "returned 0 event(s)" in caplog.text
+    assert "0 event(s)" in caplog.text
+    # Both sides named, which is the whole point: an accepted request that
+    # returns nothing leaves the field names as the only thing to compare.
+    assert "sent" in caplog.text
+    assert "StartAfter" in caplog.text
+    assert "Events" in caplog.text
+    # Names, never values. The token is a field name here and nothing more.
+    assert c.COGNITO_TOKEN not in caplog.text
 
 
 async def test_an_absent_window_is_left_out_of_the_request(
