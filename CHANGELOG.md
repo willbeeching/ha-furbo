@@ -6,6 +6,17 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.6.2
+
+- **`furbo.get_events` now says what the cloud actually sent back.** It stopped
+  erroring in 1.5.1 and started returning nothing instead, which is the same
+  thing an empty day looks like: the response was read for a field named
+  `Events` and, when that name was absent, quietly produced an empty list. At
+  debug level it now names the fields the response really carried, so a key
+  we guessed wrong can be told apart from a day with no events in it.
+  Diagnostic only, reported in #6; the field names are the next thing to fix
+  once we can see them.
+
 ## 1.6.1
 
 - **Today's activity counts no longer start the day holding yesterday's.**

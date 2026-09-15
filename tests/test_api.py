@@ -731,3 +731,44 @@ async def test_insight_report_rejects_a_malformed_day(
     aioclient_mock.post(INSIGHT, json={"2026-09-12": "not-a-list"})
     with pytest.raises(FurboConnectionError):
         await _client(hass, authed=True).get_insight_report(["2026-09-12"])
+
+
+async def test_events_says_what_came_back_when_there_are_none(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An absent Events key must not look like a quiet, empty day.
+
+    Reported in #6: the call stopped erroring and started returning nothing,
+    which is what .get("Events", []) does whether the key is missing or the
+    day really was empty. The response's own field names separate the two.
+    """
+    caplog.set_level(logging.DEBUG, logger="custom_components.furbo.api")
+    aioclient_mock.post(EVENT_LIST, json={"SomethingElse": [], "Total": 0})
+
+    events = await _client(hass, authed=True).get_events(
+        start=1, end=2, device_ids=[c.DEVICE_ID]
+    )
+
+    assert events == []
+    assert "SomethingElse" in caplog.text
+    assert "Total" in caplog.text
+
+
+async def test_an_empty_day_is_not_reported_as_a_missing_key(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A genuine empty list is a count, not a complaint about the shape."""
+    caplog.set_level(logging.DEBUG, logger="custom_components.furbo.api")
+    aioclient_mock.post(EVENT_LIST, json={"Events": []})
+
+    events = await _client(hass, authed=True).get_events(
+        start=1, end=2, device_ids=[c.DEVICE_ID]
+    )
+
+    assert events == []
+    assert "No Events in the response" not in caplog.text
+    assert "returned 0 event(s)" in caplog.text

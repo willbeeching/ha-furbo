@@ -557,7 +557,29 @@ class FurboClient:
         if event_names:
             payload["EventNames"] = event_names
         data = await self._post(EVENTS_PATH, payload, base=EVENT_URL)
-        return _as_dict_list(data.get("Events", []), EVENTS_PATH, "Events")
+        events = data.get("Events")
+        if events is None:
+            # Reading a name we assumed and silently getting nothing is how
+            # this endpoint came to return an empty list with no complaint:
+            # an absent key and an empty day look identical to .get(). The
+            # response's own field names say which one it is. Names only,
+            # never values: this body carries links into someone's home.
+            _LOGGER.debug(
+                "No Events in the response from %s; it carried: %s",
+                EVENTS_PATH,
+                ", ".join(sorted(data)) or "nothing at all",
+            )
+            return []
+        found = _as_dict_list(events, EVENTS_PATH, "Events")
+        _LOGGER.debug(
+            "%s returned %d event(s) for %d camera(s) between %s and %s",
+            EVENTS_PATH,
+            len(found),
+            len(device_ids),
+            start,
+            end,
+        )
+        return found
 
     async def get_insight_report(self, dates: list[str]) -> dict[str, Any]:
         """Return the written daily report for each date (YYYY-MM-DD).
