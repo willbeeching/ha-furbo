@@ -674,3 +674,26 @@ def test_the_proof_is_cleared_by_a_session_reset(
     assert fp._stored_mfa_auth_code() == "p1"
     session.unlink()  # what reset_session does
     assert fp._stored_mfa_auth_code() is None
+
+
+def test_frame_trace_is_quiet_at_the_default_level(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A camera answers about fifteen commands per status poll.
+
+    Printing each one at info filled the add-on's log with hex faster than
+    anyone could read it: the window held four minutes, so a login failure
+    from the night before was already gone by morning.
+    """
+    monkeypatch.setenv("GO2RTC_LOG", "info")
+    fp.trace("recv GET_CAMERA_ON [0x1000a] (2 bytes) 0001")
+    assert capsys.readouterr().err == ""
+
+
+def test_frame_trace_prints_when_the_option_asks_for_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Somebody chasing the protocol turns log_level up and still gets frames."""
+    monkeypatch.setenv("GO2RTC_LOG", "debug")
+    fp.trace("recv GET_CAMERA_ON [0x1000a] (2 bytes) 0001")
+    assert "recv GET_CAMERA_ON [0x1000a] (2 bytes) 0001" in capsys.readouterr().err

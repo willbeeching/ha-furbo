@@ -3,6 +3,16 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.1
+
+- **The add-on log keeps hours of history instead of four minutes.** Every
+  camera command and reply was printed unconditionally, and the integration
+  polls about fifteen of them every thirty seconds, so the log rolled over
+  before anyone could read it. Going to look at why a login failed the night
+  before turned up nothing but hex. Those per-frame lines now print only when
+  `log_level` is set to `debug` or `trace`; failures, connection state and the
+  login path are unchanged at `info`.
+
 ## 1.3.0
 
 - **The add-on stops asking for a verification code every time its session

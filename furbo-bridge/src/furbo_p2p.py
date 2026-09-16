@@ -63,6 +63,7 @@ from ctypes import (
 )
 import datetime as dt
 import json
+import logging
 import os
 from pathlib import Path
 import random
@@ -80,6 +81,7 @@ from furbo_cloud import (
     FurboMfaError,
     configure_logging,
     encrypt_password,
+    log_level,
     new_mobile_id,
 )
 
@@ -256,6 +258,19 @@ def err(code: int) -> str:
 
 def log(*args) -> None:
     print(time.strftime("%H:%M:%S"), *args, file=sys.stderr, flush=True)
+
+
+def trace(*args) -> None:
+    """A per-frame line, printed only when the add-on's log_level asks for it.
+
+    A camera answers about fifteen commands every status poll, so printing
+    each one unconditionally filled the add-on's log faster than a person
+    could read it: by the time anyone went looking for why a login failed,
+    the window held four minutes of hex and nothing else. Frames are now
+    behind debug, where somebody chasing the protocol can still get them.
+    """
+    if log_level() <= logging.DEBUG:
+        log(*args)
 
 
 # --- ctypes structures (TUTK SDK 4.x) ---------------------------------------
@@ -1072,7 +1087,7 @@ class FurboP2P:
         if ret < 0:
             log(f"send {name} failed: {err(ret)}")
         else:
-            log(f"sent {name} {data[:32].hex()}")
+            trace(f"sent {name} {data[:32].hex()}")
 
     def poll(self, timeout_ms: int = 10) -> tuple[int, bytes] | None:
         opcode = c_uint()
@@ -1160,7 +1175,7 @@ class FurboP2P:
             s.setdefault("rejected", []).append({"opcode": req, "status": data[0]})
             log(f"camera rejected 0x{req:x} with status {data[0]}")
             return
-        log(f"recv {name} [0x{opcode:x}] ({len(data)} bytes) {data[:48].hex()}")
+        trace(f"recv {name} [0x{opcode:x}] ({len(data)} bytes) {data[:48].hex()}")
 
     def decode_v2(self, opcode: int, data: bytes) -> None:
         """Turn a camera reply into state, following the app's handleReceiveData."""
@@ -1224,7 +1239,7 @@ class FurboP2P:
             CMD["SET_BARKING"] + 1,
         ):
             s.setdefault("results", {})[name] = "ok" if ok else f"error {data[0] if data else '?'}"
-        log(f"recv {name} [0x{opcode:x}] ({len(data)} bytes) {data[:32].hex()}")
+        trace(f"recv {name} [0x{opcode:x}] ({len(data)} bytes) {data[:32].hex()}")
 
     def register(self, creds: dict) -> None:
         """What the app does right after the channel opens. On V2 devices it
