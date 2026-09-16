@@ -34,10 +34,11 @@ from homeassistant.util import dt as dt_util
 import voluptuous as vol
 
 from .api import EVENTS_DEFAULT_LIMIT, FurboError
-from .const import ALERT_KEYS, DOMAIN
+from .const import DOMAIN, EVENT_NAMES
 
 if TYPE_CHECKING:
     from . import FurboConfigEntry
+    from .coordinator import FurboCoordinator
 
 SERVICE_GET_EVENTS: Final = "get_events"
 SERVICE_GET_INSIGHT_REPORT: Final = "get_insight_report"
@@ -58,8 +59,11 @@ GET_EVENTS_SCHEMA: Final = vol.Schema(
         vol.Optional(ATTR_DEVICE_IDS): vol.All(cv.ensure_list, [cv.string]),
         # Checked here rather than sent on, because the cloud's answer to a
         # name it does not know is the same bare 12001 it gives for a missing
-        # field, with nothing to say which one was wrong.
-        vol.Optional(ATTR_EVENT_NAMES): vol.All(cv.ensure_list, [vol.In(ALERT_KEYS)]),
+        # field, with nothing to say which one was wrong. Checked against the
+        # event list's own vocabulary, not the alert switches': they overlap
+        # but neither contains the other, and validating against the switches
+        # made CatSelfie unaskable on the cameras that have it.
+        vol.Optional(ATTR_EVENT_NAMES): vol.All(cv.ensure_list, [vol.In(EVENT_NAMES)]),
         vol.Optional(ATTR_LIMIT, default=EVENTS_DEFAULT_LIMIT): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=1000)
         ),
@@ -118,6 +122,25 @@ def _moment(value: datetime | None) -> int | None:
     return int(dt_util.as_utc(value).timestamp())
 
 
+def _enabled_events(coordinator: FurboCoordinator, device_ids: list[str]) -> list[str]:
+    """Return the event names to ask for when the caller names none.
+
+    The app never omits this field: it sends the account's enabled alerts on
+    every request. Omitting it returns events on some accounts and nothing at
+    all on others, which is a difference nobody can see from the outside, so
+    the safer default is to do what the app does. Names outside the event
+    list's vocabulary are dropped, since several alerts cannot be asked for.
+    """
+    wanted: set[str] = set()
+    for device_id in device_ids:
+        device = coordinator.data.devices.get(device_id)
+        if device is None:
+            continue
+        wanted.update(key for key, value in device.alerts.items() if value == "1")
+    # Order follows EVENT_NAMES so the request is stable between calls.
+    return [name for name in EVENT_NAMES if name in wanted]
+
+
 async def _async_get_events(call: ServiceCall) -> ServiceResponse:
     """Return the events in a window, each with its own clip links."""
     entry = _entry(call.hass, call)
@@ -138,12 +161,15 @@ async def _async_get_events(call: ServiceCall) -> ServiceResponse:
         raise ServiceValidationError(
             translation_domain=DOMAIN, translation_key="no_cameras"
         )
+    event_names = call.data.get(ATTR_EVENT_NAMES) or _enabled_events(
+        coordinator, device_ids
+    )
     try:
         events = await coordinator.client.get_events(
             start=start,
             end=end,
             device_ids=device_ids,
-            event_names=call.data.get(ATTR_EVENT_NAMES),
+            event_names=event_names,
             limit=call.data[ATTR_LIMIT],
         )
     except FurboError as err:

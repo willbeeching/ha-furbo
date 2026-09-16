@@ -360,3 +360,107 @@ async def test_one_end_of_the_window_may_be_given_alone(
     sent = mock_client.get_events.await_args.kwargs
     assert sent["start"] == LONDON_START
     assert sent["end"] is None
+
+
+async def test_the_enabled_alerts_are_sent_when_no_event_name_is_given(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """The app never omits EventNames, and nor should we.
+
+    Leaving the field out returns events on some accounts and nothing at all
+    on others, a difference invisible from the outside. Disabled alerts are
+    left out, and the "Frequency:*" cooldown keys are not event names at all.
+    """
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    await _call(
+        hass, "get_events", {"config_entry_id": mock_config_entry.entry_id, **WINDOW}
+    )
+
+    # PersonDetection is "0" in the fixture, so it is absent; the order is
+    # EVENT_NAMES' own, so two identical calls send an identical request.
+    assert mock_client.get_events.await_args.kwargs["event_names"] == [
+        "Barking",
+        "ContinuousBarking",
+        "Crying",
+        "Selfie",
+        "DogMoveAbove10Sec",
+    ]
+
+
+async def test_a_named_event_wins_over_the_enabled_alerts(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """Asking for one kind of event does not quietly widen to all of them."""
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    await _call(
+        hass,
+        "get_events",
+        {
+            "config_entry_id": mock_config_entry.entry_id,
+            "event_names": ["Barking"],
+            **WINDOW,
+        },
+    )
+
+    assert mock_client.get_events.await_args.kwargs["event_names"] == ["Barking"]
+
+
+async def test_a_cat_camera_can_be_asked_for_its_own_events(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A cat camera reports Meowing and CatSelfie, never Barking or Selfie.
+
+    Validating against the alert switches' list rejected every name an
+    FBC0030 actually uses, so the one question worth asking on those cameras
+    was the one question the action refused.
+    """
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    await _call(
+        hass,
+        "get_events",
+        {
+            "config_entry_id": mock_config_entry.entry_id,
+            "event_names": ["CatSelfie", "Meowing", "CatActivity"],
+            **WINDOW,
+        },
+    )
+
+    assert mock_client.get_events.await_args.kwargs["event_names"] == [
+        "CatSelfie",
+        "Meowing",
+        "CatActivity",
+    ]
+
+
+async def test_an_alert_that_is_not_an_event_name_is_still_refused(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """The two vocabularies overlap without either containing the other.
+
+    Run is a real alert you can switch on, and the event list has never been
+    able to filter by it, so widening the check to every alert key would have
+    swapped one wrong answer for another.
+    """
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+
+    with pytest.raises(vol.Invalid):
+        await _call(
+            hass,
+            "get_events",
+            {
+                "config_entry_id": mock_config_entry.entry_id,
+                "event_names": ["Run"],
+                **WINDOW,
+            },
+        )
+    assert mock_client.get_events.await_count == 0

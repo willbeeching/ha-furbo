@@ -6,6 +6,36 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.8.0
+
+- **Cat cameras get their own alerts.** A Furbo cat camera (`FBC0030`,
+  `MC0030`) does not report a subset of a dog camera's alerts, it reports a
+  different vocabulary: `Meowing` where a dog barks, `CatActivity` where a dog
+  moves, `CatSelfie`, `CatCrying`, `CatVomit` and the rest. This integration's
+  alert list was built from one FB0030 and shipped as everybody's, so a cat
+  camera owner got switches for the four keys the two lists happen to share
+  and nothing at all for the other fifteen alerts their cameras have. All of
+  them are now named, given icons and switchable. Refs #6.
+- **`furbo.get_events` can be asked for a cat camera's events.** The action
+  validated `event_names` against the alert switches' list, so every name an
+  `FBC0030` actually uses was refused, and the UI's own picker did not offer
+  them either. Event names are their own vocabulary, overlapping the alerts
+  without either containing the other: `Run`, `Chew` and `FurboOnOff` are
+  alerts the event list cannot filter by, and `Earthquake`, `AutoCalm` and
+  `Fighting` are the other way round. The action now uses that list.
+- **`furbo.get_events` sends the event names it did not used to.** The Furbo
+  app never omits that field; it sends the account's enabled alerts on every
+  request. Leaving it out returns events on some accounts and nothing at all
+  on others, a difference invisible from the outside. When you do not name
+  any, the enabled alerts for the cameras you asked about are sent, which is
+  what the app does with information this integration already holds.
+- Cat models are named rather than shown as raw product ids, and the everyday
+  alerts enabled by default now include the cat equivalents, so a cat camera
+  no longer arrives with every switch turned off.
+- Tests now fail if the alert list, the translations, the icons and the
+  action's picker stop agreeing with each other. Four hand-maintained copies
+  of overlapping lists is how the above happened.
+
 ## 1.7.3
 
 - **The debug line for `furbo.get_events` now includes the window it sent, by

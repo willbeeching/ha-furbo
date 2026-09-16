@@ -159,6 +159,54 @@
       },
       "calm_enabled": {
         "name": "Calm my pet"
+      },
+      "alert_meowing": {
+        "name": "Meowing alert"
+      },
+      "alert_continuous_meowing": {
+        "name": "Continuous meowing alert"
+      },
+      "alert_cat_crying": {
+        "name": "Crying alert"
+      },
+      "alert_continuous_cat_crying": {
+        "name": "Continuous crying alert"
+      },
+      "alert_cat_activity": {
+        "name": "Activity alert"
+      },
+      "alert_cat_run": {
+        "name": "Running alert"
+      },
+      "alert_cat_selfie": {
+        "name": "Selfie alert"
+      },
+      "alert_cat_eat_drink": {
+        "name": "Eating or drinking alert"
+      },
+      "alert_cat_chew": {
+        "name": "Chewing alert"
+      },
+      "alert_cat_pee_poo": {
+        "name": "Pee or poo alert"
+      },
+      "alert_continuous_cat_pee_poo": {
+        "name": "Continuous pee or poo alert"
+      },
+      "alert_cat_vomit": {
+        "name": "Vomit alert"
+      },
+      "alert_continuous_cat_vomit": {
+        "name": "Continuous vomit alert"
+      },
+      "alert_cat_seizure": {
+        "name": "Seizure alert"
+      },
+      "alert_continuous_cat_seizure": {
+        "name": "Continuous seizure alert"
+      },
+      "alert_cat_furbo_online": {
+        "name": "Furbo online alert"
       }
     },
     "sensor": {

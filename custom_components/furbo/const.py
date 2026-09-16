@@ -55,12 +55,20 @@ MANUFACTURER: Final = "Furbo"
 # an unknown id falls back to the raw id rather than a guessed name.
 MODEL_NAMES: Final = {
     "FB0030": "Furbo 360",
+    "FBC0030": "Furbo 360 Cat",
+    "MC0030": "Furbo Mini Cat",
 }
 
 # Smart-alert flags exposed as switches. Keys are the exact names the
-# /v5/device/alert-setting payload uses (verified live, FB0030 firmware 108).
-# "Frequency:*" cooldown keys are intentionally not exposed. Only alerts we
-# have named and translated are surfaced; unknown keys are ignored.
+# /v5/device/alert-setting payload uses. "Frequency:*" cooldown keys are
+# intentionally not exposed. Only alerts we have named and translated are
+# surfaced; unknown keys are ignored.
+#
+# The cat keys are not variants of the dog ones, they are a separate
+# vocabulary a cat camera reports instead: Meowing where a dog barks,
+# CatActivity where a dog moves. This list was first built from one FB0030
+# and so held only the dog half, which left an FBC0030 owner with four
+# switches out of nineteen alerts and no way to name the rest.
 ALERT_KEYS: Final = (
     "Barking",
     "ContinuousBarking",
@@ -83,6 +91,23 @@ ALERT_KEYS: Final = (
     "GlassBreaking",
     "HomeEmergency",
     "FurboOnOff",
+    # Cat cameras (FBC0030, MC0030).
+    "Meowing",
+    "ContinuousMeowing",
+    "CatCrying",
+    "ContinuousCatCrying",
+    "CatActivity",
+    "CatRun",
+    "CatSelfie",
+    "CatEatDrink",
+    "CatChew",
+    "CatPeePoo",
+    "ContinuousCatPeePoo",
+    "CatVomit",
+    "ContinuousCatVomit",
+    "CatSeizure",
+    "ContinuousCatSeizure",
+    "CatFurboOnline",
 )
 
 # The everyday alerts, enabled by default. The rest (continuous variants,
@@ -90,14 +115,63 @@ ALERT_KEYS: Final = (
 # specialised or noisy, so their switches are created disabled by default and
 # the user enables the ones they want.
 DEFAULT_ENABLED_ALERTS: Final = frozenset(
-    {"Barking", "Crying", "PersonDetection", "DogMoveAbove10Sec"}
+    {
+        "Barking",
+        "Crying",
+        "PersonDetection",
+        "DogMoveAbove10Sec",
+        # The same four everyday alerts as a cat camera names them.
+        "Meowing",
+        "CatCrying",
+        "CatActivity",
+    }
 )
 
 
 # Smart alerts that also expose a notification-frequency select. Kept to the
 # everyday alerts to avoid a select per alert. Only created when the device
 # reports a "Frequency:<alert>" value for the alert.
-FREQUENCY_ALERTS: Final = ("Barking", "PersonDetection", "DogMoveAbove10Sec")
+FREQUENCY_ALERTS: Final = (
+    "Barking",
+    "PersonDetection",
+    "DogMoveAbove10Sec",
+    "Meowing",
+    "CatActivity",
+)
+
+# What the event list can be filtered by, which is not the same set as the
+# alerts above. Read from the app, which builds this list from the account's
+# active features and sends it on every event request, never omitting it.
+# Run, EatDrink, Chew, PeePoo, Seizure and FurboOnOff are alerts you can turn
+# on but cannot ask the event list for; Earthquake, AutoCalm and Fighting are
+# the other way round.
+EVENT_NAMES: Final = (
+    "PersonDetection",
+    "GlassBreaking",
+    "Earthquake",
+    "HomeEmergency",
+    "AutoCalm",
+    "Barking",
+    "ContinuousBarking",
+    "Crying",
+    "ContinuousCrying",
+    "Howling",
+    "ContinuousHowling",
+    "Selfie",
+    "DogMoveAbove10Sec",
+    "Vomit",
+    "ContinuousVomit",
+    "Meowing",
+    "ContinuousMeowing",
+    "CatCrying",
+    "ContinuousCatCrying",
+    "CatSelfie",
+    "CatActivity",
+    "CatVomit",
+    "ContinuousCatVomit",
+    "Fighting",
+)
+
 
 # Frequency value (seconds, as the API stores it) -> option key. From the app:
 # ALWAYS "1", EVERY_30_MINS "1800", EVERY_1_HR "3600".

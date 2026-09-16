@@ -172,6 +172,118 @@
       },
       "calm_enabled": {
         "default": "mdi:heart-pulse"
+      },
+      "alert_meowing": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_continuous_meowing": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_cat_crying": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_continuous_cat_crying": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_cat_activity": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_cat_run": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_cat_selfie": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_cat_eat_drink": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_cat_chew": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_cat_pee_poo": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_continuous_cat_pee_poo": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_cat_vomit": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_continuous_cat_vomit": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_cat_seizure": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_continuous_cat_seizure": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
+      },
+      "alert_cat_furbo_online": {
+        "default": "mdi:bell",
+        "state": {
+          "on": "mdi:bell-ring",
+          "off": "mdi:bell-off"
+        }
       }
     },
     "sensor": {

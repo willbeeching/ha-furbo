@@ -23,27 +23,30 @@ get_events:
           multiple: true
           custom_value: false
           options:
+            - PersonDetection
+            - GlassBreaking
+            - Earthquake
+            - HomeEmergency
+            - AutoCalm
             - Barking
             - ContinuousBarking
             - Crying
             - ContinuousCrying
             - Howling
             - ContinuousHowling
-            - PersonDetection
-            - DogMoveAbove10Sec
-            - Run
             - Selfie
-            - EatDrink
-            - Chew
-            - PeePoo
-            - ContinuousPeePoo
+            - DogMoveAbove10Sec
             - Vomit
             - ContinuousVomit
-            - Seizure
-            - ContinuousSeizure
-            - GlassBreaking
-            - HomeEmergency
-            - FurboOnOff
+            - Meowing
+            - ContinuousMeowing
+            - CatCrying
+            - ContinuousCatCrying
+            - CatSelfie
+            - CatActivity
+            - CatVomit
+            - ContinuousCatVomit
+            - Fighting
     limit:
       default: 200
       selector:

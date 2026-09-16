@@ -215,3 +215,39 @@ async def test_diary_sensor_is_unknown_without_a_diary(
     diary = hass.states.get("sensor.furbo_account_doggie_diary_days")
     assert diary.state == "unknown"
     assert "days" not in diary.attributes
+
+
+async def test_a_cat_camera_gets_switches_for_its_own_alerts(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A cat camera reports a different alert vocabulary, not a subset.
+
+    The alert list was first built from a single dog camera, so an FBC0030
+    owner got switches for the four keys the two vocabularies happen to share
+    and nothing for the fifteen alerts their cameras actually have.
+    """
+    mock_client.get_alert_settings.return_value = {
+        "Meowing": "1",
+        "ContinuousMeowing": "0",
+        "CatCrying": "1",
+        "CatActivity": "1",
+        "CatSelfie": "1",
+        "CatVomit": "0",
+        "PersonDetection": "1",
+        "HomeEmergency": "1",
+    }
+    await setup_integration(hass, mock_config_entry)
+    registry = er.async_get(hass)
+
+    assert hass.states.get("switch.test_camera_meowing_alert").state == "on"
+    assert hass.states.get("switch.test_camera_activity_alert").state == "on"
+    # Not in this camera's payload, so no switch, same as any unknown key.
+    assert hass.states.get("switch.test_camera_barking_alert") is None
+
+    # Named and translated, not left as a raw key.
+    meowing = registry.async_get("switch.test_camera_meowing_alert")
+    assert meowing is not None and meowing.disabled_by is None
+
+    entries = er.async_entries_for_config_entry(registry, mock_config_entry.entry_id)
+    selfie = next(e for e in entries if e.unique_id.endswith("_alert_CatSelfie"))
+    assert selfie.disabled_by is er.RegistryEntryDisabler.INTEGRATION
