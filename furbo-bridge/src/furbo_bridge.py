@@ -66,6 +66,7 @@ from aiohttp import web
 
 from furbo_cloud import configure_logging
 import furbo_p2p as fp
+import furbo_ts as ts
 
 _LOGGER = logging.getLogger("furbo_bridge")
 
@@ -589,8 +590,12 @@ class P2PWorker:
                 ", with audio" if audio else "",
             )
 
-    def iter_frames(self) -> Iterator[bytes]:
+    def iter_frames(self, timed: bool = False) -> Iterator[Any]:
         """Yield H.264 frames until the viewer leaves or the session drops.
+
+        With ``timed`` each frame comes as ``(payload, milliseconds)``, the
+        stamp the camera put on it. That stamp is the only clock video and
+        audio share, so it is what makes muxing them together possible.
 
         Deliberately does not take _lock, so control commands keep working
         while video runs. Ends quietly on any SDK error; go2rtc reconnects.
@@ -644,7 +649,7 @@ class P2PWorker:
                                 skipped,
                             )
                             opened = True
-                    yield frame
+                    yield (frame, info.timestamp_ms) if timed else frame
                     continue
                 outcomes[ret] = outcomes.get(ret, 0) + 1
                 biggest_expected = max(biggest_expected, expected)
@@ -683,8 +688,11 @@ class P2PWorker:
                     ", ".join(f"{fp.err(c)} x{n}" for c, n in sorted(outcomes.items())),
                 )
 
-    def iter_audio(self) -> Iterator[bytes]:
+    def iter_audio(self, timed: bool = False) -> Iterator[Any]:
         """Yield audio frames until the viewer leaves or the stream ends.
+
+        With ``timed`` each frame comes as ``(payload, milliseconds)``, from
+        the camera's own header, on the same clock as the video's.
 
         A separate SDK queue from the video, read on its own thread. It stops
         when the video does rather than on a timeout of its own: a camera with
@@ -718,7 +726,8 @@ class P2PWorker:
                             size,
                             fp.looks_like_adts(frame),
                         )
-                    yield frame
+                    stamp = fp.audio_format(raw).get("timestamp", 0)
+                    yield (frame, stamp) if timed else frame
                     continue
                 if ret == fp.AV_ER_DATA_NOREADY:
                     time.sleep(0.005)
@@ -1072,6 +1081,81 @@ def create_app(
             reader.join(timeout=5)
         return response
 
+    async def get_av(request: web.Request) -> web.StreamResponse:
+        """Serve video and audio together, as one transport stream.
+
+        The two arrive as separate queues of bare frames. Passing them to
+        ffmpeg as two pipes leaves the tracks seconds apart, because nothing
+        in either says how they relate; the camera's own stamps do, and a
+        transport stream has somewhere to carry them. So the muxing happens
+        here, where both stamps are in hand, rather than downstream where
+        neither is.
+        """
+        worker = target(request)
+        quality = read_quality(worker.key)
+        await run(worker, worker.open_stream, quality, True)
+        response = web.StreamResponse(
+            status=200,
+            headers={"Content-Type": "video/MP2T", "Cache-Control": "no-store"},
+        )
+        await response.prepare(request)
+
+        loop = asyncio.get_running_loop()
+        parts: FrameQueue = FrameQueue()
+        done = object()
+
+        def pump(kind: str, frames: Iterator[Any]) -> None:
+            try:
+                for payload, stamp in frames:
+                    loop.call_soon_threadsafe(parts.offer, (kind, payload, stamp))
+            finally:
+                loop.call_soon_threadsafe(parts.offer, (kind, done, 0))
+
+        readers = [
+            threading.Thread(
+                target=pump,
+                args=(kind, frames),
+                name=f"furbo-{kind}-{worker.key}",
+                daemon=True,
+            )
+            for kind, frames in (
+                ("video", worker.iter_frames(timed=True)),
+                ("audio", worker.iter_audio(timed=True)),
+            )
+        ]
+        for reader in readers:
+            reader.start()
+
+        mux = ts.TSMuxer()
+        origin: int | None = None
+        finished = 0
+        try:
+            while finished < len(readers):
+                kind, payload, stamp = await parts.get()
+                if payload is done:
+                    finished += 1
+                    if kind == "video":
+                        # No picture means the stream is over, so stop the
+                        # audio reader too. Draining rather than breaking:
+                        # frames already read are still owed to the viewer,
+                        # and breaking here dropped whichever track happened
+                        # to finish second.
+                        await run(worker, worker.close_stream)
+                    continue
+                if origin is None:
+                    origin = stamp
+                seconds = max(0.0, (stamp - origin) / 1000.0)
+                emit = mux.video if kind == "video" else mux.audio
+                for packet in emit(payload, seconds):
+                    await response.write(packet)
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        finally:
+            await run(worker, worker.close_stream)
+            for reader in readers:
+                reader.join(timeout=5)
+        return response
+
     app = web.Application(middlewares=[auth_and_errors])
     routes = [
         web.get("/api/cameras", get_cameras),
@@ -1083,6 +1167,7 @@ def create_app(
         ("status", web.get, get_status),
         ("stream", web.get, get_stream),
         ("audio", web.get, get_audio),
+        ("av", web.get, get_av),
         ("settings", web.post, post_settings),
         ("pan", web.post, post_pan),
         ("toss", web.post, post_toss),

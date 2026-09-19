@@ -35,24 +35,17 @@ fi
 PROBE=(-probesize 500000 -analyzeduration 1000000)
 
 if [ "${FURBO_AUDIO:-false}" = "true" ]; then
-  # Two tracks, so ffmpeg needs two inputs and the video can no longer be a
-  # plain pipe on stdin: a named pipe carries it instead while curl fetches the
-  # audio on a second connection. Both are bare elementary streams with no
-  # container timestamps, so ffmpeg is told to stamp them on arrival; without
-  # that it assumes a frame rate for the video and nothing at all for the
-  # audio, and the two drift apart within seconds.
-  FIFO="$(mktemp -u)"; mkfifo "$FIFO"
-  trap 'rm -f "$FIFO"' EXIT
-  curl -sS -N --fail-with-body \
-      -H "Authorization: Bearer ${API_TOKEN}" \
-      "$URL" > "$FIFO" &
+  # One stream carrying both tracks. The bridge muxes them using the camera's
+  # own timestamps, which is the only clock the two share: handed to ffmpeg as
+  # two separate pipes they land three seconds apart, and no combination of its
+  # timestamp flags closes that, because neither pipe says how it relates to
+  # the other. A transport stream has somewhere to put the answer.
   exec curl -sS -N --fail-with-body \
       -H "Authorization: Bearer ${API_TOKEN}" \
-      "${URL%/stream}/audio" \
+      "${URL%/stream}/av" \
     | exec ffmpeg -hide_banner -loglevel error -fflags nobuffer \
-        -use_wallclock_as_timestamps 1 "${PROBE[@]}" -f h264 -i "$FIFO" \
-        -use_wallclock_as_timestamps 1 "${PROBE[@]}" -f aac -i - \
-        -map 0:v:0 -map 1:a:0 -c copy -rtsp_transport tcp -f rtsp "$1"
+        "${PROBE[@]}" -f mpegts -i - \
+        -c copy -rtsp_transport tcp -f rtsp "$1"
 fi
 
 exec curl -sS -N --fail-with-body \

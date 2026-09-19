@@ -3,6 +3,26 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.3
+
+- **The camera's microphone can now be carried on the live stream.** Off by
+  default; turn on the new `audio` option to enable it. The camera has always
+  had a microphone, and this add-on has always asked it only for pictures.
+- **Sound and picture stay together, because the bridge now muxes them.** The
+  two arrive from the camera as separate queues of bare frames, and neither
+  carries a container timestamp. Handed to ffmpeg as two pipes they landed
+  three seconds apart, and no combination of its timestamp flags closed the
+  gap: two clockless streams have no common zero. The camera stamps both, on
+  one clock, so the bridge now writes a transport stream carrying those stamps
+  and serves it on one connection. Measured end to end, an offset asked for is
+  the offset that comes back out, to the millisecond.
+- The audio format is read from the camera rather than assumed. The first
+  frame of each stream logs its codec id, sample rate, bit depth, channel
+  count and whether it opens with an AAC sync word, because nothing published
+  says what a given Furbo's microphone sends.
+- Video-only streaming is untouched. Leaving the option off takes exactly the
+  path it did in 1.3.2, down to the ffmpeg command.
+
 ## 1.3.2
 
 - **The live stream starts in well under a second instead of three.** ffmpeg

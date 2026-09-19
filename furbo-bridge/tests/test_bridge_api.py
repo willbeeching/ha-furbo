@@ -21,6 +21,7 @@ from aiohttp.test_utils import TestClient, TestServer
 import pytest
 
 import furbo_bridge as fb
+import furbo_ts as ts
 
 TOKEN = "s3cret-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -46,6 +47,7 @@ class FakeWorker:
         self.needs_login = False
         self.frames: list[bytes] = []
         self.busy = False
+        self.audio = False
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
     # -- video ---------------------------------------------------------------
@@ -57,12 +59,14 @@ class FakeWorker:
         self.streaming = True
         self.audio = audio
 
-    def iter_frames(self):
-        yield from self.frames
+    def iter_frames(self, timed: bool = False):
+        for index, frame in enumerate(self.frames):
+            yield (frame, index * 100) if timed else frame
         self.streaming = False
 
-    def iter_audio(self):
-        yield from getattr(self, "audio_frames", ())
+    def iter_audio(self, timed: bool = False):
+        for index, frame in enumerate(getattr(self, "audio_frames", ())):
+            yield (frame, index * 20) if timed else frame
 
     def close_stream(self) -> None:
         self.calls.append(("close_stream", ()))
@@ -481,3 +485,46 @@ def test_a_renewal_needing_a_person_says_so() -> None:
         assert (await resp.json())["error"] == "login_required"
 
     with_credentials(fb.fp.LoginRequired("set a fresh mfa_code"), scenario)
+
+
+def test_av_serves_one_transport_stream_carrying_both_tracks() -> None:
+    """The combined endpoint is what keeps sound and picture together.
+
+    Video and audio reach the bridge as two queues of bare frames. Served
+    separately they arrive at ffmpeg with no way to relate them and land
+    seconds apart, so they are muxed here instead, on the camera's own clock.
+    """
+    seen: dict[str, Any] = {}
+
+    async def scenario(client: Any, worker: Any) -> None:
+        worker.frames = [b"\x00\x00\x00\x01\x65" + b"\xaa" * 60]
+        worker.audio_frames = [b"\xff\xf1" + b"\xbb" * 30]
+        resp = await client.get("/api/av", headers=AUTH)
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "video/MP2T"
+        seen["body"] = await resp.read()
+        seen["audio"] = worker.audio
+
+    _run(scenario)
+    body = seen["body"]
+    assert body and len(body) % ts.PACKET_SIZE == 0, "not whole transport packets"
+    packets = [body[i : i + ts.PACKET_SIZE] for i in range(0, len(body), ts.PACKET_SIZE)]
+    assert all(p[0] == ts.SYNC_BYTE for p in packets)
+    pids = {((p[1] & 0x1F) << 8) | p[2] for p in packets}
+    # Both tracks, and the tables a viewer needs before either is any use.
+    assert {ts.PAT_PID, ts.PMT_PID, ts.VIDEO_PID, ts.AUDIO_PID} <= pids
+    # Audio was asked for, which a video-only request must not do.
+    assert seen["audio"] is True
+
+
+def test_the_plain_stream_endpoint_asks_for_no_audio() -> None:
+    """Sound is opt-in, so the video path must not turn the microphone on."""
+    seen: dict[str, Any] = {}
+
+    async def scenario(client: Any, worker: Any) -> None:
+        worker.frames = [b"abc"]
+        await client.get("/api/stream", headers=AUTH)
+        seen["audio"] = worker.audio
+
+    _run(scenario)
+    assert seen["audio"] is False
