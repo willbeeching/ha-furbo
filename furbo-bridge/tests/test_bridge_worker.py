@@ -841,14 +841,55 @@ def test_a_full_queue_still_delivers_a_tagged_end_marker() -> None:
 
     marker = ("video", object(), 0)
     queue.offer(marker, True)
+    assert marker in _drain(queue), "a full queue swallowed the end marker"
 
-    drained = []
+
+def _drain(queue: fb.FrameQueue) -> list:
+    """Everything currently queued, markers unwrapped as get() would."""
+    out = []
     while True:
         try:
-            drained.append(queue._queue.get_nowait())
+            _marker, value = queue._queue.get_nowait()
         except Exception:
-            break
-    assert marker in drained, "a full queue swallowed the end marker"
+            return out
+        out.append(value)
+
+
+@pytest.mark.parametrize("maxsize", [2, fb.STREAM_QUEUE_MAX])
+def test_one_track_ending_does_not_evict_the_other_track_s_marker(maxsize: int) -> None:
+    """Two tracks means two markers, and neither may displace the other.
+
+    Bounding the queue itself meant making room for a marker by evicting the
+    oldest item, which is sometimes the marker the other track already left.
+    The response then waits for a track that finished long ago. Checked at the
+    size the add-on actually runs as well as a small one, because the bug
+    survives either.
+    """
+    queue = fb.FrameQueue(maxsize=maxsize)
+    video_done = ("video", object(), 0)
+    audio_done = ("audio", object(), 0)
+
+    queue.offer(video_done, True)
+    for _ in range(maxsize + 10):
+        queue.offer(("audio", b"frame", 0))
+    queue.offer(audio_done, True)
+
+    queued = _drain(queue)
+    assert video_done in queued, "the audio track's end evicted the video track's"
+    assert audio_done in queued
+
+
+def test_the_frame_limit_still_holds_with_markers_queued() -> None:
+    """Markers must not become a way round the bound they are exempt from."""
+    queue = fb.FrameQueue(maxsize=4)
+    queue.offer(("video", object(), 0), True)
+    for _ in range(50):
+        queue.offer(("video", b"frame", 0))
+
+    queued = _drain(queue)
+    frames = [item for item in queued if item[1] == b"frame"]
+    assert len(frames) == 4, "the frame bound stopped being enforced"
+    assert queue.dropped == 46
 
 
 def test_both_readers_are_waited_for_before_the_channel_closes(

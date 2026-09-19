@@ -1215,39 +1215,49 @@ def create_app(
 class FrameQueue:
     """Frames on their way from the reader thread to one viewer's response.
 
-    Bounded, and drops frames when the viewer cannot keep up. The end-of-stream
-    marker is never dropped: losing it leaves the response waiting for a frame
-    that will never come, holding the camera's single video slot until the
-    viewer disconnects. A viewer too slow to keep up is exactly when the reader
-    gives up, so the full queue is the case that has to deliver it.
+    Drops frames when the viewer cannot keep up, and never drops an
+    end-of-stream marker: losing one leaves the response waiting for a track
+    that has already finished, holding the camera's single stream slot until
+    the viewer disconnects. A viewer too slow to keep up is exactly when a
+    reader gives up, so a queue under pressure is the case that has to
+    deliver it.
+
+    The limit therefore counts droppable frames, not everything queued. Two
+    earlier attempts bounded the queue itself and lost a marker each way: by
+    matching on ``None`` while the muxed stream's markers are tuples, and then
+    by evicting the oldest item to make room, which is sometimes the other
+    track's marker. With nothing to evict there is nothing to get wrong, and
+    the bound still holds: a marker per reader is two items, not a leak.
+
+    ``offer`` and ``get`` both run on the event loop, the readers reaching it
+    through ``call_soon_threadsafe``, so the count needs no lock.
     """
 
     def __init__(self, maxsize: int = STREAM_QUEUE_MAX) -> None:
-        self._queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=maxsize)
+        self._queue: asyncio.Queue[tuple[bool, Any]] = asyncio.Queue()
+        self._maxsize = maxsize
+        self._frames = 0
         self.dropped = 0
 
     def offer(self, frame: Any, final: bool = False) -> None:
         """Add a frame, or an end-of-stream marker. Never raises.
 
-        A marker is anything offered with ``final``, not only a bare ``None``.
-        The muxed stream tags each item with the track it came from, so its
-        markers are tuples, and a queue that protected only ``None`` dropped
-        them whenever it was full: the invariant above, lost to the shape of
-        the value rather than its meaning.
+        A marker is anything offered with ``final``, not only a bare ``None``:
+        what makes it undroppable is what it means, not what shape it is.
         """
-        if final or frame is None:
-            while self._queue.full():
-                self._queue.get_nowait()
+        marker = bool(final) or frame is None
+        if not marker:
+            if self._frames >= self._maxsize:
                 self.dropped += 1
-            self._queue.put_nowait(frame)
-            return
-        if self._queue.full():
-            self.dropped += 1
-            return
-        self._queue.put_nowait(frame)
+                return
+            self._frames += 1
+        self._queue.put_nowait((marker, frame))
 
     async def get(self) -> Any:
-        return await self._queue.get()
+        marker, frame = await self._queue.get()
+        if not marker:
+            self._frames -= 1
+        return frame
 
 
 def stream_name(device_id: str) -> str:

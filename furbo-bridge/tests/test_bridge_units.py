@@ -189,7 +189,9 @@ def test_end_of_stream_survives_a_full_queue() -> None:
     frames.offer(None)  # must arrive anyway
     drained = []
     while True:
-        item = frames._queue.get_nowait()
+        # Each item is queued alongside whether it is a marker, which is what
+        # keeps the bound on frames rather than on everything.
+        _marker, item = frames._queue.get_nowait()
         drained.append(item)
         if item is None:
             break
