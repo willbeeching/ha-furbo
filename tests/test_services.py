@@ -15,7 +15,7 @@ import voluptuous as vol
 
 from custom_components.furbo import async_setup
 from custom_components.furbo.api import FurboError
-from custom_components.furbo.const import DOMAIN
+from custom_components.furbo.const import DOMAIN, EVENT_NAMES
 
 from . import const as c
 from .conftest import setup_integration
@@ -464,3 +464,45 @@ async def test_an_alert_that_is_not_an_event_name_is_still_refused(
             },
         )
     assert mock_client.get_events.await_count == 0
+
+
+async def test_event_names_are_sent_even_with_every_alert_off(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """An empty list is the one answer that cannot be sent.
+
+    Turning every alert off emptied the default, which put the field back to
+    absent and quietly restored the very behaviour 1.8.0 exists to avoid.
+    Alerts being off stops new events being recorded; it does not remove the
+    ones already there, and a window in the past is a fair thing to ask for.
+    """
+    mock_client.get_alert_settings.return_value = dict.fromkeys(c.ALERTS, "0")
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    await _call(
+        hass, "get_events", {"config_entry_id": mock_config_entry.entry_id, **WINDOW}
+    )
+
+    sent = mock_client.get_events.await_args.kwargs["event_names"]
+    assert sent, "asking with no event names at all is what we are avoiding"
+    # What these cameras can report, rather than the whole vocabulary.
+    assert "Barking" in sent
+    assert "CatSelfie" not in sent
+
+
+async def test_event_names_fall_back_when_no_alerts_are_known(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry: MockConfigEntry
+) -> None:
+    """A camera whose alerts never loaded still gets a request with the field."""
+    mock_client.get_alert_settings.return_value = {}
+    _london(hass)
+    await setup_integration(hass, mock_config_entry)
+    mock_client.get_events.return_value = []
+
+    await _call(
+        hass, "get_events", {"config_entry_id": mock_config_entry.entry_id, **WINDOW}
+    )
+
+    assert mock_client.get_events.await_args.kwargs["event_names"] == list(EVENT_NAMES)

@@ -18,6 +18,7 @@ import pytest
 import yaml
 
 from custom_components.furbo.const import (
+    ALERT_FREQUENCIES,
     ALERT_KEYS,
     DEFAULT_ENABLED_ALERTS,
     EVENT_NAMES,
@@ -57,6 +58,31 @@ def test_the_action_offers_exactly_the_event_names_it_accepts() -> None:
     fields = _load("services.yaml")["get_events"]["fields"]
     options = fields["event_names"]["selector"]["select"]["options"]
     assert options == list(EVENT_NAMES)
+
+
+def test_every_frequency_alert_has_a_named_select() -> None:
+    """A frequency select needs its own name, options and icon.
+
+    Adding the cat everyday alerts to FREQUENCY_ALERTS created two selects with
+    no translations at all, which ship as "frequency_cat_activity" with raw
+    option keys. The check below only proved the alert existed, not that the
+    select it implies was ever described, so it passed.
+    """
+    for filename in ("strings.json", "translations/en.json"):
+        selects = _load(filename)["entity"]["select"]
+        for alert in FREQUENCY_ALERTS:
+            key = f"frequency_{_snake(alert)}"
+            assert key in selects, f"{key} missing from {filename}"
+            assert selects[key].get("name"), f"{key} has no name in {filename}"
+            # The three cooldown choices, or the UI shows the raw values.
+            assert set(selects[key].get("state", {})) == set(ALERT_FREQUENCIES.values())
+    icons = _load("icons.json")["entity"]["select"]
+    missing = [
+        f"frequency_{_snake(alert)}"
+        for alert in FREQUENCY_ALERTS
+        if f"frequency_{_snake(alert)}" not in icons
+    ]
+    assert not missing
 
 
 def test_the_defaults_name_alerts_that_exist() -> None:

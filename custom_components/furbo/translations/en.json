@@ -301,6 +301,22 @@
           "every_30_minutes": "Every 30 minutes",
           "every_hour": "Every hour"
         }
+      },
+      "frequency_meowing": {
+        "name": "Meowing alert frequency",
+        "state": {
+          "always": "Always",
+          "every_30_minutes": "Every 30 minutes",
+          "every_hour": "Every hour"
+        }
+      },
+      "frequency_cat_activity": {
+        "name": "Activity alert frequency",
+        "state": {
+          "always": "Always",
+          "every_30_minutes": "Every 30 minutes",
+          "every_hour": "Every hour"
+        }
       }
     },
     "button": {

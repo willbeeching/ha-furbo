@@ -338,6 +338,12 @@
       },
       "frequency_dog_move_above10_sec": {
         "default": "mdi:timer-cog-outline"
+      },
+      "frequency_meowing": {
+        "default": "mdi:timer-cog-outline"
+      },
+      "frequency_cat_activity": {
+        "default": "mdi:timer-cog-outline"
       }
     },
     "button": {

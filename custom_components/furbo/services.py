@@ -130,15 +130,32 @@ def _enabled_events(coordinator: FurboCoordinator, device_ids: list[str]) -> lis
     all on others, which is a difference nobody can see from the outside, so
     the safer default is to do what the app does. Names outside the event
     list's vocabulary are dropped, since several alerts cannot be asked for.
+
+    Never returns nothing. Turning every alert off used to empty this list,
+    which put the field back to absent and quietly restored the behaviour the
+    whole thing exists to avoid. Alerts being off stops new events being
+    recorded; it does not remove the ones already there, and asking for a
+    window in the past is a fair thing to do with them all switched off.
     """
-    wanted: set[str] = set()
+    enabled: set[str] = set()
+    known: set[str] = set()
     for device_id in device_ids:
         device = coordinator.data.devices.get(device_id)
         if device is None:
             continue
-        wanted.update(key for key, value in device.alerts.items() if value == "1")
-    # Order follows EVENT_NAMES so the request is stable between calls.
-    return [name for name in EVENT_NAMES if name in wanted]
+        for key, value in device.alerts.items():
+            known.add(key)
+            if value == "1":
+                enabled.add(key)
+    # Enabled alerts first; failing that everything these cameras report, and
+    # failing that the whole vocabulary, because an empty list is the one
+    # answer that cannot be sent.
+    for candidates in (enabled, known):
+        names = [name for name in EVENT_NAMES if name in candidates]
+        if names:
+            # Order follows EVENT_NAMES so the request is stable between calls.
+            return names
+    return list(EVENT_NAMES)
 
 
 async def _async_get_events(call: ServiceCall) -> ServiceResponse:

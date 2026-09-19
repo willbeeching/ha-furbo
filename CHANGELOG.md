@@ -6,6 +6,23 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.8.1
+
+- **`furbo.get_events` no longer drops the event-name filter when every alert
+  is switched off.** The default is built from the alerts your cameras have
+  enabled, and with none enabled that list came out empty, which put the field
+  back to absent and quietly restored the behaviour 1.8.0 exists to avoid.
+  Turning alerts off stops new events being recorded; it does not remove the
+  ones already there, and asking for a window in the past is a fair thing to do
+  with them all off. The request now falls back to everything those cameras can
+  report, and to the full vocabulary if their alerts are not known yet.
+- **The two cat alert-frequency controls have names, options and icons.** 1.8.0
+  gave `Meowing` and `CatActivity` a notification-frequency select each and no
+  translations, so they appeared as `frequency_cat_activity` with raw option
+  values. The test that was supposed to catch this only checked the alert
+  existed, not that the control it implies was ever described; it now checks
+  both, and fails when either is missing.
+
 ## 1.8.0
 
 - **Cat cameras get their own alerts.** A Furbo cat camera (`FBC0030`,
