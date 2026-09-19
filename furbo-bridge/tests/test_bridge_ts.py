@@ -16,8 +16,11 @@ def _packets(data: bytes) -> list[bytes]:
     return [data[i : i + ts.PACKET_SIZE] for i in range(0, len(data), ts.PACKET_SIZE)]
 
 
-def _mux(frames: list[tuple[str, bytes, float]]) -> bytes:
-    mux = ts.TSMuxer()
+def _mux(
+    frames: list[tuple[str, bytes, float]],
+    audio_type: int | None = ts.STREAM_TYPE_AAC_ADTS,
+) -> bytes:
+    mux = ts.TSMuxer(audio_type)
     out = b""
     for kind, payload, seconds in frames:
         emit = mux.video if kind == "video" else mux.audio
@@ -100,3 +103,35 @@ def test_the_crc_matches_what_a_demuxer_computes() -> None:
     section = ts._pat()[1:]  # drop the pointer field
     body, crc = section[:-4], int.from_bytes(section[-4:], "big")
     assert ts._crc32_mpeg(body) == crc
+
+
+def test_an_unknown_codec_gets_no_audio_track_at_all() -> None:
+    """A track declared wrongly takes the video down with it.
+
+    The tables are a promise about the payload. When ffmpeg was told the audio
+    was AAC and it was not, it failed to parse it, the RTSP header failed with
+    it, and the picture went too. Sound the bridge cannot name is not carried.
+    """
+    data = _mux(
+        [
+            ("video", b"\x00\x00\x00\x01\x65" + b"\xaa" * 50, 0.0),
+            ("audio", b"\x01\x02" + b"\xbb" * 40, 0.0),
+        ],
+        audio_type=None,
+    )
+    pids = {((p[1] & 0x1F) << 8) | p[2] for p in _packets(data)}
+    assert ts.VIDEO_PID in pids, "the picture must survive unknown audio"
+    assert ts.AUDIO_PID not in pids, "an unnameable track was carried anyway"
+
+
+def test_the_tables_only_name_the_tracks_that_are_there() -> None:
+    """A viewer reads the PMT to know what to expect; it must not overpromise."""
+    with_audio = ts._pmt(ts.STREAM_TYPE_AAC_ADTS)
+    without = ts._pmt(None)
+    assert bytes([ts.STREAM_TYPE_H264]) in with_audio
+    assert bytes([ts.STREAM_TYPE_H264]) in without
+    assert (0xE000 | ts.AUDIO_PID).to_bytes(2, "big") in with_audio
+    assert (0xE000 | ts.AUDIO_PID).to_bytes(2, "big") not in without
+    # And the section stays valid, since its length and CRC both moved.
+    section = without[1:]
+    assert ts._crc32_mpeg(section[:-4]) == int.from_bytes(section[-4:], "big")

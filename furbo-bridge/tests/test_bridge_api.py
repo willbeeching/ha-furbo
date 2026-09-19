@@ -517,6 +517,33 @@ def test_av_serves_one_transport_stream_carrying_both_tracks() -> None:
     assert seen["audio"] is True
 
 
+def test_audio_the_bridge_cannot_name_does_not_cost_you_the_picture() -> None:
+    """The regression that reached a real camera, as a test.
+
+    The muxer declared the audio AAC because the phone app decodes AAC. A real
+    FB0030 sends something else, so ffmpeg could not parse the track, the RTSP
+    header failed with it, and the live view died every four seconds. Audio we
+    cannot name is now simply not carried, and the picture is unaffected.
+    """
+    seen: dict[str, Any] = {}
+
+    async def scenario(client: Any, worker: Any) -> None:
+        worker.frames = [b"\x00\x00\x00\x01\x65" + b"\xaa" * 60]
+        # Not ADTS: what the camera really sends.
+        worker.audio_frames = [b"\x01\x02\x03" + b"\xbb" * 40]
+        resp = await client.get("/api/av", headers=AUTH)
+        assert resp.status == 200
+        seen["body"] = await resp.read()
+
+    _run(scenario)
+    body = seen["body"]
+    assert body and len(body) % ts.PACKET_SIZE == 0
+    packets = [body[i : i + ts.PACKET_SIZE] for i in range(0, len(body), ts.PACKET_SIZE)]
+    pids = {((p[1] & 0x1F) << 8) | p[2] for p in packets}
+    assert ts.VIDEO_PID in pids, "unknown audio took the video with it again"
+    assert ts.AUDIO_PID not in pids
+
+
 def test_the_plain_stream_endpoint_asks_for_no_audio() -> None:
     """Sound is opt-in, so the video path must not turn the microphone on."""
     seen: dict[str, Any] = {}

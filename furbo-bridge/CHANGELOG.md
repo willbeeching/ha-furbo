@@ -3,11 +3,34 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.4
+
+- **Fixes a regression in 1.3.3 that broke live video when `audio` was on.**
+  1.3.3 declared the camera's audio to be AAC, because that is what the phone
+  app decodes. At least one camera sends something else, and a transport
+  stream's tables are a promise about its payload: ffmpeg could not parse the
+  track, the output header failed along with it, and **the picture went down
+  with the sound**. Live view restarted every few seconds. Anyone who left
+  `audio` off, which is the default, was never affected.
+- **Audio is now carried only when its format can be proved from the data.**
+  ADTS says what it is in its first bits; anything else gets no audio track
+  and the video streams on its own. The codec id in the frame header is not
+  usable for this: it is defined inside TUTK's native library, an FB0030
+  reports 135, and the only id this project has established is the 137 its
+  speaker accepts in the other direction.
+- **If your camera's audio is not carried, the log says so and prints the
+  first bytes of a frame.** Those bytes are what identifying the codec needs,
+  so please do report them along with your camera model.
+- A test now covers the exact failure: audio the bridge cannot name must cost
+  you the sound and never the picture.
+
 ## 1.3.3
 
 - **The camera's microphone can now be carried on the live stream.** Off by
   default; turn on the new `audio` option to enable it. The camera has always
   had a microphone, and this add-on has always asked it only for pictures.
+  **Superseded by 1.3.4: as shipped this broke live video on cameras whose
+  audio is not AAC. Update rather than enabling `audio` on this version.**
 - **Sound and picture stay together, because the bridge now muxes them.** The
   two arrive from the camera as separate queues of bare frames, and neither
   carries a container timestamp. Handed to ffmpeg as two pipes they landed

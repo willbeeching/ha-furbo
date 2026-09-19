@@ -932,3 +932,19 @@ def test_the_audio_reader_counts_itself(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert busy_during_read == [True], "the audio reader did not count itself"
     assert not worker._reader_busy, "and it must let go when it finishes"
+
+
+def test_only_audio_that_proves_its_codec_is_carried() -> None:
+    """The codec id in the frame header is not something we can read.
+
+    It is defined inside TUTK's native library. A real FB0030 reports 135,
+    which matches nothing this project has established, and the only id it has
+    confirmed is the 137 the camera's speaker accepts in the other direction.
+    So the payload has to prove the codec, and ADTS does in its first bits.
+    """
+    adts = b"\xff\xf1" + b"\x40" * 30
+    assert fb.audio_stream_type(adts) == fb.ts.STREAM_TYPE_AAC_ADTS
+
+    # What the camera actually sends: not ADTS, and therefore not carried.
+    assert fb.audio_stream_type(b"\x01\x02\x03\x04" + b"\x00" * 30) is None
+    assert fb.audio_stream_type(b"") is None

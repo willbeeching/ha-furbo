@@ -86,6 +86,11 @@ STREAM_QUEUE_MAX = 512
 FRAME_BUFFER_BYTES = 2 * 1024 * 1024
 # Audio frames are tiny next to video; this is room to spare, not a target.
 AUDIO_BUFFER_BYTES = 16 * 1024
+# How long to hold the first frames while waiting for audio to turn up and say
+# what it is. The tables that open a transport stream have to name every track
+# it carries, so this is decided once, before anything is written. A camera
+# with no microphone never answers, and the picture must not wait on it.
+AUDIO_DECIDE_WAIT = 2.0
 # Whether to ask the camera for sound at all, from the add-on's audio option.
 AUDIO_ENABLED = os.environ.get("FURBO_AUDIO", "").strip().lower() == "true"
 # How long a reconnect waits for the frame reader to leave the SDK.
@@ -1159,9 +1164,22 @@ def create_app(
         for reader in readers:
             reader.start()
 
-        mux = ts.TSMuxer()
+        # The tables go out with the first packet and say what each track is,
+        # so the audio codec has to be settled before anything is written.
+        # Frames that arrive first are held, not dropped.
+        mux: ts.TSMuxer | None = None
+        held: list[tuple[str, bytes, int]] = []
         origin: int | None = None
         finished = 0
+        deadline = time.monotonic() + AUDIO_DECIDE_WAIT
+
+        def start(audio_type: int | None) -> ts.TSMuxer:
+            _LOGGER.info(
+                "streaming video %s",
+                "with audio" if audio_type is not None else "only; audio not carried",
+            )
+            return ts.TSMuxer(audio_type)
+
         try:
             while finished < len(readers):
                 kind, payload, stamp = await parts.get()
@@ -1174,9 +1192,29 @@ def create_app(
                         # and breaking here dropped whichever track happened
                         # to finish second.
                         await run(worker, worker.close_stream)
+                    elif mux is None:
+                        # Audio ended before it said anything. Video alone.
+                        mux = start(None)
                     continue
                 if origin is None:
                     origin = stamp
+                if mux is None:
+                    held.append((kind, payload, stamp))
+                    if kind == "audio":
+                        mux = start(audio_stream_type(payload))
+                    elif time.monotonic() >= deadline:
+                        # No audio in the time a viewer will wait for a
+                        # picture. Better a stream without sound than none.
+                        mux = start(None)
+                    if mux is None:
+                        continue
+                    for held_kind, held_payload, held_stamp in held:
+                        seconds = max(0.0, (held_stamp - origin) / 1000.0)
+                        emit = mux.video if held_kind == "video" else mux.audio
+                        for packet in emit(held_payload, seconds):
+                            await response.write(packet)
+                    held.clear()
+                    continue
                 seconds = max(0.0, (stamp - origin) / 1000.0)
                 emit = mux.video if kind == "video" else mux.audio
                 for packet in emit(payload, seconds):
@@ -1210,6 +1248,33 @@ def create_app(
         routes.append(method(f"/api/cameras/{{device_id}}/{path}", handler))
     app.add_routes(routes)
     return app
+
+
+def audio_stream_type(frame: bytes) -> int | None:
+    """Which transport-stream type this audio is, or None if we cannot tell.
+
+    Decided from the bytes, not from the codec id in the frame header. That id
+    is defined inside TUTK's native library, which is not something this
+    project can read: an FB0030 reports 135, the phone app's own decoder is
+    configured at runtime rather than from a table we can see, and the only id
+    established here is the 137 the camera's speaker accepts, which is the
+    other direction entirely.
+
+    So the rule is to claim a codec only when the payload proves it. ADTS says
+    so in its first eleven bits. Anything else gets no audio track, because a
+    track declared wrongly does not merely fail to play: the demuxer cannot
+    parse it, the output header fails with it, and the video goes down beside
+    the sound nobody asked for.
+    """
+    if fp.looks_like_adts(frame):
+        return ts.STREAM_TYPE_AAC_ADTS
+    _LOGGER.warning(
+        "audio in an unrecognised format, so this stream carries video only. "
+        "First bytes: %s. Please report these with your camera model, they are "
+        "what identifying the codec needs.",
+        frame[:12].hex(" "),
+    )
+    return None
 
 
 class FrameQueue:

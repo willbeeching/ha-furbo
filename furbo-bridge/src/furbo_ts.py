@@ -75,15 +75,21 @@ def _pat() -> bytes:
     return _section(0x00, body)
 
 
-def _pmt() -> bytes:
+def _pmt(audio_type: int | None) -> bytes:
+    """The program map. Audio appears only when its codec is known.
+
+    A PMT is a promise about what the payload is. Declaring a track the
+    payload does not match is worse than declaring no track at all: the
+    demuxer fails to parse it, the output header fails with it, and the
+    video goes down alongside the audio it never needed.
+    """
     streams = (
         bytes([STREAM_TYPE_H264])
         + (0xE000 | VIDEO_PID).to_bytes(2, "big")
         + b"\xf0\x00"  # no descriptors
-        + bytes([STREAM_TYPE_AAC_ADTS])
-        + (0xE000 | AUDIO_PID).to_bytes(2, "big")
-        + b"\xf0\x00"
     )
+    if audio_type is not None:
+        streams += bytes([audio_type]) + (0xE000 | AUDIO_PID).to_bytes(2, "big") + b"\xf0\x00"
     body = (
         PROGRAM_NUMBER.to_bytes(2, "big")
         + b"\xc1\x00\x00"
@@ -128,9 +134,13 @@ class TSMuxer:
     point of doing this here rather than in ffmpeg.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, audio_type: int | None = None) -> None:
+        """``audio_type`` is the TS stream type for the audio, or None for
+        video only. It defaults to None because claiming a codec we have not
+        established is the one thing this must not do."""
         self._continuity: dict[int, int] = {VIDEO_PID: 0, AUDIO_PID: 0, PAT_PID: 0, PMT_PID: 0}
         self._tables_at = -TABLE_INTERVAL
+        self._audio_type = audio_type
 
     def _next_continuity(self, pid: int) -> int:
         counter = self._continuity[pid]
@@ -172,7 +182,7 @@ class TSMuxer:
             return
         self._tables_at = now
         yield from self._packets(PAT_PID, _pat(), start=True, pcr=None)
-        yield from self._packets(PMT_PID, _pmt(), start=True, pcr=None)
+        yield from self._packets(PMT_PID, _pmt(self._audio_type), start=True, pcr=None)
 
     def frame(self, pid: int, payload: bytes, seconds: float) -> Iterator[bytes]:
         """Emit one frame as transport packets, tables first when due."""
@@ -193,4 +203,11 @@ class TSMuxer:
         yield from self.frame(VIDEO_PID, payload, seconds)
 
     def audio(self, payload: bytes, seconds: float) -> Iterator[bytes]:
+        """Audio frames, or nothing at all when no codec was established.
+
+        Silently dropping them is the point: a stream that carries an
+        undeclared track is one no viewer can open.
+        """
+        if self._audio_type is None:
+            return
         yield from self.frame(AUDIO_PID, payload, seconds)
