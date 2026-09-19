@@ -151,7 +151,10 @@ def _enabled_events(coordinator: FurboCoordinator, device_ids: list[str]) -> lis
     # failing that the whole vocabulary, because an empty list is the one
     # answer that cannot be sent.
     for candidates in (enabled, known):
-        names = [name for name in EVENT_NAMES if name in candidates]
+        # Annotated because EVENT_NAMES is a Final tuple, so mypy infers a
+        # list of literals here, and list is invariant: list[Literal[...]]
+        # is not a list[str].
+        names: list[str] = [name for name in EVENT_NAMES if name in candidates]
         if names:
             # Order follows EVENT_NAMES so the request is stable between calls.
             return names
