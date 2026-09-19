@@ -11,6 +11,19 @@
 # process group when the last one leaves; the bridge then stops the video and
 # keeps the session for the controls.
 set -euo pipefail
+# ffmpeg will not publish anything until it knows the frame size, and by
+# default it reads up to five SECONDS of video looking for the parameter set
+# that says so. Over a live feed that is five seconds of wall clock before the
+# first frame reaches anyone. Home Assistant's own card buffers into HLS and
+# waits it out; HomeKit gives up at around five and reconnects, which turned a
+# smooth stream into one frame every ten seconds.
+#
+# The bridge now opens the stream on a parameter set, so the answer is in the
+# first bytes and these limits are never reached. They stay generous rather
+# than minimal on purpose: with -analyzeduration 0 a stream that somehow began
+# mid-picture would fail outright ("dimensions not set") instead of merely
+# starting slowly, and the bridge falling back to sending whatever arrives is
+# exactly that case.
 # $1 is the RTSP output go2rtc wants; $2 is the camera to read, which is how
 # one bridge serves several without them sharing a stream.
 DEVICE="${2:-}"
@@ -23,4 +36,5 @@ exec curl -sS -N --fail-with-body \
     -H "Authorization: Bearer ${API_TOKEN}" \
     "$URL" \
   | exec ffmpeg -hide_banner -loglevel error -fflags nobuffer \
+      -probesize 500000 -analyzeduration 1000000 \
       -f h264 -i - -c copy -rtsp_transport tcp -f rtsp "$1"

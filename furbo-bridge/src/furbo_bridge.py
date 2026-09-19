@@ -96,6 +96,15 @@ FIRST_FRAME_TIMEOUT = 8.0
 # slot it holds never came back, and every later request was refused as busy
 # until the add-on was restarted.
 IDLE_FRAME_TIMEOUT = 10.0
+# How long, and how many frames, to keep waiting for one carrying the stream's
+# parameter sets before giving up and sending whatever arrives. Waiting is what
+# lets the decoder start immediately. Both bounds are needed: time alone lets a
+# short stream end while the reader is still dropping every frame, so the
+# viewer gets nothing, and a frame count alone would sit through a long quiet
+# gap. A camera restarted by IPCAM_START sends its parameter set in the first
+# frame or two, so neither bound is normally reached.
+PARAMETER_SET_WAIT = 4.0
+PARAMETER_SET_MAX_SKIP = 120
 # A moment between telling the camera to stop video and asking it to start
 # again, so it has released the old stream before the new request lands.
 STREAM_RESTART_SETTLE = 0.3
@@ -188,6 +197,29 @@ def normalise_state(raw: dict[str, Any]) -> dict[str, Any]:
     if isinstance(calm, dict) and calm.get("enable") is not None:
         out["calm_enabled"] = bool(calm.get("enable"))
     return out
+
+
+def carries_parameter_sets(frame: bytes) -> bool:
+    """True when this frame contains an H.264 sequence parameter set.
+
+    A decoder can do nothing with video until it has the SPS: it does not know
+    the frame size, so it cannot even allocate. ffmpeg's answer is to read the
+    stream until it finds one, and its default patience for that is five
+    seconds of video, which over a live feed is five seconds of wall clock.
+
+    The camera sends a parameter set with each keyframe, so opening the stream
+    on one turns those five seconds into none. This scans Annex B start codes
+    for NAL type 7 rather than trusting the SDK's is_keyframe flag, because the
+    parameter set is what the decoder waits for and a keyframe is only usually
+    where it lives.
+    """
+    index = frame.find(b"\x00\x00\x01")
+    while index != -1:
+        header = index + 3
+        if header < len(frame) and frame[header] & 0x1F == 7:
+            return True
+        index = frame.find(b"\x00\x00\x01", header)
+    return False
 
 
 class P2PWorker:
@@ -554,6 +586,14 @@ class P2PWorker:
         self._reader_active.set()
         last_frame = time.monotonic()
         seen_frame = False
+        # Frames before the first parameter set are dropped: a decoder cannot
+        # use them, and handing them over is what made ffmpeg spend its default
+        # five-second analysis window hunting for an SPS before any video
+        # reached the viewer. Given up on once either bound above is reached, so
+        # a camera that never sends one still streams, exactly as it used to.
+        opened = False
+        waiting_since = time.monotonic()
+        skipped = 0
         # What the SDK kept telling us, so a stream that yields nothing can say
         # why instead of spinning in silence.
         outcomes: dict[int, int] = {}
@@ -564,7 +604,30 @@ class P2PWorker:
                 if ret >= 0 and size > 0:
                     seen_frame = True
                     last_frame = time.monotonic()
-                    yield buf.raw[:size]
+                    frame = buf.raw[:size]
+                    if not opened:
+                        if carries_parameter_sets(frame):
+                            if skipped:
+                                _LOGGER.debug(
+                                    "opened the stream on a parameter set, %d frame(s) in",
+                                    skipped,
+                                )
+                            opened = True
+                        elif (
+                            time.monotonic() - waiting_since < PARAMETER_SET_WAIT
+                            and skipped < PARAMETER_SET_MAX_SKIP
+                        ):
+                            skipped += 1
+                            continue
+                        else:
+                            _LOGGER.info(
+                                "no parameter set in the first %d frame(s); "
+                                "streaming anyway, which the viewer may take a "
+                                "few seconds to start decoding",
+                                skipped,
+                            )
+                            opened = True
+                    yield frame
                     continue
                 outcomes[ret] = outcomes.get(ret, 0) + 1
                 biggest_expected = max(biggest_expected, expected)

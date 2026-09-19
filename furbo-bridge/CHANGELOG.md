@@ -3,6 +3,30 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.2
+
+- **The live stream starts in well under a second instead of three.** ffmpeg
+  will not publish anything until it knows the frame size, and it learns that
+  from the stream's parameter set. The bridge handed it whatever the camera was
+  sending at that instant, so ffmpeg fell back to reading up to five seconds of
+  video hunting for one. Home Assistant's own camera card buffers into HLS and
+  waits it out, which is why this looked fine there. HomeKit gives up at around
+  five seconds and reconnects, so an Apple Home viewer got a few frames, a
+  dropped producer, and a restart, over and over: one frame every ten seconds
+  rather than a stream. Refs #7.
+
+  The reader now opens the stream on a frame carrying the parameter set, so the
+  answer is in the first bytes, and `stream.sh` no longer lets ffmpeg spend
+  seconds looking for it. Measured on a synthetic 720p feed: about 3.1s before,
+  about 0.43s after.
+- Frames before that first parameter set are dropped rather than sent. A
+  decoder cannot use them, and a viewer joining mid-picture was being handed
+  bytes it could only discard.
+- A camera that sends no parameter set at all still streams. The wait is
+  bounded by both a timeout and a frame count, because either alone leaves a
+  hole: a short stream can end while the reader is still dropping every frame,
+  which would serve nothing.
+
 ## 1.3.1
 
 - **The add-on log keeps hours of history instead of four minutes.** Every

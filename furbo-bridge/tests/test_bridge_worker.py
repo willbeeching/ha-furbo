@@ -299,6 +299,14 @@ def test_open_stream_starts_video_at_the_requested_quality(
     assert worker.streaming is True
 
 
+# Annex B frames, because the reader now opens a stream on the parameter set
+# that tells a decoder the frame size. "abcd" was never valid H.264, so tests
+# carrying it were quietly asserting that undecodable bytes reach the viewer.
+# Both are four bytes, so the SDK-reply tuples below are unchanged.
+SPS_FRAME = b"\x00\x00\x01\x67"  # NAL type 7: a sequence parameter set
+P_FRAME = b"\x00\x00\x01\x41"  # NAL type 1: an ordinary following frame
+
+
 def test_second_stream_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     """One viewer at a time: the camera serves a single video channel."""
     worker = _worker_with(monkeypatch, FakeP2P())
@@ -310,11 +318,11 @@ def test_second_stream_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_iter_frames_yields_then_ends(monkeypatch: pytest.MonkeyPatch) -> None:
     """Frames come through, and an SDK error ends the stream quietly."""
     fake = FakeP2P()
-    fake.frames = [b"aaa", b"bbbb"]
+    fake.frames = [SPS_FRAME, P_FRAME]
     worker = _worker_with(monkeypatch, fake)
     worker._p2p = fake
     worker.open_stream("1080p")
-    assert list(worker.iter_frames()) == [b"aaa", b"bbbb"]
+    assert list(worker.iter_frames()) == [SPS_FRAME, P_FRAME]
 
 
 def test_close_stream_stops_video_but_keeps_the_session(
@@ -518,7 +526,7 @@ def test_reader_keeps_waiting_once_frames_are_flowing(
     def recv(buf: Any, _info: Any) -> tuple[int, int, int]:
         ret = replies.pop(0)
         if ret[0] > 0:
-            buf[0:4] = b"abcd"
+            buf[0:4] = SPS_FRAME
         return ret
 
     monkeypatch.setattr(fake, "recv_frame", recv)
@@ -526,7 +534,7 @@ def test_reader_keeps_waiting_once_frames_are_flowing(
     worker._p2p = fake
     worker.open_stream("1080p")
     # Both frames arrive; the pause in the middle does not end the stream.
-    assert list(worker.iter_frames()) == [b"abcd", b"abcd"]
+    assert list(worker.iter_frames()) == [SPS_FRAME, SPS_FRAME]
 
 
 def test_reader_gives_up_on_frames_that_never_complete(
@@ -576,14 +584,14 @@ def test_frame_size_comes_from_the_sdk_not_the_return_value(
     def recv(buf: Any, _info: Any) -> tuple[int, int, int]:
         entry = replies.pop(0)
         if entry[1]:
-            buf[0:4] = b"abcd"
+            buf[0:4] = SPS_FRAME
         return entry
 
     monkeypatch.setattr(fake, "recv_frame", recv)
     worker = _worker_with(monkeypatch, fake)
     worker._p2p = fake
     worker.open_stream("1080p")
-    assert list(worker.iter_frames()) == [b"abcd"]
+    assert list(worker.iter_frames()) == [SPS_FRAME]
 
 
 def test_a_successful_read_of_nothing_is_not_a_frame(
@@ -712,12 +720,12 @@ def test_a_stream_that_goes_quiet_gives_the_slot_back(
             return fp.AV_ER_DATA_NOREADY, 0, 0
 
     fake = _GoesQuiet()
-    fake.frames = [b"aaa", b"bbb"]
+    fake.frames = [SPS_FRAME, P_FRAME]
     worker = _worker_with(monkeypatch, fake)
     worker._p2p = fake
     worker.open_stream("1080p")
 
-    assert list(worker.iter_frames()) == [b"aaa", b"bbb"]
+    assert list(worker.iter_frames()) == [SPS_FRAME, P_FRAME]
     # And the slot is free: the next viewer is served rather than refused.
     worker.close_stream()
     worker.open_stream("1080p")
@@ -743,3 +751,75 @@ def test_switching_the_camera_off_ends_the_stream(
     worker.apply({"camera_on": False})
     # The reader stops on its next pass rather than streaming a dark camera.
     assert list(frames) == []
+
+
+def test_the_stream_opens_on_a_parameter_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Frames before the first parameter set are not sent.
+
+    A decoder cannot use them: without the SPS it does not know the frame size.
+    ffmpeg's answer is to read up to five seconds of video hunting for one,
+    which over a live feed is five seconds before anything reaches the viewer.
+    Home Assistant's card waits that out; HomeKit gives up and reconnects,
+    which is one frame every ten seconds rather than a stream. Refs #7.
+    """
+    fake = FakeP2P()
+    fake.frames = [P_FRAME, P_FRAME, SPS_FRAME, P_FRAME]
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+
+    assert list(worker.iter_frames()) == [SPS_FRAME, P_FRAME]
+
+
+def test_a_stream_with_no_parameter_set_is_still_served(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Waiting for a parameter set must not become a way to serve nothing.
+
+    A camera that never sends one would otherwise stream for ever into a
+    reader that drops every frame. After the wait, whatever arrives is sent,
+    which is exactly what happened before this gate existed.
+    """
+    # Both bounds, because either alone leaves a hole: the stream below ends
+    # in milliseconds, far inside any sane wait.
+    monkeypatch.setattr(fb, "PARAMETER_SET_WAIT", 30.0)
+    monkeypatch.setattr(fb, "PARAMETER_SET_MAX_SKIP", 10)
+
+    class _NeverSendsOne(FakeP2P):
+        def recv_frame(self, buf: Any, _info: Any) -> tuple[int, int, int]:
+            if self.frames:
+                data = self.frames.pop(0)
+                buf[0 : len(data)] = data
+                return len(data), len(data), 0
+            return -20015, 0, 0
+
+    fake = _NeverSendsOne()
+    fake.frames = [P_FRAME] * 40
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p")
+
+    served = list(worker.iter_frames())
+    assert served, "a camera that sends no parameter set must still stream"
+    assert set(served) == {P_FRAME}
+    # Ten dropped while waiting, the other thirty served.
+    assert len(served) == 30
+
+
+def test_a_parameter_set_is_found_anywhere_in_the_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SPS is not always the first NAL in the frame.
+
+    Cameras commonly send SPS, PPS and the picture itself as one access unit,
+    and some put a delimiter or SEI in front, so matching only on the opening
+    bytes would miss the very frame the decoder is waiting for.
+    """
+    # Access unit delimiter, then the parameter set, then the picture.
+    access_unit = b"\x00\x00\x01\x09\x10" + SPS_FRAME + b"\x00\x00\x01\x65\xff"
+    assert fb.carries_parameter_sets(access_unit)
+    assert not fb.carries_parameter_sets(b"\x00\x00\x01\x09\x10" + P_FRAME)
+    # Three-byte and four-byte start codes are both legal.
+    assert fb.carries_parameter_sets(b"\x00\x00\x00\x01\x67\x42")
+    # Nothing that merely contains the byte 0x67 counts.
+    assert not fb.carries_parameter_sets(b"\x67\x67\x67\x67")
