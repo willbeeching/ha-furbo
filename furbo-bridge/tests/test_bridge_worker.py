@@ -370,17 +370,17 @@ def test_reconnect_waits_for_the_reader_to_leave_the_sdk(
     worker = _worker_with(monkeypatch, fake)
     worker._p2p = fake
     worker.open_stream("1080p")
-    worker._reader_active.set()  # pretend the reader is mid-call
+    worker._enter_reader()  # pretend a reader is mid-call
 
     monkeypatch.setattr(fb, "READER_EXIT_TIMEOUT", 0.1)
     worker._drop()
     # It gives up rather than hanging, but only after waiting.
     assert fake.closed is True
 
-    # With the reader clear, the session closes without the wait.
+    # With no reader inside the SDK, the session closes without the wait.
     fake2 = FakeP2P()
     worker._p2p = fake2
-    worker._reader_active.clear()
+    worker._leave_reader()
     worker._drop()
     assert fake2.closed is True
 
@@ -823,3 +823,71 @@ def test_a_parameter_set_is_found_anywhere_in_the_frame(
     assert fb.carries_parameter_sets(b"\x00\x00\x00\x01\x67\x42")
     # Nothing that merely contains the byte 0x67 counts.
     assert not fb.carries_parameter_sets(b"\x67\x67\x67\x67")
+
+
+def test_a_full_queue_still_delivers_a_tagged_end_marker() -> None:
+    """The marker must survive a full queue whatever shape it is.
+
+    The muxed stream tags each item with its track, so its end markers are
+    tuples rather than a bare None. A queue that recognised only None dropped
+    them exactly when the viewer was too slow, which is the moment the reader
+    gives up, leaving the response waiting for a track that had already
+    finished and holding the camera's single stream slot.
+    """
+    queue = fb.FrameQueue(maxsize=2)
+    for _ in range(5):
+        queue.offer(b"frame")
+    assert queue.dropped, "the queue should be full by now"
+
+    marker = ("video", object(), 0)
+    queue.offer(marker, True)
+
+    drained = []
+    while True:
+        try:
+            drained.append(queue._queue.get_nowait())
+        except Exception:
+            break
+    assert marker in drained, "a full queue swallowed the end marker"
+
+
+def test_both_readers_are_waited_for_before_the_channel_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing the channel under a reader is a native crash, not an exception.
+
+    Audio is read on its own thread, so waiting only for the video reader left
+    the other one inside the SDK while the session was torn down. A flag could
+    not express this: whichever reader finished first cleared it.
+    """
+    worker = _worker_with(monkeypatch, FakeP2P())
+
+    worker._enter_reader()  # stands in for the video reader
+    worker._enter_reader()  # and the audio reader
+    assert worker._reader_busy
+
+    worker._leave_reader()
+    assert worker._reader_busy, "one reader left, so the channel is still in use"
+
+    worker._leave_reader()
+    assert not worker._reader_busy
+
+
+def test_the_audio_reader_counts_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The count is only worth having if the audio path actually joins it."""
+    fake = FakeP2P()
+    worker = _worker_with(monkeypatch, fake)
+    worker._p2p = fake
+    worker.open_stream("1080p", audio=True)
+
+    busy_during_read = []
+
+    def recv_audio(_buf: Any, header: Any) -> tuple[int, int, bytes]:
+        busy_during_read.append(worker._reader_busy)
+        return -20015, 0, bytes(fp.AUDIO_HEADER_BYTES)
+
+    monkeypatch.setattr(fake, "recv_audio", recv_audio, raising=False)
+    list(worker.iter_audio())
+
+    assert busy_during_read == [True], "the audio reader did not count itself"
+    assert not worker._reader_busy, "and it must let go when it finishes"

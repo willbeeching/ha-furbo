@@ -249,9 +249,13 @@ class P2PWorker:
         # Whether this stream asked the camera for sound as well as pictures.
         self._audio = False
         self._stream_stop = threading.Event()
-        # Set while the reader is inside the SDK. Closing the channel under it
-        # would crash the process, so a reconnect waits for this to clear.
-        self._reader_active = threading.Event()
+        # How many readers are inside the SDK right now. Closing the channel
+        # under one would crash the process, so a reconnect waits for this to
+        # reach zero. A count rather than a flag because video and audio are
+        # read on separate threads: with a flag, whichever finished first
+        # cleared it and the other was left running into a closing channel.
+        self._readers = 0
+        self._readers_lock = threading.Lock()
         self.device: dict[str, str] = {}
         self.state: dict[str, Any] = {}
         self.updated_at: float | None = None
@@ -324,6 +328,28 @@ class P2PWorker:
             )
         return p2p
 
+    def _enter_reader(self) -> None:
+        with self._readers_lock:
+            self._readers += 1
+
+    def _leave_reader(self) -> None:
+        with self._readers_lock:
+            self._readers -= 1
+
+    @contextlib.contextmanager
+    def _reading(self) -> Iterator[None]:
+        """Count this thread as inside the SDK for as long as it is."""
+        self._enter_reader()
+        try:
+            yield
+        finally:
+            self._leave_reader()
+
+    @property
+    def _reader_busy(self) -> bool:
+        with self._readers_lock:
+            return self._readers > 0
+
     def _drop(self) -> None:
         # Stop the frame reader and let it leave the SDK before the channel is
         # closed; tearing it down mid-call would take the process with it.
@@ -332,10 +358,10 @@ class P2PWorker:
         self._streaming = False
         self._audio = False
         deadline = time.monotonic() + READER_EXIT_TIMEOUT
-        while self._reader_active.is_set() and time.monotonic() < deadline:
+        while self._reader_busy and time.monotonic() < deadline:
             time.sleep(0.02)
-        if self._reader_active.is_set():
-            _LOGGER.warning("frame reader did not stop in time; closing anyway")
+        if self._reader_busy:
+            _LOGGER.warning("a frame reader did not stop in time; closing anyway")
         if self._p2p is not None:
             if was_streaming:
                 # Tell the camera video is over before this client disappears.
@@ -605,7 +631,6 @@ class P2PWorker:
             return
         buf = fp.create_string_buffer(FRAME_BUFFER_BYTES)
         info = fp.FrameInfo()
-        self._reader_active.set()
         last_frame = time.monotonic()
         seen_frame = False
         # Frames before the first parameter set are dropped: a decoder cannot
@@ -620,6 +645,7 @@ class P2PWorker:
         # why instead of spinning in silence.
         outcomes: dict[int, int] = {}
         biggest_expected = 0
+        self._enter_reader()
         try:
             while not self._stream_stop.is_set():
                 ret, size, expected = p2p.recv_frame(buf, info)
@@ -681,7 +707,7 @@ class P2PWorker:
                     _LOGGER.info("video ended: %s", fp.err(ret))
                     return
         finally:
-            self._reader_active.clear()
+            self._leave_reader()
             if outcomes and not seen_frame:
                 _LOGGER.info(
                     "video produced no frames: %s",
@@ -708,6 +734,10 @@ class P2PWorker:
         buf = fp.create_string_buffer(AUDIO_BUFFER_BYTES)
         header = fp.create_string_buffer(fp.AUDIO_HEADER_BYTES)
         described = False
+        # Counted like the video reader. Without this a reconnect waited only
+        # for the picture and closed the channel while this thread was still
+        # inside avRecvAudioData, which is a native crash, not an exception.
+        self._enter_reader()
         try:
             while not self._stream_stop.is_set():
                 ret, size, raw = p2p.recv_audio(buf, header)
@@ -736,6 +766,7 @@ class P2PWorker:
                     _LOGGER.debug("audio ended: %s", fp.err(ret))
                     return
         finally:
+            self._leave_reader()
             if not described:
                 _LOGGER.info("audio: the camera sent none")
 
@@ -1109,7 +1140,9 @@ def create_app(
                 for payload, stamp in frames:
                     loop.call_soon_threadsafe(parts.offer, (kind, payload, stamp))
             finally:
-                loop.call_soon_threadsafe(parts.offer, (kind, done, 0))
+                # final: this marker must outlive a full queue, or the
+                # response below waits for a track that has already ended.
+                loop.call_soon_threadsafe(parts.offer, (kind, done, 0), True)
 
         readers = [
             threading.Thread(
@@ -1190,23 +1223,30 @@ class FrameQueue:
     """
 
     def __init__(self, maxsize: int = STREAM_QUEUE_MAX) -> None:
-        self._queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=maxsize)
+        self._queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=maxsize)
         self.dropped = 0
 
-    def offer(self, frame: bytes | None) -> None:
-        """Add a frame, or the end-of-stream marker. Never raises."""
-        if frame is None:
+    def offer(self, frame: Any, final: bool = False) -> None:
+        """Add a frame, or an end-of-stream marker. Never raises.
+
+        A marker is anything offered with ``final``, not only a bare ``None``.
+        The muxed stream tags each item with the track it came from, so its
+        markers are tuples, and a queue that protected only ``None`` dropped
+        them whenever it was full: the invariant above, lost to the shape of
+        the value rather than its meaning.
+        """
+        if final or frame is None:
             while self._queue.full():
                 self._queue.get_nowait()
                 self.dropped += 1
-            self._queue.put_nowait(None)
+            self._queue.put_nowait(frame)
             return
         if self._queue.full():
             self.dropped += 1
             return
         self._queue.put_nowait(frame)
 
-    async def get(self) -> bytes | None:
+    async def get(self) -> Any:
         return await self._queue.get()
 
 
