@@ -42,6 +42,10 @@ FURBO_QUALITY="$(opt quality)"; FURBO_QUALITY="${FURBO_QUALITY:-1080p}"
 [ -f "$DATA/quality" ] || echo "$FURBO_QUALITY" > "$DATA/quality"
 export API_TOKEN; API_TOKEN="$(opt api_token)"
 LOG_LEVEL="$(opt log_level)"; export GO2RTC_LOG="${LOG_LEVEL:-info}"
+# Sound is off unless asked for. The camera has a microphone, but a stream
+# that carries audio is a different stream: it needs a second track, and a
+# viewer set up for video only can refuse the lot rather than ignore it.
+FURBO_AUDIO="$(opt audio)"; export FURBO_AUDIO="${FURBO_AUDIO:-false}"
 # Exported so serve, stream.sh and talk.sh all target the same camera. Required
 # when the account has more than one camera.
 export FURBO_DEVICE; FURBO_DEVICE="$(opt device_id)"

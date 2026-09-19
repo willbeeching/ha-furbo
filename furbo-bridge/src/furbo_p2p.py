@@ -936,6 +936,49 @@ async def fetch_p2p_credentials(device_id: str | None) -> dict:
 # --- TUTK side --------------------------------------------------------------
 
 
+# TUTK packs an audio frame's format into one flags byte: sample-rate index in
+# bits 2-5, bit depth in bit 1, channel count in bit 0. Verified against the
+# SDK constant this file already relies on for talkback, where 16 kHz 16-bit
+# mono is 14: rate index 3 << 2, plus 16-bit 1 << 1, plus mono 0.
+AUDIO_SAMPLE_RATES = (8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000)
+# The header avRecvAudioData fills, the same sixteen bytes send_audio writes.
+AUDIO_HEADER = "<hBBB7xI"
+AUDIO_HEADER_BYTES = struct.calcsize(AUDIO_HEADER)
+
+
+def audio_format(header: bytes) -> dict:
+    """Decode one audio frame's header into something a person can read.
+
+    Deliberately reports the codec id rather than guessing a name for it. The
+    only id this project has confirmed on real hardware is 137 (G.711 mu-law),
+    which is what the camera's speaker accepts; what its microphone sends is a
+    separate question that the camera itself has to answer.
+    """
+    if len(header) < AUDIO_HEADER_BYTES:
+        return {}
+    codec_id, flags, _cam, _online, timestamp = struct.unpack(
+        AUDIO_HEADER, header[:AUDIO_HEADER_BYTES]
+    )
+    index = (flags >> 2) & 0x0F
+    return {
+        "codec_id": codec_id,
+        "sample_rate": AUDIO_SAMPLE_RATES[index] if index < len(AUDIO_SAMPLE_RATES) else None,
+        "bits": 16 if (flags >> 1) & 1 else 8,
+        "channels": 2 if flags & 1 else 1,
+        "timestamp": timestamp,
+    }
+
+
+def looks_like_adts(payload: bytes) -> bool:
+    """True when a frame opens with an AAC ADTS sync word.
+
+    The phone app decodes the camera's audio with an ADTS AAC MediaFormat, so
+    this is the expected shape, and sniffing the bytes settles it without
+    trusting a codec id whose meaning is not documented anywhere we can see.
+    """
+    return len(payload) >= 2 and payload[0] == 0xFF and (payload[1] & 0xF0) == 0xF0
+
+
 class FurboP2P:
     def __init__(
         self, lib_path: str, region: str | None, log_path: str | None, tcp_relay: bool = False
@@ -1328,6 +1371,24 @@ class FurboP2P:
                 time.sleep(0.02)
 
     # --- video ---
+
+    def recv_audio(self, buf, header):
+        """Read one audio frame. Returns (status, size, header bytes).
+
+        A different SDK call from recv_frame, on the same channel, so audio can
+        never end up spliced into the video stream: the two are separate
+        queues, not one queue of mixed frames.
+        """
+        frame_no = c_uint32()
+        ret = self.lib.avRecvAudioData(
+            c_int(self.av_chan),
+            buf,
+            c_int(len(buf)),
+            header,
+            c_int(len(header)),
+            byref(frame_no),
+        )
+        return ret, (ret if ret > 0 else 0), header.raw[:AUDIO_HEADER_BYTES]
 
     def recv_frame(self, buf, info: FrameInfo):
         """Read one frame. Returns (status, size, expected).

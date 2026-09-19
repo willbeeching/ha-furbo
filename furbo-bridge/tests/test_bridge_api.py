@@ -50,15 +50,19 @@ class FakeWorker:
 
     # -- video ---------------------------------------------------------------
 
-    def open_stream(self, quality: str) -> None:
+    def open_stream(self, quality: str, audio: bool = False) -> None:
         if self.busy:
             raise fb.StreamBusy("a viewer is already streaming")
         self.calls.append(("open_stream", (quality,)))
         self.streaming = True
+        self.audio = audio
 
     def iter_frames(self):
         yield from self.frames
         self.streaming = False
+
+    def iter_audio(self):
+        yield from getattr(self, "audio_frames", ())
 
     def close_stream(self) -> None:
         self.calls.append(("close_stream", ()))

@@ -40,6 +40,7 @@ options:
   device_id: ""
   reset_session: false
   quality: 1080p
+  audio: false
   log_level: info
 schema:
   email: email?
@@ -53,5 +54,9 @@ schema:
   # session, changed password), then turn it off.
   reset_session: bool?
   quality: list(1080p|720p|360p)
+  # Carry the camera's microphone on the stream as well as its picture. Off by
+  # default: it adds a second track, and some viewers (HomeKit among them) have
+  # to be told separately that a camera has sound before they will accept it.
+  audio: bool?
   api_token: password
   log_level: list(trace|debug|info|warning|error|fatal)

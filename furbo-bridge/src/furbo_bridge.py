@@ -83,6 +83,10 @@ SLOW_REFRESH_SECONDS = 10.0
 # viewer cannot grow the heap; overflow drops frames and ffmpeg resyncs.
 STREAM_QUEUE_MAX = 512
 FRAME_BUFFER_BYTES = 2 * 1024 * 1024
+# Audio frames are tiny next to video; this is room to spare, not a target.
+AUDIO_BUFFER_BYTES = 16 * 1024
+# Whether to ask the camera for sound at all, from the add-on's audio option.
+AUDIO_ENABLED = os.environ.get("FURBO_AUDIO", "").strip().lower() == "true"
 # How long a reconnect waits for the frame reader to leave the SDK.
 READER_EXIT_TIMEOUT = 3.0
 # How long to wait for the first frame after asking the camera to start video.
@@ -241,6 +245,8 @@ class P2PWorker:
         # alongside avSendIOCtrl on one channel, which is what lets the
         # controls keep working while video is streaming.
         self._streaming = False
+        # Whether this stream asked the camera for sound as well as pictures.
+        self._audio = False
         self._stream_stop = threading.Event()
         # Set while the reader is inside the SDK. Closing the channel under it
         # would crash the process, so a reconnect waits for this to clear.
@@ -323,6 +329,7 @@ class P2PWorker:
         self._stream_stop.set()
         was_streaming = self._streaming
         self._streaming = False
+        self._audio = False
         deadline = time.monotonic() + READER_EXIT_TIMEOUT
         while self._reader_active.is_set() and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -555,7 +562,7 @@ class P2PWorker:
 
     # -- video ---------------------------------------------------------------
 
-    def open_stream(self, quality: str) -> None:
+    def open_stream(self, quality: str, audio: bool = False) -> None:
         """Ask the camera to start video on the session we already hold."""
         with self._lock:
             if self._streaming:
@@ -568,9 +575,19 @@ class P2PWorker:
             p2p.send(fp.IPCAM_STOP, struct.pack("<i", 0))
             time.sleep(STREAM_RESTART_SETTLE)
             p2p.send(fp.IPCAM_START, struct.pack("<i", number))
+            if audio:
+                # Asked for separately from video; a camera that has nothing to
+                # say simply never answers on the audio queue.
+                p2p.send(fp.AUDIO_START, struct.pack("<i", 0))
             self._stream_stop.clear()
             self._streaming = True
-            _LOGGER.info("video started at %s over %s", quality, p2p.mode or "unknown")
+            self._audio = audio
+            _LOGGER.info(
+                "video started at %s over %s%s",
+                quality,
+                p2p.mode or "unknown",
+                ", with audio" if audio else "",
+            )
 
     def iter_frames(self) -> Iterator[bytes]:
         """Yield H.264 frames until the viewer leaves or the session drops.
@@ -666,6 +683,53 @@ class P2PWorker:
                     ", ".join(f"{fp.err(c)} x{n}" for c, n in sorted(outcomes.items())),
                 )
 
+    def iter_audio(self) -> Iterator[bytes]:
+        """Yield audio frames until the viewer leaves or the stream ends.
+
+        A separate SDK queue from the video, read on its own thread. It stops
+        when the video does rather than on a timeout of its own: a camera with
+        nothing to say is normal, and a silent room must not end the stream.
+
+        The first frame's format is logged, because nothing in the app or the
+        SDK headers tells us what a given camera's microphone actually sends,
+        and the camera answering for itself is worth more than a guess.
+        """
+        p2p = self._p2p
+        if p2p is None or not self._audio:
+            return
+        buf = fp.create_string_buffer(AUDIO_BUFFER_BYTES)
+        header = fp.create_string_buffer(fp.AUDIO_HEADER_BYTES)
+        described = False
+        try:
+            while not self._stream_stop.is_set():
+                ret, size, raw = p2p.recv_audio(buf, header)
+                if ret >= 0 and size > 0:
+                    frame = buf.raw[:size]
+                    if not described:
+                        described = True
+                        shape = fp.audio_format(raw)
+                        _LOGGER.info(
+                            "audio: codec_id=%s %s Hz %s-bit %s channel(s), "
+                            "first frame %d bytes, ADTS=%s",
+                            shape.get("codec_id"),
+                            shape.get("sample_rate"),
+                            shape.get("bits"),
+                            shape.get("channels"),
+                            size,
+                            fp.looks_like_adts(frame),
+                        )
+                    yield frame
+                    continue
+                if ret == fp.AV_ER_DATA_NOREADY:
+                    time.sleep(0.005)
+                    continue
+                if ret != fp.AV_ER_LOSED_THIS_FRAME and ret != fp.AV_ER_INCOMPLETE_FRAME:
+                    _LOGGER.debug("audio ended: %s", fp.err(ret))
+                    return
+        finally:
+            if not described:
+                _LOGGER.info("audio: the camera sent none")
+
     def close_stream(self) -> None:
         """Stop video, leaving the session up for the controls."""
         self._stream_stop.set()
@@ -677,6 +741,10 @@ class P2PWorker:
             if p2p is not None:
                 with contextlib.suppress(Exception):
                     p2p.send(fp.IPCAM_STOP, struct.pack("<i", 0))
+                if self._audio:
+                    with contextlib.suppress(Exception):
+                        p2p.send(fp.AUDIO_STOP, struct.pack("<i", 0))
+            self._audio = False
             _LOGGER.info("video stopped")
 
 
@@ -931,7 +999,7 @@ def create_app(
         """Serve H.264 from the live session for as long as the viewer stays."""
         worker = target(request)
         quality = read_quality(worker.key)
-        await run(worker, worker.open_stream, quality)
+        await run(worker, worker.open_stream, quality, AUDIO_ENABLED)
         response = web.StreamResponse(
             status=200, headers={"Content-Type": "video/H264", "Cache-Control": "no-store"}
         )
@@ -965,6 +1033,45 @@ def create_app(
                 _LOGGER.warning("dropped %d frames: the viewer could not keep up", frames.dropped)
         return response
 
+    async def get_audio(request: web.Request) -> web.StreamResponse:
+        """Serve the camera's microphone alongside the video stream.
+
+        Deliberately does NOT start the stream: it attaches to the one the
+        video request started, so the two come from a single P2P session and
+        a viewer that wants no sound costs the camera nothing. A request that
+        arrives before the video has nothing to read and ends straight away,
+        which is what ffmpeg wants rather than a hang.
+        """
+        worker = target(request)
+        response = web.StreamResponse(
+            status=200, headers={"Content-Type": "audio/aac", "Cache-Control": "no-store"}
+        )
+        await response.prepare(request)
+
+        loop = asyncio.get_running_loop()
+        frames = FrameQueue()
+
+        def pump() -> None:
+            try:
+                for frame in worker.iter_audio():
+                    loop.call_soon_threadsafe(frames.offer, frame)
+            finally:
+                loop.call_soon_threadsafe(frames.offer, None)
+
+        reader = threading.Thread(target=pump, name=f"furbo-audio-{worker.key}", daemon=True)
+        reader.start()
+        try:
+            while True:
+                frame = await frames.get()
+                if frame is None:
+                    break
+                await response.write(frame)
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        finally:
+            reader.join(timeout=5)
+        return response
+
     app = web.Application(middlewares=[auth_and_errors])
     routes = [
         web.get("/api/cameras", get_cameras),
@@ -975,6 +1082,7 @@ def create_app(
     for path, method, handler in (
         ("status", web.get, get_status),
         ("stream", web.get, get_stream),
+        ("audio", web.get, get_audio),
         ("settings", web.post, post_settings),
         ("pan", web.post, post_pan),
         ("toss", web.post, post_toss),

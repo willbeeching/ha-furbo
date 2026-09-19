@@ -32,9 +32,32 @@ if [ -n "$DEVICE" ]; then
 else
   URL="http://127.0.0.1:${FURBO_API_PORT:-8791}/api/stream"
 fi
+PROBE=(-probesize 500000 -analyzeduration 1000000)
+
+if [ "${FURBO_AUDIO:-false}" = "true" ]; then
+  # Two tracks, so ffmpeg needs two inputs and the video can no longer be a
+  # plain pipe on stdin: a named pipe carries it instead while curl fetches the
+  # audio on a second connection. Both are bare elementary streams with no
+  # container timestamps, so ffmpeg is told to stamp them on arrival; without
+  # that it assumes a frame rate for the video and nothing at all for the
+  # audio, and the two drift apart within seconds.
+  FIFO="$(mktemp -u)"; mkfifo "$FIFO"
+  trap 'rm -f "$FIFO"' EXIT
+  curl -sS -N --fail-with-body \
+      -H "Authorization: Bearer ${API_TOKEN}" \
+      "$URL" > "$FIFO" &
+  exec curl -sS -N --fail-with-body \
+      -H "Authorization: Bearer ${API_TOKEN}" \
+      "${URL%/stream}/audio" \
+    | exec ffmpeg -hide_banner -loglevel error -fflags nobuffer \
+        -use_wallclock_as_timestamps 1 "${PROBE[@]}" -f h264 -i "$FIFO" \
+        -use_wallclock_as_timestamps 1 "${PROBE[@]}" -f aac -i - \
+        -map 0:v:0 -map 1:a:0 -c copy -rtsp_transport tcp -f rtsp "$1"
+fi
+
 exec curl -sS -N --fail-with-body \
     -H "Authorization: Bearer ${API_TOKEN}" \
     "$URL" \
   | exec ffmpeg -hide_banner -loglevel error -fflags nobuffer \
-      -probesize 500000 -analyzeduration 1000000 \
+      "${PROBE[@]}" \
       -f h264 -i - -c copy -rtsp_transport tcp -f rtsp "$1"
