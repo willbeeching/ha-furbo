@@ -160,20 +160,44 @@ def test_a_sync_word_on_its_own_proves_nothing() -> None:
     assert fa.identify(pretending, RATE, CHANNELS) is None
 
 
-def test_without_a_decoder_nothing_is_claimed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An answer we cannot check is not an answer."""
+def test_without_a_decoder_there_is_no_answer_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not a no. A no is about the camera; this is about us, and a caller that
+    cannot tell them apart will remember the wrong one."""
     monkeypatch.setattr(fa.shutil, "which", lambda _name: None)
-    assert fa.decodes_as_aac(b"\xff\xf1" + b"\x40" * 100) is False
-    assert fa.identify([b"\x01\x02\x03" + b"\x00" * 100], RATE, CHANNELS) is None
+    with pytest.raises(fa.Undecided):
+        fa.decodes_as_aac(b"\xff\xf1" + b"\x40" * 100)
+    with pytest.raises(fa.Undecided):
+        fa.identify([b"\x01\x02\x03" + b"\x00" * 100], RATE, CHANNELS)
 
 
-def test_a_decoder_that_will_not_run_is_not_a_yes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_decoder_that_will_not_run_is_not_an_answer(monkeypatch: pytest.MonkeyPatch) -> None:
     def explode(*_args: object, **_kwargs: object) -> None:
         raise OSError("no such binary")
 
     monkeypatch.setattr(fa.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
     monkeypatch.setattr(fa.subprocess, "run", explode)
-    assert fa.decodes_as_aac(b"anything") is False
+    with pytest.raises(fa.Undecided):
+        fa.decodes_as_aac(b"anything")
+
+
+def test_a_decoder_that_had_to_be_killed_is_not_an_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The case that reached main: a timeout is a SubprocessError, so it was
+    indistinguishable from the decoder looking at the bytes and refusing."""
+
+    def hang(*_args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=fa.PROBE_TIMEOUT)
+
+    monkeypatch.setattr(fa.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(fa.subprocess, "run", hang)
+    with pytest.raises(fa.Undecided, match="did not finish"):
+        fa.decodes_as_aac(b"anything")
+
+
+def test_the_decoder_is_not_given_long_with_a_picture_held(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The limit is spent with a viewer's first frames held, so it is short."""
+    assert fa.PROBE_TIMEOUT <= 5.0, "a wedged decoder would stall the picture this long"
 
 
 def test_nothing_at_all_is_not_a_format() -> None:

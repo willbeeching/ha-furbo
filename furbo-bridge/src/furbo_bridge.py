@@ -96,6 +96,16 @@ AUDIO_DECIDE_WAIT = 2.0
 # handful is enough for the decoder to be sure, and short enough that a viewer
 # does not notice; the wait above is still the outer bound.
 AUDIO_PROBE_FRAMES = 10
+# How long to leave the question alone after a check that did not settle it.
+# Neither of these is a remembered answer: 1.3.5 kept the first no for the life
+# of the process, so one ffmpeg that would not start cost a camera its sound
+# until somebody restarted the add-on. A check that could not run is likely to
+# run next time, so it waits briefly. A decoder that looked at the bytes and
+# said no is answering about the camera, so it waits much longer -- long enough
+# not to make every viewer pay for the same answer, short enough that a camera
+# whose first sample was merely unlucky gets another hearing.
+AUDIO_RETRY_AFTER_ERROR = 60.0
+AUDIO_RETRY_AFTER_NO = 600.0
 # Whether to ask the camera for sound at all, from the add-on's audio option.
 AUDIO_ENABLED = os.environ.get("FURBO_AUDIO", "").strip().lower() == "true"
 # How long a reconnect waits for the frame reader to leave the SDK.
@@ -259,12 +269,13 @@ class P2PWorker:
         # Whether this stream asked the camera for sound as well as pictures.
         self._audio = False
         # What the microphone reported about itself, and what a decoder made of
-        # it. Proved once per session rather than once per viewer: the format
-        # belongs to the camera, and the first picture should not pay for it
-        # twice.
+        # it. A proved format is kept for the session rather than re-proved per
+        # viewer: it belongs to the camera, and the first picture should not pay
+        # for it twice. Anything short of proof is not kept, only held off, so
+        # that a bad moment is not mistaken for a camera without sound.
         self.audio_shape: dict[str, Any] = {}
-        self.audio_known = False
-        self.audio_carries: fa.Format | None = None
+        self.audio_format: fa.Format | None = None
+        self.audio_retry_at = 0.0
         self._stream_stop = threading.Event()
         # How many readers are inside the SDK right now. Closing the channel
         # under one would crash the process, so a reconnect waits for this to
@@ -1192,19 +1203,47 @@ def create_app(
         finished = 0
         deadline = time.monotonic() + AUDIO_DECIDE_WAIT
 
-        async def prove() -> fa.Format | None:
-            """What the gathered frames are, asked of a decoder, then kept.
+        def hold_off(seconds: float) -> None:
+            """Leave the format alone for a while, without calling it settled."""
+            worker.audio_retry_at = time.monotonic() + seconds
 
-            Kept on the worker, so only the first viewer after a restart waits
-            for it: the format belongs to the camera, not to the viewer. The
-            decoder runs off the event loop; it costs milliseconds, but they
-            are somebody's picture.
+        async def prove() -> fa.Format | None:
+            """What the gathered frames are, asked of a decoder.
+
+            Only a yes is kept, and then only so the next viewer does not wait
+            for the same answer. Everything else leaves the question open and
+            merely holds off asking again, because the reasons for a no are
+            mostly not about this camera: no ffmpeg on PATH, a process that
+            would not start, a sample that arrived with a frame missing. One of
+            those, remembered as "this camera has no sound", costs the camera
+            its sound until the add-on is restarted.
+
+            The decoder runs off the event loop; it costs milliseconds, but
+            they are somebody's picture.
             """
             shape = worker.audio_shape
-            carries = await asyncio.to_thread(
-                fa.identify, list(sample), shape.get("sample_rate"), shape.get("channels")
-            )
+            if not sample:
+                # A camera with nothing to say. Normal, and not a format we
+                # failed at, but worth holding off on so the next viewer's
+                # picture does not wait on silence all over again.
+                hold_off(AUDIO_RETRY_AFTER_NO)
+                _LOGGER.info("the camera sent no audio, so this stream carries video only")
+                return None
+            try:
+                carries = await asyncio.to_thread(
+                    fa.identify, list(sample), shape.get("sample_rate"), shape.get("channels")
+                )
+            except fa.Undecided as err:
+                hold_off(AUDIO_RETRY_AFTER_ERROR)
+                _LOGGER.warning(
+                    "could not check this camera's audio format (%s), so this stream "
+                    "carries video only; the next viewer after %.0fs asks again",
+                    err,
+                    AUDIO_RETRY_AFTER_ERROR,
+                )
+                return None
             if carries is None:
+                hold_off(AUDIO_RETRY_AFTER_NO)
                 _LOGGER.warning(
                     "no decoder here recognises this camera's audio, so the stream "
                     "carries video only. codec_id=%s, %s Hz, %s-bit, %s channel(s), "
@@ -1218,8 +1257,8 @@ def create_app(
                 )
                 for line in fa.dump(sample):
                     _LOGGER.debug("audio sample %s", line)
-            worker.audio_known = True
-            worker.audio_carries = carries
+                return None
+            worker.audio_format = carries
             return carries
 
         async def emit(kind: str, payload: bytes, stamp: int) -> None:
@@ -1265,7 +1304,7 @@ def create_app(
                         # The sound ended before there was enough of it to
                         # identify. Whatever turned up gets its one chance,
                         # and the held picture goes out either way.
-                        await begin(await prove() if sample else None)
+                        await begin(await prove())
                     continue
                 if origin is None:
                     origin = stamp
@@ -1273,16 +1312,19 @@ def create_app(
                     held.append((kind, payload, stamp))
                     if kind == "audio":
                         sample.append(payload)
-                    if worker.audio_known:
+                    if worker.audio_format is not None:
                         # Already proved on this session: no wait, no probe.
-                        await begin(worker.audio_carries)
+                        await begin(worker.audio_format)
+                    elif time.monotonic() < worker.audio_retry_at:
+                        # A check failed recently, for reasons that were mostly
+                        # not about this camera. Do not make this viewer's
+                        # picture wait on it again until that has aged out.
+                        await begin(None)
                     elif len(sample) >= AUDIO_PROBE_FRAMES:
                         await begin(await prove())
                     elif time.monotonic() >= deadline:
-                        # Out of time. A camera with nothing to say is not a
-                        # format we failed to recognise, so it is not recorded
-                        # as one and the next stream asks again.
-                        await begin(await prove() if sample else None)
+                        # Out of time, with whatever turned up.
+                        await begin(await prove())
                     continue
                 await emit(kind, payload, stamp)
         except (ConnectionResetError, asyncio.CancelledError):

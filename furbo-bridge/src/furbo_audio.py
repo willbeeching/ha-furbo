@@ -54,12 +54,25 @@ ADTS_RATES = (
 )
 ADTS_HEADER_BYTES = 7
 # How long to let the decoder look at the sample. It reads a fraction of a
-# second of audio from memory, so this is a guard against a wedged process
-# rather than a budget.
-PROBE_TIMEOUT = 10.0
+# second of audio from memory, so a second would do; the point of the limit is
+# a wedged process, and the wait is spent with a viewer's picture held, so it
+# is short rather than generous.
+PROBE_TIMEOUT = 3.0
 # How much of an unrecognised sample to write to the log, in bytes of payload.
 DUMP_BYTES = 4096
 DUMP_LINE = 180
+
+
+class Undecided(Exception):
+    """The decoder could not be asked, so the format is still an open question.
+
+    Deliberately not the same as a decoder saying no. A no is an answer about
+    the camera and keeps for as long as the camera is the same camera. This is
+    a statement about us -- no ffmpeg on PATH, a process that would not start,
+    one that had to be killed -- and it keeps for no time at all. Treating the
+    two alike is what let one blocked ffmpeg cost a camera its sound until
+    somebody restarted the add-on.
+    """
 
 
 def looks_like_adts(payload: bytes) -> bool:
@@ -114,12 +127,14 @@ def decodes_as_aac(stream: bytes) -> bool:
     Strict on purpose. AAC is a structured bitstream, so bytes that are not
     AAC do not decode quietly: a run of silence, a ramp and random noise are
     all rejected, which is what makes an accepted sample evidence rather than
-    an absence of evidence. A missing ffmpeg proves nothing, so it is a no.
+    an absence of evidence.
+
+    Raises ``Undecided`` when the question could not be put to a decoder at
+    all, which is not the same as the answer being no.
     """
     binary = shutil.which("ffmpeg")
     if binary is None:
-        _LOGGER.warning("no ffmpeg to check the audio format with, so audio is left out")
-        return False
+        raise Undecided("no ffmpeg on PATH")
     try:
         done = subprocess.run(
             [binary, "-v", "error", "-f", "aac", "-i", "pipe:0", "-f", "null", "-"],
@@ -127,9 +142,10 @@ def decodes_as_aac(stream: bytes) -> bool:
             capture_output=True,
             timeout=PROBE_TIMEOUT,
         )
-    except (OSError, subprocess.SubprocessError):
-        _LOGGER.warning("could not run ffmpeg to check the audio format", exc_info=True)
-        return False
+    except subprocess.TimeoutExpired as err:
+        raise Undecided(f"ffmpeg did not finish within {PROBE_TIMEOUT:g}s") from err
+    except (OSError, subprocess.SubprocessError) as err:
+        raise Undecided(f"ffmpeg would not run: {type(err).__name__}") from err
     if done.returncode == 0 and not done.stderr.strip():
         return True
     _LOGGER.debug(
@@ -145,6 +161,9 @@ def identify(frames: list[bytes], sample_rate: int | None, channels: int | None)
     ``sample_rate`` and ``channels`` are what the camera's own frame header
     reported. They are needed only for frames that carry no header of their
     own, where they are the one thing that says how to build one.
+
+    Raises ``Undecided`` if no decoder could be reached, so that a caller
+    keeping the answer can tell an answer from the absence of one.
     """
     frames = [frame for frame in frames if frame]
     if not frames:

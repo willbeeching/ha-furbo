@@ -3,6 +3,28 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.6
+
+- **A failed audio check no longer costs you sound until the next restart.**
+  1.3.5 remembered the first answer it got, and it could not tell an answer
+  from the absence of one: no ffmpeg on `PATH`, a process that would not start
+  and one that had to be killed all arrived as "this camera has no sound", and
+  nothing ever asked again. A blocked decoder now holds the question open for a
+  minute and the next viewer asks afresh.
+- **A decoder that looked at the bytes and said no is also not final**, just
+  longer lived: it holds for ten minutes. A sample that arrived with a frame
+  missing is a bad moment, not a camera without a microphone, and the
+  difference only shows up later.
+- **A camera that sends no audio at all stops costing two seconds of first
+  picture on every stream.** Silence was not remembered as anything, so every
+  viewer waited out the whole decision again.
+- The decoder's own time limit drops from ten seconds to three. It is spent
+  with a viewer's first frames held, so it is there to bound a wedged process,
+  not to be generous.
+- Only a proved format is kept. Everything else is held off and retried, which
+  is the difference between a bridge that recovers on its own and one that
+  needs restarting.
+
 ## 1.3.5
 
 - **Audio now works on cameras that send AAC without a header.** 1.3.4 carried

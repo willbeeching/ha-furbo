@@ -15,6 +15,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+import time
 from typing import Any
 
 from aiohttp.test_utils import TestClient, TestServer
@@ -53,8 +54,8 @@ class FakeWorker:
         self.busy = False
         self.audio = False
         self.audio_shape: dict[str, Any] = {"codec_id": 135, "sample_rate": 16000, "channels": 1}
-        self.audio_known = False
-        self.audio_carries: Any = None
+        self.audio_format: Any = None
+        self.audio_retry_at = 0.0
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
     # -- video ---------------------------------------------------------------
@@ -638,6 +639,127 @@ def test_the_format_is_proved_once_not_once_per_viewer(
 
     _run(scenario)
     assert len(asked) == 1, f"the decoder was asked {len(asked)} times"
+
+
+def av_twice(client: Any, worker: Any) -> Any:
+    """Two viewers in turn, as two separate streams on one session."""
+
+    async def run() -> list[set[int]]:
+        seen = []
+        for _ in range(2):
+            worker.frames = [b"\x00\x00\x00\x01\x65" + b"\xaa" * 60]
+            worker.audio_frames = [b"\xff\xf1" + b"\xbb" * 30]
+            resp = await client.get("/api/av", headers=AUTH)
+            assert resp.status == 200
+            body = await resp.read()
+            seen.append(
+                {
+                    ((body[at + 1] & 0x1F) << 8) | body[at + 2]
+                    for at in range(0, len(body), ts.PACKET_SIZE)
+                }
+            )
+        return seen
+
+    return run
+
+
+def test_a_check_that_could_not_run_is_not_a_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A blocked decoder says nothing about the camera, so it is not kept.
+
+    1.3.5 kept it anyway: one ffmpeg that timed out left the camera silent for
+    every later viewer until the add-on was restarted. The audio was fine, and
+    nothing would ask again.
+    """
+    tries: list[str] = []
+
+    def identify(*_args: Any) -> Any:
+        tries.append("asked")
+        if len(tries) == 1:
+            raise fb.fa.Undecided("ffmpeg did not finish within 3s")
+        return FRAMED_AAC
+
+    monkeypatch.setattr(fb.fa, "identify", identify)
+    monkeypatch.setattr(fb, "AUDIO_RETRY_AFTER_ERROR", 0.0)
+    seen: dict[str, Any] = {}
+
+    async def scenario(client: Any, worker: Any) -> None:
+        seen["pids"] = await av_twice(client, worker)()
+
+    _run(scenario)
+    first, second = seen["pids"]
+    assert ts.VIDEO_PID in first and ts.AUDIO_PID not in first, "a failed check must not guess"
+    assert ts.AUDIO_PID in second, "the camera stayed silent after a transient failure"
+    assert len(tries) == 2, f"the decoder was asked {len(tries)} times, not twice"
+
+
+def test_a_no_does_not_keep_forever_either(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sample can arrive with a frame missing. That is a bad moment, not a
+    camera without sound, and the difference is only visible later."""
+    tries: list[str] = []
+
+    def identify(*_args: Any) -> Any:
+        tries.append("asked")
+        return None if len(tries) == 1 else FRAMED_AAC
+
+    monkeypatch.setattr(fb.fa, "identify", identify)
+    monkeypatch.setattr(fb, "AUDIO_RETRY_AFTER_NO", 0.0)
+    seen: dict[str, Any] = {}
+
+    async def scenario(client: Any, worker: Any) -> None:
+        seen["pids"] = await av_twice(client, worker)()
+
+    _run(scenario)
+    assert ts.AUDIO_PID not in seen["pids"][0]
+    assert ts.AUDIO_PID in seen["pids"][1]
+
+
+def test_a_picture_does_not_wait_on_a_check_that_just_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retrying must not mean retrying on every single viewer: the check costs
+    a held picture, and a decoder that just failed will mostly fail again."""
+    tries: list[str] = []
+
+    def identify(*_args: Any) -> Any:
+        tries.append("asked")
+        raise fb.fa.Undecided("no ffmpeg on PATH")
+
+    monkeypatch.setattr(fb.fa, "identify", identify)
+    seen: dict[str, Any] = {}
+
+    async def scenario(client: Any, worker: Any) -> None:
+        seen["pids"] = await av_twice(client, worker)()
+
+    _run(scenario)
+    assert all(ts.AUDIO_PID not in pids for pids in seen["pids"])
+    assert all(ts.VIDEO_PID in pids for pids in seen["pids"]), "the picture was the price"
+    assert len(tries) == 1, "the hold-off did not hold"
+
+
+def test_a_camera_with_no_microphone_is_not_asked_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Silence is not a format we failed at, but it still must not be paid for
+    on every stream: waiting out the decision took two seconds of first
+    picture, every single time, on a camera that was never going to answer."""
+    asked: list[str] = []
+    monkeypatch.setattr(fb.fa, "identify", lambda *_a: asked.append("asked"))
+    monkeypatch.setattr(fb, "AUDIO_DECIDE_WAIT", 0.05)
+    waits: list[float] = []
+
+    async def scenario(client: Any, worker: Any) -> None:
+        for _ in range(2):
+            worker.frames = [b"\x00\x00\x00\x01\x65" + b"\xaa" * 60]
+            worker.audio_frames = []
+            started = time.monotonic()
+            resp = await client.get("/api/av", headers=AUTH)
+            assert resp.status == 200
+            assert await resp.read()
+            waits.append(time.monotonic() - started)
+
+    _run(scenario)
+    assert not asked, "there was nothing to ask a decoder about"
+    assert waits[1] < 0.05, f"the second viewer waited out the decision again ({waits[1]:.3f}s)"
 
 
 def test_the_plain_stream_endpoint_asks_for_no_audio() -> None:
