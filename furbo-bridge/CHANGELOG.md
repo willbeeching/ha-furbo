@@ -3,6 +3,37 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.5
+
+- **Audio now works on cameras that send AAC without a header.** 1.3.4 carried
+  sound only when a frame arrived already wrapped in ADTS. A camera has no
+  reason to wrap it: the P2P SDK marks frame boundaries itself, so the frames
+  come through bare, and a bare AAC frame is undecodable on its own. The bridge
+  now builds the header the camera left off, from the sample rate and channel
+  count the camera's own frame header reports.
+- **Nothing is claimed that a decoder has not accepted.** Before the transport
+  stream's tables are written, a fraction of a second of audio is put through
+  ffmpeg, which the add-on image already carries. If it decodes cleanly the
+  track is declared; if not, the stream carries video only. Silence, a ramp and
+  random noise are all rejected, so an accepted sample is evidence rather than
+  the absence of a complaint. This is what replaces the codec id, which is
+  defined inside TUTK's native library and cannot be read here.
+- **The answer is remembered for the session**, so only the first viewer after
+  a restart waits for the check, and only when `audio` is on.
+- **An unrecognised format is now reported properly.** The log gives the codec
+  id, sample rate, bit depth, channel count and frame sizes, and at `debug` a
+  base64 sample of the audio itself. That is what identifying a new format
+  takes, so please include it when you report one.
+- **The audio is re-encoded on the way out to RTSP, because it has to be.**
+  ffmpeg's RTSP output refuses AAC that arrived in ADTS framing ("AAC with no
+  global headers is currently not supported"): the packetizer needs the codec
+  config that ADTS does not carry. Re-encoding 16 kHz mono costs almost
+  nothing, and the alternative is no sound. The picture is still copied
+  untouched.
+- Frames held while the format is being settled are no longer dropped if the
+  sound ends first. The first frames are the ones carrying the parameter set a
+  decoder opens on, so losing them cost the start of the picture.
+
 ## 1.3.4
 
 - **Fixes a regression in 1.3.3 that broke live video when `audio` was on.**

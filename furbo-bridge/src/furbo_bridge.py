@@ -64,6 +64,7 @@ from typing import Any
 
 from aiohttp import web
 
+import furbo_audio as fa
 from furbo_cloud import configure_logging
 import furbo_p2p as fp
 import furbo_ts as ts
@@ -91,6 +92,10 @@ AUDIO_BUFFER_BYTES = 16 * 1024
 # it carries, so this is decided once, before anything is written. A camera
 # with no microphone never answers, and the picture must not wait on it.
 AUDIO_DECIDE_WAIT = 2.0
+# How many audio frames to gather before asking a decoder what they are. A
+# handful is enough for the decoder to be sure, and short enough that a viewer
+# does not notice; the wait above is still the outer bound.
+AUDIO_PROBE_FRAMES = 10
 # Whether to ask the camera for sound at all, from the add-on's audio option.
 AUDIO_ENABLED = os.environ.get("FURBO_AUDIO", "").strip().lower() == "true"
 # How long a reconnect waits for the frame reader to leave the SDK.
@@ -253,6 +258,13 @@ class P2PWorker:
         self._streaming = False
         # Whether this stream asked the camera for sound as well as pictures.
         self._audio = False
+        # What the microphone reported about itself, and what a decoder made of
+        # it. Proved once per session rather than once per viewer: the format
+        # belongs to the camera, and the first picture should not pay for it
+        # twice.
+        self.audio_shape: dict[str, Any] = {}
+        self.audio_known = False
+        self.audio_carries: fa.Format | None = None
         self._stream_stop = threading.Event()
         # How many readers are inside the SDK right now. Closing the channel
         # under one would crash the process, so a reconnect waits for this to
@@ -751,6 +763,10 @@ class P2PWorker:
                     if not described:
                         described = True
                         shape = fp.audio_format(raw)
+                        # Kept for the format probe, which has to build the
+                        # header a raw frame is missing: this is where its
+                        # sample rate and channel count come from.
+                        self.audio_shape = shape
                         _LOGGER.info(
                             "audio: codec_id=%s %s Hz %s-bit %s channel(s), "
                             "first frame %d bytes, ADTS=%s",
@@ -759,7 +775,7 @@ class P2PWorker:
                             shape.get("bits"),
                             shape.get("channels"),
                             size,
-                            fp.looks_like_adts(frame),
+                            fa.looks_like_adts(frame),
                         )
                     stamp = fp.audio_format(raw).get("timestamp", 0)
                     yield (frame, stamp) if timed else frame
@@ -1165,20 +1181,73 @@ def create_app(
             reader.start()
 
         # The tables go out with the first packet and say what each track is,
-        # so the audio codec has to be settled before anything is written.
-        # Frames that arrive first are held, not dropped.
+        # so the audio format has to be settled before anything is written.
+        # Frames that arrive first are held, not dropped: the first of them
+        # carries the parameter set a decoder has to open on.
         mux: ts.TSMuxer | None = None
+        audio: fa.Format | None = None
         held: list[tuple[str, bytes, int]] = []
+        sample: list[bytes] = []
         origin: int | None = None
         finished = 0
         deadline = time.monotonic() + AUDIO_DECIDE_WAIT
 
-        def start(audio_type: int | None) -> ts.TSMuxer:
+        async def prove() -> fa.Format | None:
+            """What the gathered frames are, asked of a decoder, then kept.
+
+            Kept on the worker, so only the first viewer after a restart waits
+            for it: the format belongs to the camera, not to the viewer. The
+            decoder runs off the event loop; it costs milliseconds, but they
+            are somebody's picture.
+            """
+            shape = worker.audio_shape
+            carries = await asyncio.to_thread(
+                fa.identify, list(sample), shape.get("sample_rate"), shape.get("channels")
+            )
+            if carries is None:
+                _LOGGER.warning(
+                    "no decoder here recognises this camera's audio, so the stream "
+                    "carries video only. codec_id=%s, %s Hz, %s-bit, %s channel(s), "
+                    "frame sizes %s. Please report those with your camera model: "
+                    "identifying the format is what carrying it needs.",
+                    shape.get("codec_id"),
+                    shape.get("sample_rate"),
+                    shape.get("bits"),
+                    shape.get("channels"),
+                    [len(frame) for frame in sample],
+                )
+                for line in fa.dump(sample):
+                    _LOGGER.debug("audio sample %s", line)
+            worker.audio_known = True
+            worker.audio_carries = carries
+            return carries
+
+        async def emit(kind: str, payload: bytes, stamp: int) -> None:
+            """One frame out, on the camera's clock. Sound only when it is owed."""
+            if mux is None:  # pragma: no cover - begin() always runs first
+                return
+            seconds = max(0.0, (stamp - (origin or 0)) / 1000.0)
+            if kind == "video":
+                packets = mux.video(payload, seconds)
+            elif audio is None:
+                return
+            else:
+                packets = mux.audio(audio.package(payload), seconds)
+            for packet in packets:
+                await response.write(packet)
+
+        async def begin(carries: fa.Format | None) -> None:
+            """Open the stream with these tables, then let go of what is held."""
+            nonlocal mux, audio
+            audio = carries
             _LOGGER.info(
                 "streaming video %s",
-                "with audio" if audio_type is not None else "only; audio not carried",
+                f"with {carries.name}" if carries else "only; audio not carried",
             )
-            return ts.TSMuxer(audio_type)
+            mux = ts.TSMuxer(carries.stream_type if carries else None)
+            for held_kind, held_payload, held_stamp in held:
+                await emit(held_kind, held_payload, held_stamp)
+            held.clear()
 
         try:
             while finished < len(readers):
@@ -1193,32 +1262,29 @@ def create_app(
                         # to finish second.
                         await run(worker, worker.close_stream)
                     elif mux is None:
-                        # Audio ended before it said anything. Video alone.
-                        mux = start(None)
+                        # The sound ended before there was enough of it to
+                        # identify. Whatever turned up gets its one chance,
+                        # and the held picture goes out either way.
+                        await begin(await prove() if sample else None)
                     continue
                 if origin is None:
                     origin = stamp
                 if mux is None:
                     held.append((kind, payload, stamp))
                     if kind == "audio":
-                        mux = start(audio_stream_type(payload))
+                        sample.append(payload)
+                    if worker.audio_known:
+                        # Already proved on this session: no wait, no probe.
+                        await begin(worker.audio_carries)
+                    elif len(sample) >= AUDIO_PROBE_FRAMES:
+                        await begin(await prove())
                     elif time.monotonic() >= deadline:
-                        # No audio in the time a viewer will wait for a
-                        # picture. Better a stream without sound than none.
-                        mux = start(None)
-                    if mux is None:
-                        continue
-                    for held_kind, held_payload, held_stamp in held:
-                        seconds = max(0.0, (held_stamp - origin) / 1000.0)
-                        emit = mux.video if held_kind == "video" else mux.audio
-                        for packet in emit(held_payload, seconds):
-                            await response.write(packet)
-                    held.clear()
+                        # Out of time. A camera with nothing to say is not a
+                        # format we failed to recognise, so it is not recorded
+                        # as one and the next stream asks again.
+                        await begin(await prove() if sample else None)
                     continue
-                seconds = max(0.0, (stamp - origin) / 1000.0)
-                emit = mux.video if kind == "video" else mux.audio
-                for packet in emit(payload, seconds):
-                    await response.write(packet)
+                await emit(kind, payload, stamp)
         except (ConnectionResetError, asyncio.CancelledError):
             pass
         finally:
@@ -1248,33 +1314,6 @@ def create_app(
         routes.append(method(f"/api/cameras/{{device_id}}/{path}", handler))
     app.add_routes(routes)
     return app
-
-
-def audio_stream_type(frame: bytes) -> int | None:
-    """Which transport-stream type this audio is, or None if we cannot tell.
-
-    Decided from the bytes, not from the codec id in the frame header. That id
-    is defined inside TUTK's native library, which is not something this
-    project can read: an FB0030 reports 135, the phone app's own decoder is
-    configured at runtime rather than from a table we can see, and the only id
-    established here is the 137 the camera's speaker accepts, which is the
-    other direction entirely.
-
-    So the rule is to claim a codec only when the payload proves it. ADTS says
-    so in its first eleven bits. Anything else gets no audio track, because a
-    track declared wrongly does not merely fail to play: the demuxer cannot
-    parse it, the output header fails with it, and the video goes down beside
-    the sound nobody asked for.
-    """
-    if fp.looks_like_adts(frame):
-        return ts.STREAM_TYPE_AAC_ADTS
-    _LOGGER.warning(
-        "audio in an unrecognised format, so this stream carries video only. "
-        "First bytes: %s. Please report these with your camera model, they are "
-        "what identifying the codec needs.",
-        frame[:12].hex(" "),
-    )
-    return None
 
 
 class FrameQueue:

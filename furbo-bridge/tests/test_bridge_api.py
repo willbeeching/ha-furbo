@@ -25,6 +25,10 @@ import furbo_ts as ts
 
 TOKEN = "s3cret-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+# Stand-ins for what furbo_audio.identify returns once a decoder has agreed:
+# audio that carries its own header, and audio that needs one built for it.
+FRAMED_AAC = fb.fa.Format("AAC in ADTS framing", ts.STREAM_TYPE_AAC_ADTS, 0, 0, True)
+RAW_AAC = fb.fa.Format("raw AAC", ts.STREAM_TYPE_AAC_ADTS, 16000, 1, False)
 
 
 class FakeWorker:
@@ -48,6 +52,9 @@ class FakeWorker:
         self.frames: list[bytes] = []
         self.busy = False
         self.audio = False
+        self.audio_shape: dict[str, Any] = {"codec_id": 135, "sample_rate": 16000, "channels": 1}
+        self.audio_known = False
+        self.audio_carries: Any = None
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
     # -- video ---------------------------------------------------------------
@@ -487,14 +494,21 @@ def test_a_renewal_needing_a_person_says_so() -> None:
     with_credentials(fb.fp.LoginRequired("set a fresh mfa_code"), scenario)
 
 
-def test_av_serves_one_transport_stream_carrying_both_tracks() -> None:
+def test_av_serves_one_transport_stream_carrying_both_tracks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The combined endpoint is what keeps sound and picture together.
 
     Video and audio reach the bridge as two queues of bare frames. Served
     separately they arrive at ffmpeg with no way to relate them and land
     seconds apart, so they are muxed here instead, on the camera's own clock.
+
+    Whether a given camera's audio is really AAC is settled by a decoder, and
+    that is furbo_audio's business, tested there against frames ffmpeg made.
+    Here it is stubbed, so this stays a test of the wiring.
     """
     seen: dict[str, Any] = {}
+    monkeypatch.setattr(fb.fa, "identify", lambda *_args: FRAMED_AAC)
 
     async def scenario(client: Any, worker: Any) -> None:
         worker.frames = [b"\x00\x00\x00\x01\x65" + b"\xaa" * 60]
@@ -517,15 +531,18 @@ def test_av_serves_one_transport_stream_carrying_both_tracks() -> None:
     assert seen["audio"] is True
 
 
-def test_audio_the_bridge_cannot_name_does_not_cost_you_the_picture() -> None:
+def test_audio_the_bridge_cannot_name_does_not_cost_you_the_picture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The regression that reached a real camera, as a test.
 
     The muxer declared the audio AAC because the phone app decodes AAC. A real
     FB0030 sends something else, so ffmpeg could not parse the track, the RTSP
-    header failed with it, and the live view died every four seconds. Audio we
-    cannot name is now simply not carried, and the picture is unaffected.
+    header failed with it, and the live view died every four seconds. Audio no
+    decoder accepts is now simply not carried, and the picture is unaffected.
     """
     seen: dict[str, Any] = {}
+    monkeypatch.setattr(fb.fa, "identify", lambda *_args: None)
 
     async def scenario(client: Any, worker: Any) -> None:
         worker.frames = [b"\x00\x00\x00\x01\x65" + b"\xaa" * 60]
@@ -541,7 +558,86 @@ def test_audio_the_bridge_cannot_name_does_not_cost_you_the_picture() -> None:
     packets = [body[i : i + ts.PACKET_SIZE] for i in range(0, len(body), ts.PACKET_SIZE)]
     pids = {((p[1] & 0x1F) << 8) | p[2] for p in packets}
     assert ts.VIDEO_PID in pids, "unknown audio took the video with it again"
+    assert b"\x00\x00\x00\x01\x65" + b"\xaa" * 60 in body, "the held picture was dropped"
     assert ts.AUDIO_PID not in pids
+
+
+def audio_payloads(body: bytes) -> list[bytes]:
+    """What each audio PES in this transport stream actually carries.
+
+    Past the 4 byte transport header, any adaptation field, and a PES header
+    that is 3 start code + 1 stream id + 2 length + 3 flags + 5 PTS bytes long.
+    """
+    out = []
+    for at in range(0, len(body), ts.PACKET_SIZE):
+        packet = body[at : at + ts.PACKET_SIZE]
+        pid = ((packet[1] & 0x1F) << 8) | packet[2]
+        if pid != ts.AUDIO_PID or not packet[1] & 0x40:
+            continue
+        payload = packet[4:]
+        if packet[3] & 0x20:
+            payload = payload[1 + payload[0] :]
+        out.append(payload[14:])
+    return out
+
+
+def test_raw_audio_goes_out_with_the_header_the_camera_left_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A camera sending bare AAC frames is the case worth carrying properly.
+
+    The SDK already marks frame boundaries, so a camera has no reason to send
+    ADTS, and a bare frame is undecodable on its own. The header built for it
+    has to reach the viewer ahead of the payload, unaltered.
+    """
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(fb.fa, "identify", lambda *_args: RAW_AAC)
+    frame = b"\x21" + b"\xbb" * 40
+
+    async def scenario(client: Any, worker: Any) -> None:
+        worker.frames = [b"\x00\x00\x00\x01\x65" + b"\xaa" * 60]
+        worker.audio_frames = [frame]
+        resp = await client.get("/api/av", headers=AUTH)
+        seen["body"] = await resp.read()
+
+    _run(scenario)
+    carried = audio_payloads(seen["body"])
+    assert carried, "the audio track never reached the viewer"
+    expected = fb.fa.adts_header(len(frame), 16000, 1) + frame
+    assert carried[0][: len(expected)] == expected
+
+
+def test_the_format_is_proved_once_not_once_per_viewer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Asking a decoder costs a fraction of a second of somebody's picture.
+
+    The format belongs to the camera, so the answer is kept: the second viewer
+    after a restart must not wait for it again.
+    """
+    asked: list[int] = []
+
+    def identify(frames: Any, *_args: Any) -> Any:
+        asked.append(len(frames))
+        return FRAMED_AAC
+
+    monkeypatch.setattr(fb.fa, "identify", identify)
+
+    async def scenario(client: Any, worker: Any) -> None:
+        worker.frames = [b"\x00\x00\x00\x01\x65" + b"\xaa" * 60]
+        worker.audio_frames = [b"\xff\xf1" + b"\xbb" * 30]
+        for _ in range(2):
+            resp = await client.get("/api/av", headers=AUTH)
+            assert resp.status == 200
+            body = await resp.read()
+            pids = {
+                ((body[at + 1] & 0x1F) << 8) | body[at + 2]
+                for at in range(0, len(body), ts.PACKET_SIZE)
+            }
+            assert ts.AUDIO_PID in pids, "the remembered format was not carried"
+
+    _run(scenario)
+    assert len(asked) == 1, f"the decoder was asked {len(asked)} times"
 
 
 def test_the_plain_stream_endpoint_asks_for_no_audio() -> None:

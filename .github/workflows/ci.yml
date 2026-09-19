@@ -113,6 +113,10 @@ jobs:
       # instead and miss these tools.
       - run: uv venv --python "${{ steps.setup-python.outputs.python-path }}" .venv
       - run: uv pip install --python .venv -r ../requirements-lint.txt -r requirements-test.txt
+      # The add-on image carries ffmpeg, and the audio format tests ask it
+      # whether a packaging really decodes. Without it here those tests skip,
+      # and the check that replaced the 1.3.3 guess would go unrun.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Ruff lint (add-on)
         run: .venv/bin/ruff check src tests
       - name: Ruff format (add-on)
@@ -124,7 +128,7 @@ jobs:
       - name: Tests with coverage (all bridge modules)
         run: >-
           .venv/bin/python -m pytest
-          --cov=furbo_bridge --cov=furbo_cloud --cov=furbo_p2p
+          --cov=furbo_audio --cov=furbo_bridge --cov=furbo_cloud --cov=furbo_p2p
           --cov-report=term-missing --cov-fail-under=50
 
   release-archive:

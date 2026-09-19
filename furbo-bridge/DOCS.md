@@ -69,11 +69,28 @@ ports also works.
 | `device_id` | The Furbo cloud device id this add-on serves. **Required only if your account has more than one camera** — the add-on lists the ids in its log and refuses to guess. See the multi-camera note below. |
 | `reset_session` | Turn on once to discard the stored session and log in again (expired session, changed password, wrong account), then turn it back off. It resets once, not once per restart, so forgetting to turn it off does not keep throwing the new session away; toggle it off and on to reset again. |
 | `quality` | `1080p`, `720p` or `360p`. This camera serves 1080p or 360p; 720p falls back to 360p. |
+| `audio` | Off by default. Turn it on to carry the camera's microphone on the live stream alongside the picture. See the note below: whether your camera's audio can be carried is decided by asking a decoder, so it either works or the stream quietly stays video-only. |
 | `api_token` | **Required.** Bearer token the HTTP API requires; the add-on will not start without it. Use a long random value and set the same value in the integration. |
 | `log_level` | go2rtc log verbosity. |
 
 ## Notes and limits
 
+- **Sound is opt-in, and the format is proved rather than assumed.** With
+  `audio` on, the bridge muxes the microphone and the picture into one
+  transport stream using the camera's own timestamps, which is the only clock
+  the two share. Before it writes that stream's tables it puts a fraction of a
+  second of audio through ffmpeg: if a decoder accepts it, the audio track is
+  declared, and if not the stream carries video only and the log says what it
+  saw. The codec id in the camera's frame header cannot be used for this. It is
+  defined inside TUTK's native library, an FB0030 reports 135, and the one id
+  established anywhere here is the 137 its speaker accepts in the other
+  direction. Version 1.3.3 guessed from that id, and because a transport
+  stream's tables are a promise about its payload, the wrong guess took the
+  picture down with the sound.
+- **If your camera's audio is not carried, the log has what we need.** It
+  prints the codec id, sample rate, bit depth, channel count and frame sizes,
+  and at `log_level: debug` a base64 sample of the audio itself. Please open an
+  issue with those and your camera model.
 - **One camera per add-on installation.** This packaged add-on serves a single
   camera; Home Assistant's Add-on Store does not let you install a second copy
   of the same add-on. If your Furbo account has several cameras, the integration

@@ -969,16 +969,6 @@ def audio_format(header: bytes) -> dict:
     }
 
 
-def looks_like_adts(payload: bytes) -> bool:
-    """True when a frame opens with an AAC ADTS sync word.
-
-    The phone app decodes the camera's audio with an ADTS AAC MediaFormat, so
-    this is the expected shape, and sniffing the bytes settles it without
-    trusting a codec id whose meaning is not documented anywhere we can see.
-    """
-    return len(payload) >= 2 and payload[0] == 0xFF and (payload[1] & 0xF0) == 0xF0
-
-
 class FurboP2P:
     def __init__(
         self, lib_path: str, region: str | None, log_path: str | None, tcp_relay: bool = False

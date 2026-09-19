@@ -40,12 +40,19 @@ if [ "${FURBO_AUDIO:-false}" = "true" ]; then
   # two separate pipes they land three seconds apart, and no combination of its
   # timestamp flags closes that, because neither pipe says how it relates to
   # the other. A transport stream has somewhere to put the answer.
+  #
+  # The video is copied; the audio has to be re-encoded, cheap as it is at
+  # 16 kHz mono. ffmpeg's RTSP output cannot carry AAC that arrived in ADTS
+  # framing: "AAC with no global headers is currently not supported", because
+  # the RTP packetizer needs the codec config that ADTS does not carry and
+  # aac_adtstoasc does not supply in time. Re-encoding produces it, and the
+  # alternative is no sound at all.
   exec curl -sS -N --fail-with-body \
       -H "Authorization: Bearer ${API_TOKEN}" \
       "${URL%/stream}/av" \
     | exec ffmpeg -hide_banner -loglevel error -fflags nobuffer \
         "${PROBE[@]}" -f mpegts -i - \
-        -c copy -rtsp_transport tcp -f rtsp "$1"
+        -c:v copy -c:a aac -rtsp_transport tcp -f rtsp "$1"
 fi
 
 exec curl -sS -N --fail-with-body \
