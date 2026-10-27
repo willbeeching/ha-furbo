@@ -3,6 +3,30 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.7
+
+- **Fixes a legacy (FB002) camera losing P2P authentication until a fresh
+  login.** A modern camera's credential is the `P2PAccountKey`, which the
+  cloud reissues on every connection, so it cannot go stale. An FB002
+  authenticates from its own device record instead, and the bridge read that
+  record once at login and never again. When the camera rotated its
+  `P2PAccessToken`, which the phone app signing in is enough to do, the bridge
+  went on presenting the old one for the life of the process and the camera
+  answered every attempt with `-90`,
+  `IOTC_ER_DEVICE_REJECT_BY_WRONG_AUTH_KEY`. Nothing short of
+  `reset_session` cleared it. Reported on
+  [#3](https://github.com/willbeeching/ha-furbo/issues/3).
+- **The record is now re-read from the cloud each time a legacy camera
+  connects**, so its credential is as current as a modern camera's reissued
+  key. The log says when the token has changed since login.
+- **A cloud that cannot be reached leaves the stored token in place.** It may
+  well still be current, and refusing to connect over a credential that could
+  not be re-read is worse than trying the one already in hand. The same goes
+  for a record that comes back without a token at all.
+- Modern cameras are unaffected and pay no extra cloud call: the re-read
+  happens only when the cloud returns no `AuthKey`, which is what makes a
+  camera legacy in the first place.
+
 ## 1.3.6
 
 - **A failed audio check no longer costs you sound until the next restart.**
