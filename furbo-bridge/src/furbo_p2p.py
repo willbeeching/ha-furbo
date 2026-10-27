@@ -875,6 +875,40 @@ def p2p_auth(device: dict, p2p: dict, account_id: str) -> tuple[str, str, str, b
     return "", account_id, token, True
 
 
+async def _refresh_legacy_device(client: FurboClient, device: dict) -> dict:
+    """This camera's device record as the cloud holds it now, not at login.
+
+    Only legacy cameras need this, and they need it badly. A modern camera's
+    credential is the P2PAccountKey, which the cloud reissues on every
+    connection, so a stale one cannot survive a reconnect. A legacy camera
+    authenticates from its own device record instead, and that record was read
+    once at login and never again: when the camera rotated its P2PAccessToken,
+    and the phone app signing in is enough to do it, the bridge went on
+    presenting the old one for the life of the process. The camera answered
+    every attempt with -90, IOTC_ER_DEVICE_REJECT_BY_WRONG_AUTH_KEY, and
+    nothing but a fresh login cleared it. Reported on #3.
+
+    A fetch that fails leaves the stored record in place. It may well still be
+    current, and refusing to connect over a credential we could not re-read is
+    worse than trying the one already in hand.
+    """
+    try:
+        current = await client.get_devices()
+    except FurboError as exc:
+        log(f"could not re-read the device record ({type(exc).__name__}); using the stored one")
+        return device
+    fresh = next((d for d in current if str(d.get("Id")) == str(device["Id"])), None)
+    if fresh is None:
+        log("the cloud no longer lists this camera; using the device record from login")
+        return device
+    if not fresh.get("P2PAccessToken"):
+        log("the cloud sent this camera no P2PAccessToken; using the one from login")
+        return device
+    if fresh.get("P2PAccessToken") != device.get("P2PAccessToken"):
+        log("this camera's P2P access token has changed since login; using the new one")
+    return fresh
+
+
 async def fetch_p2p_credentials(device_id: str | None) -> dict:
     """Uid, auth key and a fresh P2P password for one device.
 
@@ -916,6 +950,11 @@ async def fetch_p2p_credentials(device_id: str | None) -> dict:
                 p2p = await client.get_p2p_connection(device["Id"])
             except FurboError as retry_exc:
                 raise _cloud_fail(retry_exc) from retry_exc
+        if not any(p2p.get(key) for key in MODERN_P2P_KEYS):
+            # The legacy shape: this camera's credential is in its device
+            # record, so that record has to be as current as a modern
+            # camera's reissued key is.
+            device = await _refresh_legacy_device(client, device)
     auth_key, account, password, legacy = p2p_auth(device, p2p, str(session["account_id"]))
     if legacy:
         log(f"{device['DeviceName']}: no AuthKey from the cloud; using legacy P2P auth")

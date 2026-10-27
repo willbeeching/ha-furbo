@@ -65,6 +65,131 @@ def test_unknown_device_id_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
         asyncio.run(fp.fetch_p2p_credentials("333"))
 
 
+# --- a legacy camera's credential has to be re-read, not remembered --------
+#
+# Reported on #3 after the original FB002 fix had been working for weeks. A
+# modern camera's P2PAccountKey is reissued every connection, so it cannot go
+# stale. A legacy camera authenticates from its own device record, which was
+# read once at login: when the camera rotated its P2PAccessToken the bridge
+# kept presenting the old one and the camera answered -90, WRONG_AUTH_KEY,
+# until somebody logged in again.
+
+LEGACY_P2P = {"AuthKey": None, "P2PAccountId": None, "P2PAccountKey": None}
+STORED = {"Id": 111, "DeviceName": "Hallway", "P2PUuid": "UID1", "ProductId": "FB002"}
+
+
+def _patch_legacy(
+    monkeypatch: pytest.MonkeyPatch,
+    stored_token: str,
+    cloud: list[dict[str, Any]] | Exception,
+) -> list[str]:
+    """A legacy camera, with ``cloud`` as what re-reading the record gives.
+
+    Returns a list that records each cloud call, so a test can show that the
+    record was re-read at all, and that a modern camera never pays for it.
+    """
+    calls: list[str] = []
+    device = {**STORED, "P2PAccessToken": stored_token}
+    monkeypatch.setattr(
+        fp,
+        "_load_session",
+        lambda: {"devices": [device], "account_id": "acc", "cognito_token": "t"},
+    )
+
+    class _Client:
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            pass
+
+        async def get_p2p_connection(self, _device_id: str) -> dict[str, Any]:
+            calls.append("p2p")
+            return dict(LEGACY_P2P)
+
+        async def get_devices(self) -> list[dict[str, Any]]:
+            calls.append("devices")
+            if isinstance(cloud, Exception):
+                raise cloud
+            return cloud
+
+    monkeypatch.setattr(fp, "FurboClient", _Client)
+    return calls
+
+
+def test_a_rotated_legacy_token_is_picked_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fix. The camera's current token is used, not the one from login."""
+    calls = _patch_legacy(monkeypatch, "stale", [{**STORED, "P2PAccessToken": "current"}])
+    creds = asyncio.run(fp.fetch_p2p_credentials(None))
+    assert creds["legacy"] is True
+    assert creds["password"] == "current", "the camera would reject this with -90"
+    assert "devices" in calls, "the device record was never re-read"
+
+
+def test_a_legacy_token_that_has_not_moved_is_used_as_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_legacy(monkeypatch, "same", [{**STORED, "P2PAccessToken": "same"}])
+    creds = asyncio.run(fp.fetch_p2p_credentials(None))
+    assert creds["password"] == "same"
+
+
+def test_a_cloud_that_will_not_answer_leaves_the_stored_token_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stored token may well still be current, and refusing to connect
+    over a credential we could not re-read is worse than trying it."""
+    _patch_legacy(monkeypatch, "stored", FurboConnectionError("the cloud is down"))
+    creds = asyncio.run(fp.fetch_p2p_credentials(None))
+    assert creds["password"] == "stored"
+    assert creds["legacy"] is True
+
+
+def test_a_camera_the_cloud_has_stopped_listing_keeps_its_stored_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_legacy(monkeypatch, "stored", [{"Id": 999, "P2PAccessToken": "someone else"}])
+    creds = asyncio.run(fp.fetch_p2p_credentials(None))
+    assert creds["password"] == "stored"
+
+
+def test_a_fresh_record_with_no_token_does_not_replace_a_working_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Swapping a credential that might work for one that certainly cannot."""
+    for empty in ({**STORED, "P2PAccessToken": ""}, dict(STORED)):
+        _patch_legacy(monkeypatch, "stored", [empty])
+        creds = asyncio.run(fp.fetch_p2p_credentials(None))
+        assert creds["password"] == "stored"
+
+
+def test_a_modern_camera_does_not_pay_for_any_of_this(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its key is reissued per connection, so re-reading the record would be a
+    round trip added to every reconnect for nothing."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        fp,
+        "_load_session",
+        lambda: {"devices": [dict(DEV1)], "account_id": "acc", "cognito_token": "t"},
+    )
+
+    class _Client:
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            pass
+
+        async def get_p2p_connection(self, _device_id: str) -> dict[str, str]:
+            calls.append("p2p")
+            return dict(P2P)
+
+        async def get_devices(self) -> list[dict[str, Any]]:
+            calls.append("devices")
+            raise AssertionError("a modern camera must not re-read its device record")
+
+    monkeypatch.setattr(fp, "FurboClient", _Client)
+    creds = asyncio.run(fp.fetch_p2p_credentials(None))
+    assert creds["legacy"] is False
+    assert calls == ["p2p"]
+
+
 class _Refused(fp.FurboError):
     """The cloud's 'this token is no good' answer."""
 
