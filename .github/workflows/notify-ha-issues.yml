@@ -1,0 +1,111 @@
+name: Notify HA issue watcher
+
+# Forwards newly opened issues, newly opened pull requests, and new issue
+# comments to Will's Grok bot Home Assistant watcher. A comment on a pull
+# request is skipped: that issue has pull_request set. A draft pull request
+# is sent with state "draft". Repository secrets, not stored in this file:
+#   GROK_WEBHOOK_URL  endpoint that accepts the JSON body
+#   GROK_WEBHOOK_KEY  bearer token for that endpoint
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  notify:
+    # Opened issues and opened pull requests always run. An issue_comment on a
+    # pull request sets issue.pull_request and is skipped.
+    if: ${{ github.event_name != 'issue_comment' || !github.event.issue.pull_request }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post the event to the HA watcher
+        env:
+          WEBHOOK_URL: ${{ secrets.GROK_WEBHOOK_URL }}
+          WEBHOOK_KEY: ${{ secrets.GROK_WEBHOOK_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK_URL}" ] || [ -z "${WEBHOOK_KEY}" ]; then
+            echo "GROK_WEBHOOK_URL and GROK_WEBHOOK_KEY must be set" >&2
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          event_name = os.environ["GITHUB_EVENT_NAME"]
+          if event_name not in ("issues", "issue_comment", "pull_request"):
+              raise SystemExit(f"unexpected github event: {event_name}")
+
+          with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
+              event = json.load(handle)
+
+          repository = event.get("repository") or {}
+          sender = event.get("sender") or {}
+          actor = {
+              "login": sender.get("login") or os.environ.get("GITHUB_ACTOR", "")
+          }
+          payload = {
+              "github_event": event_name,
+              "action": event.get("action") or "",
+              "repository": {
+                  "full_name": repository.get("full_name")
+                  or os.environ.get("GITHUB_REPOSITORY", "")
+              },
+          }
+          if event_name == "pull_request":
+              pull = event["pull_request"]
+              draft = bool(pull.get("draft"))
+              payload["pull_request"] = {
+                  "number": pull["number"],
+                  "title": pull.get("title") or "",
+                  "html_url": pull.get("html_url") or "",
+                  "state": "draft" if draft else (pull.get("state") or ""),
+                  "draft": draft,
+              }
+              payload["actor"] = actor
+          else:
+              issue = event["issue"]
+              payload["issue"] = {
+                  "number": issue["number"],
+                  "title": issue.get("title") or "",
+                  "html_url": issue.get("html_url") or "",
+                  "state": issue.get("state") or "",
+              }
+              payload["actor"] = actor
+              if event_name == "issue_comment":
+                  comment = event.get("comment") or {}
+                  text = comment.get("body") or ""
+                  payload["comment"] = {
+                      "body": text[:2000],
+                      "html_url": comment.get("html_url") or "",
+                  }
+
+          with open("/tmp/ha-webhook-payload.json", "w", encoding="utf-8") as handle:
+              json.dump(payload, handle, separators=(",", ":"), ensure_ascii=False)
+          PY
+
+          status="$(
+            curl --silent \
+              --output /tmp/ha-webhook-response \
+              --write-out '%{http_code}' \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --request POST \
+              --header "Authorization: Bearer ${WEBHOOK_KEY}" \
+              --header "Content-Type: application/json" \
+              --data-binary @/tmp/ha-webhook-payload.json \
+              --url "${WEBHOOK_URL}" \
+              || true
+          )"
+          if [ "${status}" != "200" ]; then
+            printf 'HA watcher webhook returned HTTP %s\n' "${status:-000}" >&2
+            exit 1
+          fi
+          printf 'Notified HA watcher for %s\n' "${GITHUB_EVENT_NAME}"
