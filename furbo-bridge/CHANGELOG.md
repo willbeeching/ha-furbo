@@ -3,6 +3,28 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.10
+
+- **Fixes pan on the Furbo Mini 360 (MC0030), where every press sent the
+  camera to its end stop.** On that model the PAN value is a speed, not a
+  step: the motor starts and does not stop until it is told to or runs out of
+  travel. The add-on only ever sent a start, so one press of Pan left swept
+  the camera to its mechanical limit in about four and a half seconds. It now
+  sends a stop after a hold calculated from how far you asked it to go.
+  Measured on two units by the reporter of
+  [#9](https://github.com/willbeeching/ha-furbo/issues/9), whose numbers this
+  is built on.
+- **The stop is sent even if the wait is interrupted**, and a new session
+  sends one as its first act, so a bridge that died mid-pan does not leave a
+  camera turning indefinitely.
+- **Cameras that stop by themselves are untouched.** An FB0030's press is a
+  bounded step that halts on its own, and a stop packet would only cut it
+  short, so it keeps the single packet it has always sent. No other model is
+  changed, because no other model has been measured.
+- The number in a pan request is treated as position units on the MC0030, in
+  the camera's own reporting scale, where the full sweep is 1336 of them. It
+  is still not degrees on any model.
+
 ## 1.3.9
 
 - **Closes an OpenSSL advisory that matters more here than most.**

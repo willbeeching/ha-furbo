@@ -197,6 +197,92 @@ def test_a_command_the_camera_accepts_stays_quiet(monkeypatch: pytest.MonkeyPatc
     assert len(fake.sends) == 3
 
 
+# --- a camera that does not stop by itself ----------------------------------
+#
+# Measured on two MC0030 units and reported on #9: the PAN value is a speed,
+# not a step, and with no stop packet the motor runs to the mechanical end. At
+# the 60 the integration's button sends that is a full sweep in about four and
+# a half seconds, every press. An FB0030's press is a bounded step that halts
+# on its own, so it must keep the single packet it has always sent.
+
+
+def _panner(monkeypatch: pytest.MonkeyPatch, product: str) -> tuple[Any, Any]:
+    fake = FakeP2P()
+    worker = _worker_with(monkeypatch, fake)
+    worker.device = {"id": "UID", "device_id": "1", "name": "cam", "product": product}
+    monkeypatch.setattr(fb.time, "sleep", lambda _s: None)
+    return fake, worker
+
+
+def _pans(fake: Any) -> list[bytes]:
+    return [payload for opcode, payload in fake.sends if opcode == fp.CMD3["PAN"]]
+
+
+def test_a_camera_that_runs_on_is_told_to_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake, worker = _panner(monkeypatch, "MC0030")
+    worker.pan("right", 60)
+    pans = _pans(fake)
+    assert len(pans) == 2, f"expected a start and a stop, got {pans}"
+    assert pans[0][0] == fp.PAN_DIR["right"], "the move goes the way it was asked"
+    assert pans[0][1] == fb.PAN_SPEED, "the value is a speed on this camera"
+    assert pans[1][1] == 0, "the second packet is what halts the motor"
+
+
+def test_the_stop_goes_even_if_the_wait_is_cut_short(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A camera left turning is the worst outcome here, so the stop is owed
+    whatever happens in between."""
+    fake, worker = _panner(monkeypatch, "MC0030")
+
+    def interrupted(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(fb.time, "sleep", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        worker.pan("left", 60)
+    pans = _pans(fake)
+    assert pans[-1][1] == 0, "the motor was left running"
+
+
+def test_a_refused_start_does_not_pretend_to_have_moved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake, worker = _panner(monkeypatch, "MC0030")
+    fake.send_result = -20015
+    with pytest.raises(fb.BridgeUnavailable):
+        worker.pan("right", 60)
+
+
+@pytest.mark.parametrize(
+    ("units", "expected"),
+    [
+        pytest.param(60, 60 / (fb.PAN_SPEED * fb.PAN_UNITS_PER_SPEED), id="one-press"),
+        pytest.param(180, 180 / (fb.PAN_SPEED * fb.PAN_UNITS_PER_SPEED), id="the-api-maximum"),
+        pytest.param(100000, fb.PAN_MAX_HOLD, id="capped-against-a-silly-argument"),
+    ],
+)
+def test_the_hold_follows_the_distance_asked_for(
+    monkeypatch: pytest.MonkeyPatch, units: int, expected: float
+) -> None:
+    _fake, worker = _panner(monkeypatch, "MC0030")
+    waited: list[float] = []
+    monkeypatch.setattr(fb.time, "sleep", waited.append)
+    worker.pan("right", units)
+    assert waited == [pytest.approx(expected)]
+    assert waited[0] <= fb.PAN_MAX_HOLD
+
+
+def test_a_camera_that_stops_itself_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An FB0030's press is a bounded step. A stop packet would cut it short,
+    and the single packet has been right for it all along."""
+    fake, worker = _panner(monkeypatch, "FB0030")
+    worker.pan("right", 60)
+    pans = _pans(fake)
+    assert len(pans) == 1, f"an FB0030 must get one packet, got {pans}"
+    assert pans[0][1] == 60, "and the number it was given, not a speed"
+
+
 def test_refresh_normalises_state(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeP2P(state={"camera_on": 1, "volume": 30})
     worker = _worker_with(monkeypatch, fake)

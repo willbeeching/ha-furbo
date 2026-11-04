@@ -108,6 +108,26 @@ AUDIO_PROBE_FRAMES = 10
 # whose first sample was merely unlucky gets another hearing.
 AUDIO_RETRY_AFTER_ERROR = 60.0
 AUDIO_RETRY_AFTER_NO = 600.0
+# Cameras whose PAN value is a speed rather than a step, so the motor runs
+# until it is told to stop or reaches its mechanical end. Measured on two
+# MC0030 units and reported on #9, where without a stop packet the camera ran
+# for 22, 27 and over 61 seconds and only ever halted at the end stop. An
+# FB0030 is not like this: its press is a bounded step that stops on its own,
+# and a stop packet would only cut it short, so it keeps the single packet it
+# has always sent. No other model is listed, because no other model has been
+# measured; a camera we have not seen keeps the behaviour it has today.
+PAN_NEEDS_STOP = frozenset({"MC0030"})
+# The speed to ask for on those cameras. Their own report gives roughly
+# value x 4.85 position units per second, symmetric in both directions, so
+# this is about 97 units/s: fast enough that the hold is short, slow enough
+# that an overshoot is small.
+PAN_SPEED = 20
+PAN_UNITS_PER_SPEED = 4.85
+# How long to hold, at most. A step is normally well under a second; this is
+# a guard on a silly argument, not a budget. The camera reports its position
+# as an int32 spanning -668..+668, so the whole sweep is 1336 units and three
+# seconds at the speed above covers less than a quarter of it.
+PAN_MAX_HOLD = 3.0
 # Whether to ask the camera for sound at all, from the add-on's audio option.
 AUDIO_ENABLED = os.environ.get("FURBO_AUDIO", "").strip().lower() == "true"
 # How long a reconnect waits for the frame reader to leave the SDK.
@@ -347,6 +367,12 @@ class P2PWorker:
             "product": creds["product"],
         }
         self._p2p = p2p
+        if creds["product"] in PAN_NEEDS_STOP:
+            # If a previous run died between starting a pan and stopping it,
+            # this camera is still turning. Nothing else would ever halt it,
+            # so the first thing a new session does is say stop.
+            with contextlib.suppress(Exception):
+                self._halt_pan(p2p)
         self.last_error = None
         self.needs_login = False
         self._login_backoff = LOGIN_BACKOFF_START
@@ -633,8 +659,46 @@ class P2PWorker:
             p2p = self._ensure()
             if p2p.proto != "v3":
                 raise BridgeUnavailable("pan is only available on V3 cameras")
+            if self.device.get("product") in PAN_NEEDS_STOP:
+                self._pan_until_stopped(p2p, direction, degrees)
+                return
             step = bytes([fp.PAN_DIR[direction], degrees, 0, 0, 0, 0])
             self._sent(p2p, fp.CMD3["PAN"], step, f"a pan {direction}")
+
+    def _pan_until_stopped(self, p2p: Any, direction: str, units: int) -> None:
+        """Start the motor, wait, and stop it, for a camera that will not.
+
+        The number is treated as position units here, in the camera's own
+        reporting scale, because on these models it cannot be an angle:
+        nobody has tied a unit to a degree, and the value in the packet is a
+        speed. One press of the integration's button is 60 of them, a little
+        over four per cent of the sweep.
+
+        The stop is the packet that matters. Without it this camera travels
+        to its mechanical end stop every time, which is what pressing pan did
+        on an MC0030 until now.
+        """
+        hold = min(units / (PAN_SPEED * PAN_UNITS_PER_SPEED), PAN_MAX_HOLD)
+        moving = bytes([fp.PAN_DIR[direction], PAN_SPEED, 0, 0, 0, 0])
+        ret = p2p.send(fp.CMD3["PAN"], moving)
+        if ret < 0:
+            # Nothing is moving, so there is nothing to stop.
+            raise BridgeUnavailable(f"the camera did not accept a pan {direction}: {fp.err(ret)}")
+        try:
+            time.sleep(max(0.0, hold))
+        finally:
+            # Sent whatever happened to the wait, and its own failure is
+            # logged rather than raised: an exception here would replace a
+            # camera that is still moving with a stack trace, and there is no
+            # second chance to halt it.
+            with contextlib.suppress(Exception):
+                self._halt_pan(p2p)
+        p2p.drain(1.0)
+
+    @staticmethod
+    def _halt_pan(p2p: Any) -> None:
+        """Tell the motor to stop. Harmless on a camera that is already still."""
+        p2p.send(fp.CMD3["PAN"], bytes([fp.PAN_DIR["left"], 0, 0, 0, 0, 0]))
 
     def toss(self) -> None:
         with self._lock:
