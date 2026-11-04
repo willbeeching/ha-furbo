@@ -3,6 +3,19 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.9
+
+- **Closes an OpenSSL advisory that matters more here than most.**
+  CVE-2026-84782 is an information disclosure in DTLS handshake
+  retransmission, and the P2P session this add-on exists to hold runs over
+  DTLS. `libssl3t64`, `openssl` and `openssl-provider-legacy` are now named in
+  the image's explicit upgrade list; apt will not take them otherwise.
+- **Updates aiohttp to 3.14.4**, closing CVE-2026-111064 and CVE-2026-111066,
+  a denial of service via a missing initial request timeout. The lock was
+  regenerated rather than hand-edited, which also moved yarl to 1.25.1 and
+  dropped typing-extensions, which nothing here imports.
+- Nothing in the bridge's own behaviour changes.
+
 ## 1.3.8
 
 - **A control the camera refuses is no longer answered as a success.** Pan,

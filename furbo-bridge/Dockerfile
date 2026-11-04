@@ -37,13 +37,21 @@ ARG GO2RTC_SHA256_ARM64="d13d4d692833d9606ac0d0e25675bba58e804f3f401e4f70761c867
 # nothing. Until then the pinned digest is older than Debian's archive and the
 # gap has to be closed somewhere.
 #
-# Current entries, from the CI scan on 2026-09-12:
+# Current entries, from the CI scans on 2026-09-12 and 2026-10-28:
 #   gzip          CVE-2026-41992
 #   libpcre2-8-0  CVE-2026-86145, CVE-2026-89161
 #   libsqlite3-0  CVE-2026-11822, CVE-2026-11824
 #   perl-base     CVE-2026-13221, CVE-2026-42496, CVE-2026-42497, CVE-2026-8376,
 #                 CVE-2026-48962, CVE-2026-57432, CVE-2026-57433
-ARG SECURITY_UPGRADES="gzip libpcre2-8-0 libsqlite3-0 perl-base"
+#   libssl3t64    CVE-2026-84782, with openssl and openssl-provider-legacy,
+#   openssl       which the scan names separately for the same advisory and
+#   openssl-...   which apt will not upgrade unless they are asked for by name.
+#                 Worth closing promptly rather than waiting for the base: it
+#                 is an information disclosure in DTLS handshake
+#                 retransmission, and the P2P session this add-on exists to
+#                 hold runs over DTLS.
+ARG SECURITY_UPGRADES="gzip libpcre2-8-0 libsqlite3-0 perl-base \
+libssl3t64 openssl openssl-provider-legacy"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --only-upgrade $SECURITY_UPGRADES \
