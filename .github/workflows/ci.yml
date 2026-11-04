@@ -146,6 +146,10 @@ jobs:
     # caught in CI) and scan the amd64 image for known vulnerabilities, emitting
     # an SBOM artifact.
     runs-on: ubuntu-latest
+    env:
+      # Pinned by digest, as every other artefact this build fetches is. Bump
+      # the tag and the digest together; the digest is what is actually pulled.
+      SCANNER: ghcr.io/aquasecurity/trivy:0.70.0@sha256:be1190afcb28352bfddc4ddeb71470835d16462af68d310f9f4bca710961a41e
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
@@ -162,27 +166,43 @@ jobs:
           context: furbo-bridge
           load: true
           tags: furbo-bridge:ci
+      # Trivy runs from its own published image rather than through
+      # aquasecurity/trivy-action. The action installs the Trivy binary from a
+      # GitHub release asset, and on this runner that download fails with
+      # curl's exit code 6, "could not resolve host", so the scan never starts:
+      # every step after the install is skipped and the job reports red with no
+      # findings in it. That happened at both v0.69.3 and v0.70.0, so it is the
+      # download host rather than the version. The same job pulls its base
+      # images over the container registry without trouble, so the scan goes
+      # the way that demonstrably works here.
+      #
+      # Scanned from a saved tarball rather than over a mounted Docker socket:
+      # the socket would hand the scanner control of the runner's daemon, and
+      # it buys nothing when the image is right here.
+      #
+      # --ignore-unfixed: only fail on vulnerabilities that have a fix
+      # available, so the build breaks when we ship something patchable (as
+      # aiohttp did) but not on unfixed upstream advisories we cannot action.
+      - name: Export the built image for scanning
+        run: docker save furbo-bridge:ci -o "$RUNNER_TEMP/furbo-bridge.tar"
       - name: Vulnerability scan (fail on fixed HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: furbo-bridge:ci
-          format: table
-          severity: CRITICAL,HIGH
-          # Only fail on vulnerabilities that have a fix available, so the build
-          # breaks when we ship something patchable (as aiohttp did) but not on
-          # unfixed upstream base-image advisories we cannot action.
-          ignore-unfixed: "true"
-          exit-code: "1"
+        run: |
+          docker run --rm -v "$RUNNER_TEMP:/scan" "$SCANNER" image \
+            --input /scan/furbo-bridge.tar \
+            --format table \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 1
       - name: Generate SBOM (CycloneDX)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: furbo-bridge:ci
-          format: cyclonedx
-          output: furbo-bridge.sbom.json
+        run: |
+          docker run --rm -v "$RUNNER_TEMP:/scan" "$SCANNER" image \
+            --input /scan/furbo-bridge.tar \
+            --format cyclonedx \
+            --output /scan/furbo-bridge.sbom.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: furbo-bridge-sbom
-          path: furbo-bridge.sbom.json
+          path: ${{ runner.temp }}/furbo-bridge.sbom.json
 
   addon-version:
     # Require a version bump when shipped add-on files change, so Home
