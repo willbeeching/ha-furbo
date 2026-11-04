@@ -3,6 +3,29 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.8
+
+- **A control the camera refuses is no longer answered as a success.** Pan,
+  treat toss and the treat sound are one-shot commands: nothing follows them
+  to notice they did not go, because no state is read back and no stream
+  starts. A failed `avSendIOCtrl` was logged and the API still answered 200,
+  so the camera simply never moved and nothing said why. The send result is
+  now checked and the failure is reported. Raised on
+  [#9](https://github.com/willbeeching/ha-furbo/issues/9).
+- **The pan value is not an angle, and the code now says so.** The API field
+  is called `degrees` and the integration sends 60 per press, but on an FB0030
+  one press moves the view a few degrees, repeatably, stopping on its own; six
+  presses alternating direction came back to within a fraction of a step of
+  where they started. The field name is kept so that an integration and an
+  add-on of different versions still speak to each other, but it is documented
+  for what it is: one press, in whatever unit the camera uses.
+- **Nothing is changed for MC0030 yet.** That camera was reported to turn more
+  than 45 degrees on a value of 1 and to keep creeping before stopping. A
+  same-direction zero may stop it, but that is one person's manual
+  observation, it cannot be tested here, and a release that depends on a
+  second packet arriving is one where a crash leaves a motor running. See the
+  issue for what would settle it.
+
 ## 1.3.7
 
 - **Fixes a legacy (FB002) camera losing P2P authentication until a fresh

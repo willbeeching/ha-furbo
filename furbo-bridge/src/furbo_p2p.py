@@ -1146,7 +1146,15 @@ class FurboP2P:
             or f"0x{opcode:x}"
         )
 
-    def send(self, opcode: int, data: bytes = b"\0\0\0\0") -> None:
+    def send(self, opcode: int, data: bytes = b"\0\0\0\0") -> int:
+        """Send one IOCTRL command. Returns the SDK code, negative on failure.
+
+        The code is returned rather than raised on, because most callers are
+        teardown or polling paths where a failed send is already handled by
+        what follows. A one-shot control is not one of those: nothing after it
+        notices, so it has to look. Reported on #9, where a failed send was
+        answered as success.
+        """
         name = self._name(opcode)
         # Clear anything already queued BEFORE transmitting, never after.
         # avSendIOCtrl blocks long enough for the camera to answer, so a drain
@@ -1155,11 +1163,14 @@ class FurboP2P:
         # sits out its timeout instead.
         while self.poll(0) is not None:
             pass
-        ret = self.lib.avSendIOCtrl(c_int(self.av_chan), c_uint(opcode), data, c_int(len(data)))
+        ret = int(
+            self.lib.avSendIOCtrl(c_int(self.av_chan), c_uint(opcode), data, c_int(len(data)))
+        )
         if ret < 0:
             log(f"send {name} failed: {err(ret)}")
         else:
             trace(f"sent {name} {data[:32].hex()}")
+        return ret
 
     def poll(self, timeout_ms: int = 10) -> tuple[int, bytes] | None:
         opcode = c_uint()

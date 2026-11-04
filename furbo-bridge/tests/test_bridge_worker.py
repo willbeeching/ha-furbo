@@ -24,6 +24,8 @@ class FakeP2P:
         self.mode = "LAN"
         self.state: dict[str, Any] = state or {}
         self.sends: list[tuple[int, bytes]] = []
+        # What avSendIOCtrl answers; negative is a refusal.
+        self.send_result = 0
         self.closed = False
         self.frames: list[bytes] = []
         self.query_calls = 0
@@ -39,8 +41,10 @@ class FakeP2P:
     def alive(self) -> bool:
         return True
 
-    def send(self, opcode: int, payload: bytes = b"") -> None:
+    def send(self, opcode: int, payload: bytes = b"") -> int:
         self.sends.append((opcode, payload))
+        # The SDK answers with a code, and a one-shot control now reads it.
+        return self.send_result
 
     def drain(self, _timeout: float) -> None:
         pass
@@ -154,6 +158,43 @@ def test_pan_toss_treat_sound(monkeypatch: pytest.MonkeyPatch) -> None:
     assert fp.CMD3["PAN"] in ops
     assert fp.CMD3["TOSS"] in ops
     assert fp.CMD3["PLAY_TREAT_SOUND"] in ops
+
+
+# --- a refused command is not a success -------------------------------------
+#
+# Reported on #9. Nothing follows a one-shot control to notice that it did not
+# go: no state is read back and no stream starts. So avSendIOCtrl returning a
+# failure was logged and then answered with 200, and the camera simply never
+# moved.
+
+
+@pytest.mark.parametrize(
+    ("call", "names"),
+    [
+        pytest.param(lambda w: w.pan("right", 30), "a pan right", id="pan"),
+        pytest.param(lambda w: w.toss(), "a treat toss", id="toss"),
+        pytest.param(lambda w: w.treat_sound(), "the treat sound", id="treat-sound"),
+    ],
+)
+def test_a_command_the_camera_refuses_is_reported(
+    monkeypatch: pytest.MonkeyPatch, call: Any, names: str
+) -> None:
+    fake = FakeP2P()
+    fake.send_result = -20015  # whatever the SDK's complaint, it is not success
+    worker = _worker_with(monkeypatch, fake)
+    with pytest.raises(fb.BridgeUnavailable) as excinfo:
+        call(worker)
+    assert names in str(excinfo.value), "the error has to say which control failed"
+
+
+def test_a_command_the_camera_accepts_stays_quiet(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a refusal is an error. A zero is the SDK saying it went."""
+    fake = FakeP2P()
+    worker = _worker_with(monkeypatch, fake)
+    worker.pan("left", 60)
+    worker.toss()
+    worker.treat_sound()
+    assert len(fake.sends) == 3
 
 
 def test_refresh_normalises_state(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -407,10 +448,11 @@ def test_apply_drops_a_refused_setting(monkeypatch: pytest.MonkeyPatch) -> None:
     worker = _worker_with(monkeypatch, fake)
     worker.state = {"volume": 10, "night_mode": "off"}
 
-    def send(opcode: int, payload: bytes = b"") -> None:
+    def send(opcode: int, payload: bytes = b"") -> int:
         fake.sends.append((opcode, payload))
         if opcode == fp.CMD3["SET_VOLUME"]:
             fake.state.setdefault("rejected", []).append({"opcode": opcode, "status": 5})
+        return 0
 
     monkeypatch.setattr(fake, "send", send)
     state = worker.apply({"volume": 42, "night_mode": "on"})

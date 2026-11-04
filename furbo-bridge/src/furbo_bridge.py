@@ -30,6 +30,8 @@ API (all JSON; ``Authorization: Bearer <token>`` required when --token is set):
                          bark_sensitivity, auto_tracking, auto_zoom
         -> 200 status document after reading the settings back
     POST /api/pan        body: {"direction": "left"|"right", "degrees": 1..180}
+                         'degrees' is the field's name, not its meaning: the
+                         camera moves by its own step, not by an angle.
     POST /api/toss       body: {}      (dispenses a real treat)
     POST /api/treat-sound body: {}
         -> 200 {"ok": true}
@@ -593,27 +595,58 @@ class P2PWorker:
                 p2p.send(fp.CMD3["SET_AUTO_CALM"], bytes(buf))
         return sent
 
+    @staticmethod
+    def _sent(p2p: Any, opcode: int, data: bytes, what: str) -> None:
+        """Send a one-shot control and refuse to call a failed send a success.
+
+        Nothing follows one of these to notice that it did not go: no state is
+        read back and no stream starts, so a refused command was answered with
+        200 and the camera simply never moved. Reported on #9.
+        """
+        ret = p2p.send(opcode, data)
+        if ret < 0:
+            raise BridgeUnavailable(f"the camera did not accept {what}: {fp.err(ret)}")
+        p2p.drain(1.0)
+
+    # What the second byte of a V3 PAN payload actually is. Not an angle, on any
+    # camera measured so far, whatever the API field is called.
+    #
+    # On an FB0030, one press sends 60 and the view moves a few degrees: small,
+    # repeatable, and the camera stops on its own. Six presses, alternating
+    # direction, returned to within a fraction of a step of where they started, so
+    # the step is consistent and symmetric -- it is simply not sixty of anything.
+    # The integration's own comment, "matching one press in the app", is the
+    # honest description: it is whatever one press does.
+    #
+    # On an MC0030 it behaves differently again, and worse: 1 was reported to turn
+    # more than 45 degrees and to keep creeping before stopping (#9). What the
+    # value means there, and whether a same-direction zero stops it, is not
+    # established, and nothing here guesses at it. No FB0030 behaviour suggests a
+    # stop command is needed, and sending motor commands we cannot test to a
+    # camera we do not have is how this gets worse rather than better.
+    #
+    # ``degrees`` is the name this API has always used and is kept so an
+    # integration and an add-on of different versions still speak.
     def pan(self, direction: str, degrees: int) -> None:
+        """Rotate the camera by one step in a direction."""
         with self._lock:
             p2p = self._ensure()
             if p2p.proto != "v3":
                 raise BridgeUnavailable("pan is only available on V3 cameras")
-            p2p.send(fp.CMD3["PAN"], bytes([fp.PAN_DIR[direction], degrees, 0, 0, 0, 0]))
-            p2p.drain(1.0)
+            step = bytes([fp.PAN_DIR[direction], degrees, 0, 0, 0, 0])
+            self._sent(p2p, fp.CMD3["PAN"], step, f"a pan {direction}")
 
     def toss(self) -> None:
         with self._lock:
             p2p = self._ensure()
             cmd = fp.CMD3 if p2p.proto == "v3" else fp.CMD
-            p2p.send(cmd["TOSS"])
-            p2p.drain(1.0)
+            self._sent(p2p, cmd["TOSS"], b"\0\0\0\0", "a treat toss")
 
     def treat_sound(self) -> None:
         with self._lock:
             p2p = self._ensure()
             cmd = fp.CMD3 if p2p.proto == "v3" else fp.CMD
-            p2p.send(cmd["PLAY_TREAT_SOUND"])
-            p2p.drain(1.0)
+            self._sent(p2p, cmd["PLAY_TREAT_SOUND"], b"\0\0\0\0", "the treat sound")
 
     # -- video ---------------------------------------------------------------
 

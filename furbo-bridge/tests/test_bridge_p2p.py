@@ -322,6 +322,26 @@ def test_send_drains_before_transmitting() -> None:
     assert order == ["poll", "poll", "send"], order
 
 
+@pytest.mark.parametrize("code", [0, 1, -20015, -20011])
+def test_send_hands_back_what_the_sdk_said(code: int) -> None:
+    """The caller cannot tell a refused command from a sent one otherwise.
+
+    A one-shot control has nothing after it that would notice: no state read
+    back, no stream started. Reported on #9, where a refused pan was answered
+    with 200 and the camera simply never moved.
+    """
+    p2p = _decoder()
+    p2p.av_chan = 0
+    p2p.poll = lambda _timeout_ms=10: None  # type: ignore[method-assign]
+
+    class Lib:
+        def avSendIOCtrl(self, *_args: Any) -> int:
+            return code
+
+    p2p.lib = Lib()
+    assert p2p.send(fp.CMD3["PAN"], b"\x01\x3c\0\0\0\0") == code
+
+
 def test_video_opcodes_are_named() -> None:
     """A bare '0x1ff' in the log hides whether the camera answered the start."""
     p2p = _decoder()
