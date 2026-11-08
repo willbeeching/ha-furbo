@@ -14,6 +14,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 from custom_components.furbo.discovery import (
     DiscoveredBridge,
     async_discover_bridge,
+    async_manual_bridge,
     rtsp_password,
 )
 
@@ -327,3 +328,57 @@ async def test_a_failing_camera_list_is_worth_asking_again(
     assert found is not None
     assert found.streams == {}
     assert found.camera_list_unavailable is True
+
+
+async def test_a_bridge_typed_in_by_hand_names_its_stream(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Issue #10: no Supervisor, so the user typed the bridge URL and token.
+
+    The stream URL needs a password derived from the token, which nobody
+    should have to compute by hand. The bridge is asked on the port the user
+    gave, not the add-on's default, since a container can publish it anywhere.
+    """
+    aioclient_mock.get(
+        "http://192.168.1.20:9000/api/cameras",
+        json={"cameras": [{"device_id": "cam-1", "stream": "furbo_cam-1"}]},
+    )
+    bridge = await async_manual_bridge(hass, "http://192.168.1.20:9000/", "s3cret")
+    assert bridge is not None
+    assert bridge.stream_url_for("cam-1") == (
+        f"rtsp://furbo:{rtsp_password('s3cret')}@192.168.1.20:8554/furbo_cam-1"
+    )
+    _method, url, _data, headers = aioclient_mock.mock_calls[0]
+    # The mocker matches on host and path only, so the port is checked here.
+    assert url.port == 9000
+    assert headers == {"Authorization": "Bearer s3cret"}
+
+
+async def test_a_bridge_typed_in_by_hand_that_does_not_answer_offers_nothing(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Unreachable is not evidence of which camera the plain stream shows."""
+    aioclient_mock.get("http://bridge.local:8791/api/cameras", exc=TimeoutError())
+    assert await async_manual_bridge(hass, "http://bridge.local:8791", "s3cret") is None
+
+
+@pytest.mark.parametrize("url", ["not a url", "http://", "http://[::1"])
+async def test_a_bridge_url_with_no_host_offers_nothing(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, url: str
+) -> None:
+    assert await async_manual_bridge(hass, url, "s3cret") is None
+    assert aioclient_mock.call_count == 0
+
+
+async def test_an_ipv6_bridge_keeps_its_brackets(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    aioclient_mock.get(
+        "http://[fd00::20]:8791/api/cameras",
+        json={"cameras": [{"device_id": "cam-1", "stream": "furbo_cam-1"}]},
+    )
+    bridge = await async_manual_bridge(hass, "http://[fd00::20]:8791", "s3cret")
+    assert bridge is not None
+    url = bridge.stream_url_for("cam-1")
+    assert url is not None
+    assert url.endswith("@[fd00::20]:8554/furbo_cam-1")

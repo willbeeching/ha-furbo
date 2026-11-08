@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock
 
 from homeassistant.config_entries import SOURCE_USER
@@ -33,6 +34,7 @@ from custom_components.furbo.const import (
     CONF_STREAM_URLS,
     DOMAIN,
 )
+from custom_components.furbo.discovery import rtsp_password
 
 from . import const as c
 from .conftest import setup_integration
@@ -755,3 +757,112 @@ async def test_a_password_reauth_leaves_the_add_ons_warning_alone(
 
     assert result["reason"] == "reauth_successful"
     assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+
+
+MANUAL_BRIDGE = {
+    CONF_BRIDGES: {
+        c.DEVICE_ID: {
+            CONF_BRIDGE_URL: "http://192.168.1.20:8791",
+            CONF_BRIDGE_TOKEN: "s3cret",
+        }
+    }
+}
+
+
+def _suggested(result: Any) -> dict[str, Any]:
+    return {
+        key.schema: key.description["suggested_value"]
+        for key in result["data_schema"].schema
+        if key.description
+    }
+
+
+async def test_options_flow_offers_the_stream_of_a_bridge_set_up_by_hand(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #10: Home Assistant Container, so nothing to discover.
+
+    The bridge URL and token were saved by hand. The stream URL carries a
+    password derived from that token, and the flow can work it out where the
+    user should not have to.
+    """
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    aioclient_mock.get(
+        "http://192.168.1.20:8791/api/cameras",
+        json={"cameras": [{"device_id": c.DEVICE_ID, "stream": "furbo"}]},
+    )
+    await setup_integration(hass, mock_config_entry, options=MANUAL_BRIDGE)
+
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SCAN_INTERVAL: 120, CONF_EVENTS_ENABLED: True}
+    )
+    assert result["step_id"] == "camera"
+    assert _suggested(result)[CONF_STREAM_URL] == (
+        f"rtsp://furbo:{rtsp_password('s3cret')}@192.168.1.20:8554/furbo"
+    )
+
+
+async def test_options_flow_keeps_a_saved_stream_over_a_manual_bridge(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What the user saved is never replaced, and the bridge is not even asked."""
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    await setup_integration(
+        hass,
+        mock_config_entry,
+        options={**MANUAL_BRIDGE, CONF_STREAM_URLS: {c.DEVICE_ID: "rtsp://mine/cam"}},
+    )
+
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SCAN_INTERVAL: 120, CONF_EVENTS_ENABLED: True}
+    )
+    assert _suggested(result)[CONF_STREAM_URL] == "rtsp://mine/cam"
+    assert aioclient_mock.call_count == 0
+
+
+async def test_options_flow_prefers_the_discovered_add_on(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_bridge: AsyncMock,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a Supervisor install the add-on's own answer stands, as before."""
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "supervisor-token")
+    aioclient_mock.get(
+        "http://supervisor/addons",
+        json={"data": {"addons": [{"slug": "abc_furbo_bridge", "state": "started"}]}},
+    )
+    aioclient_mock.get(
+        "http://supervisor/addons/abc_furbo_bridge/info",
+        json={
+            "data": {"hostname": "abc-furbo-bridge", "options": {"api_token": "tok"}}
+        },
+    )
+    aioclient_mock.get(
+        "http://abc-furbo-bridge:8791/api/cameras",
+        json={"cameras": [{"device_id": c.DEVICE_ID, "stream": "furbo"}]},
+    )
+    await setup_integration(hass, mock_config_entry, options=MANUAL_BRIDGE)
+
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SCAN_INTERVAL: 120, CONF_EVENTS_ENABLED: True}
+    )
+    assert _suggested(result)[CONF_STREAM_URL] == (
+        f"rtsp://furbo:{rtsp_password('tok')}@abc-furbo-bridge:8554/furbo"
+    )
+    assert not any("192.168.1.20" in str(call[1]) for call in aioclient_mock.mock_calls)

@@ -60,7 +60,7 @@ from .const import (
     STREAM_URL_SCHEMES,
 )
 from .coordinator import clear_needs_code
-from .discovery import DiscoveredBridge, async_discover_bridge
+from .discovery import DiscoveredBridge, async_discover_bridge, async_manual_bridge
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -419,6 +419,30 @@ class FurboOptionsFlow(OptionsFlow):
         )
         return self.async_show_form(step_id="init", data_schema=schema)
 
+    async def _async_offered_stream(
+        self,
+        device_id: str,
+        discovered: DiscoveredBridge | None,
+        bridge_conf: dict[str, str],
+    ) -> str | None:
+        """Pick the stream URL to suggest for a camera, or None when unsure.
+
+        Nothing offered rather than a guess: a stream URL that plays another
+        camera looks exactly like one that works.
+        """
+        sole = self._camera_count == 1
+        if discovered:
+            offered = discovered.stream_url_for(device_id, sole_camera=sole)
+            if offered:
+                return offered
+        url = bridge_conf.get(CONF_BRIDGE_URL)
+        token = bridge_conf.get(CONF_BRIDGE_TOKEN)
+        if not (url and token):
+            return None
+        # A bridge set up by hand, with no Supervisor to find it (#10).
+        manual = await async_manual_bridge(self.hass, url, token)
+        return manual.stream_url_for(device_id, sole_camera=sole) if manual else None
+
     async def async_step_camera(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -461,14 +485,9 @@ class FurboOptionsFlow(OptionsFlow):
         # Offer the Furbo Bridge add-on's URLs and token when it is running and
         # this camera has not already been configured by hand.
         discovered = await self._async_discovered_bridge()
-        offered = (
-            discovered.stream_url_for(device_id, sole_camera=self._camera_count == 1)
-            if discovered
-            else None
+        suggested_stream = self._stream_urls.get(device_id) or (
+            await self._async_offered_stream(device_id, discovered, bridge_conf) or ""
         )
-        # Nothing offered rather than a guess: a stream URL that plays another
-        # camera looks exactly like one that works.
-        suggested_stream = self._stream_urls.get(device_id) or offered or ""
         suggested_bridge = bridge_conf.get(CONF_BRIDGE_URL) or (
             discovered.bridge_url if discovered else ""
         )

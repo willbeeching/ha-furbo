@@ -66,7 +66,7 @@
           "bridge_token": "Bridge token"
         },
         "data_description": {
-          "stream_url": "For example rtsp://furbo:PASSWORD@192.168.1.10:8554/furbo (the add-on's RTSP is password-protected). Accepted schemes: rtsp, rtsps, http, https. Creates the camera entity.",
+          "stream_url": "For example rtsp://furbo:PASSWORD@192.168.1.10:8554/furbo. PASSWORD is derived from the bridge token, not the token itself; this is filled in for you when the add-on is found or this camera's bridge URL and token are saved and the bridge answers. Accepted schemes: rtsp, rtsps, http, https. Creates the camera entity.",
           "bridge_url": "For example http://192.168.1.10:8791. Enables camera power, volume, night vision, bark sensitivity, tracking, pan and treat toss.",
           "bridge_token": "The value given to furbo_p2p.py serve --token. The bridge requires it."
         }

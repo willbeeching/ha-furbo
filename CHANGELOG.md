@@ -6,6 +6,19 @@ here. The Furbo Bridge add-on has its own at
 [`furbo-bridge/CHANGELOG.md`](furbo-bridge/CHANGELOG.md) and its own version
 numbers: the two are released independently and their numbers do not line up.
 
+## 1.8.2
+
+- **A bridge you run yourself now gets its stream URL filled in.** On Home
+  Assistant Container or Core there is no Supervisor to find the add-on, so
+  the Stream URL field stayed empty, and its hint showed `PASSWORD` without
+  saying the password is derived from the bridge token
+  ([#10](https://github.com/willbeeching/ha-furbo/issues/10)). When a camera
+  has a bridge URL and token saved, **Configure** now asks that bridge which
+  stream is the camera's and offers the URL with the password already worked
+  out. A bridge that does not answer gets nothing offered, as before, rather
+  than a guess. A stream URL you saved yourself is never replaced, and a
+  discovered add-on still takes precedence.
+
 ## 1.8.1
 
 - **`furbo.get_events` no longer drops the event-name filter when every alert

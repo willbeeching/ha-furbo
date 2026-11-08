@@ -104,7 +104,20 @@ the integration's pan, treat and settings entities use.
 
 On **Home Assistant Container or Core** (no add-on support) you can run the
 bridge yourself — see [`furbo-bridge/`](furbo-bridge/) — and enter its URLs in
-the integration's options by hand.
+the integration's options by hand. Enter the **Bridge URL** and **Bridge token**
+first and save. The next time you open **Configure**, the **Stream URL** is
+filled in from what the bridge reports, as long as it answers.
+
+The stream's RTSP password is not the token. It is derived from it, so a
+leaked stream URL cannot drive the control API:
+
+```sh
+printf 'furbo-rtsp:%s' 'YOUR_API_TOKEN' | sha256sum | cut -c1-32
+```
+
+That only applies when go2rtc is the one the bridge image starts. If you run
+go2rtc with your own config, the RTSP credentials are whatever that config
+sets, and the suggested URL will need editing to match.
 
 ## Removing it
 

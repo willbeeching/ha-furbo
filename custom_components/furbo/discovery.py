@@ -18,6 +18,7 @@ import hashlib
 import logging
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiohttp
 from homeassistant.core import HomeAssistant
@@ -120,7 +121,7 @@ async def _get(session: aiohttp.ClientSession, path: str, token: str) -> Any:
 
 
 async def _stream_names(
-    session: aiohttp.ClientSession, host: str, token: str | None
+    session: aiohttp.ClientSession, base_url: str, token: str | None
 ) -> dict[str, str] | None:
     """Ask the add-on which stream belongs to which camera.
 
@@ -137,7 +138,7 @@ async def _stream_names(
         return {}
     try:
         async with session.get(
-            f"http://{host}:{BRIDGE_PORT}/api/cameras",
+            f"{base_url}/api/cameras",
             headers={"Authorization": f"Bearer {token}"},
             timeout=_TIMEOUT,
         ) as resp:
@@ -198,7 +199,9 @@ async def async_discover_bridge(hass: HomeAssistant) -> DiscoveredBridge | None:
         if isinstance(options, dict):
             value = options.get("api_token")
             api_token = value if isinstance(value, str) and value else None
-        streams = await _stream_names(session, str(host), api_token)
+        streams = await _stream_names(
+            session, f"http://{host}:{BRIDGE_PORT}", api_token
+        )
         return DiscoveredBridge(
             slug=slug,
             host=str(host),
@@ -209,3 +212,34 @@ async def async_discover_bridge(hass: HomeAssistant) -> DiscoveredBridge | None:
     except (aiohttp.ClientError, TimeoutError, ValueError, KeyError) as err:
         _LOGGER.debug("Furbo Bridge add-on discovery failed: %s", err)
         return None
+
+
+async def async_manual_bridge(
+    hass: HomeAssistant, bridge_url: str, token: str
+) -> DiscoveredBridge | None:
+    """Describe a bridge the user typed in, the way discovery describes one.
+
+    For Home Assistant Container or Core, where there is no Supervisor to ask
+    (issue #10). The stream URL needs the RTSP password, which is derived from
+    the token and so is not something anyone should have to work out by hand.
+
+    Only a bridge that answers is described. One that does not would fall
+    back to the plain stream name, and a hand-typed URL that cannot be reached
+    is no evidence of which camera that stream shows. The RTSP host is taken
+    to be the bridge's own host on the add-on's port: this fills in a form
+    field the user can still change, so a bridge behind some other mapping
+    costs an edit, not a wrong camera.
+    """
+    try:
+        host = urlsplit(bridge_url).hostname
+    except ValueError:
+        return None
+    if not host:
+        return None
+    if ":" in host:
+        host = f"[{host}]"
+    session = async_get_clientsession(hass)
+    streams = await _stream_names(session, bridge_url.rstrip("/"), token)
+    if streams is None:
+        return None
+    return DiscoveredBridge(slug="", host=host, token=token, streams=streams)
