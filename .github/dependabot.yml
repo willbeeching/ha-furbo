@@ -13,3 +13,15 @@ updates:
       # (requirements-test-min.txt); Dependabot must not move it. The latest
       # lane is bumped by hand when a new Home Assistant release is verified.
       - dependency-name: pytest-homeassistant-custom-component
+  - package-ecosystem: docker
+    directory: "/furbo-bridge"
+    schedule:
+      interval: weekly
+    ignore:
+      # Digest refreshes of python:3.12-slim only. Moving to another Python
+      # minor means regenerating requirements.lock for it, so that is done by
+      # hand. Each refresh changes a shipped add-on file, so its PR needs a
+      # version bump and a CHANGELOG entry before the addon-version check
+      # passes, and SECURITY_UPGRADES in the Dockerfile may shrink with it.
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
