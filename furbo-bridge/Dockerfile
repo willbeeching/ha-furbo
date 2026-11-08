@@ -12,7 +12,7 @@
 # image containing the SDK is distributed here either. If you go on to publish a
 # pre-built image yourself, that is redistribution and you must confirm your own
 # entitlement to do so first (see furbo-bridge/DOCS.md).
-FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 # TUTK P2P library, pinned to an immutable docker-wyze-bridge commit with a
 # per-architecture checksum. Update the commit and both hashes together.
@@ -37,21 +37,10 @@ ARG GO2RTC_SHA256_ARM64="d13d4d692833d9606ac0d0e25675bba58e804f3f401e4f70761c867
 # nothing. Until then the pinned digest is older than Debian's archive and the
 # gap has to be closed somewhere.
 #
-# Current entries, from the CI scans on 2026-09-12 and 2026-10-28:
-#   gzip          CVE-2026-41992
-#   libpcre2-8-0  CVE-2026-86145, CVE-2026-89161
-#   libsqlite3-0  CVE-2026-11822, CVE-2026-11824
-#   perl-base     CVE-2026-13221, CVE-2026-42496, CVE-2026-42497, CVE-2026-8376,
-#                 CVE-2026-48962, CVE-2026-57432, CVE-2026-57433
-#   libssl3t64    CVE-2026-84782, with openssl and openssl-provider-legacy,
-#   openssl       which the scan names separately for the same advisory and
-#   openssl-...   which apt will not upgrade unless they are asked for by name.
-#                 Worth closing promptly rather than waiting for the base: it
-#                 is an information disclosure in DTLS handshake
-#                 retransmission, and the P2P session this add-on exists to
-#                 hold runs over DTLS.
-ARG SECURITY_UPGRADES="gzip libpcre2-8-0 libsqlite3-0 perl-base \
-libssl3t64 openssl openssl-provider-legacy"
+# Current entries, from the CI scan on 2026-11-08 against the base pinned
+# above (built 2026-11-05, which already carries every earlier entry):
+#   zlib1g        CVE-2026-76844, CVE-2026-85091
+ARG SECURITY_UPGRADES="zlib1g"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --only-upgrade $SECURITY_UPGRADES \

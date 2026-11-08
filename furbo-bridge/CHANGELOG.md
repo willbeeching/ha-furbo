@@ -8,6 +8,10 @@ that ships to users gets an entry here.
 - **Dependency updates, no behaviour change.** aiohttp 3.14.4 to 3.14.5 and
   cryptography 50.0.1 to 50.0.2, both patch releases. The hashed lock the
   image installs from was regenerated to match.
+- **Newer base image.** The add-on now builds on a python:3.12-slim from
+  5 November (Python 3.12.14 to 3.12.16), which carries Debian's fixes for apt,
+  gzip, PCRE2, SQLite, OpenSSL and Perl. The build still pulls one fix the base
+  does not have yet, for zlib.
 
 ## 1.3.10
 
