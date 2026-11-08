@@ -3,6 +3,12 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.11
+
+- **Dependency updates, no behaviour change.** aiohttp 3.14.4 to 3.14.5 and
+  cryptography 50.0.1 to 50.0.2, both patch releases. The hashed lock the
+  image installs from was regenerated to match.
+
 ## 1.3.10
 
 - **Fixes pan on the Furbo Mini 360 (MC0030), where every press sent the

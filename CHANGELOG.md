@@ -18,6 +18,11 @@ numbers: the two are released independently and their numbers do not line up.
   out. A bridge that does not answer gets nothing offered, as before, rather
   than a guess. A stream URL you saved yourself is never replaced, and a
   discovered add-on still takes precedence.
+- **Development dependencies brought up to date.** CI's GitHub Actions move to
+  their current releases (checkout 7, setup-python 7, setup-uv 10, the Docker
+  build actions 4 and 7, upload-artifact 7), and ruff, mypy and PyTurboJPEG
+  in the lint and latest-test lanes to their latest versions. Nothing that
+  runs in Home Assistant changed.
 
 ## 1.8.1
 
