@@ -13,6 +13,9 @@ updates:
       # (requirements-test-min.txt); Dependabot must not move it. The latest
       # lane is bumped by hand when a new Home Assistant release is verified.
       - dependency-name: pytest-homeassistant-custom-component
+      # Both lanes pin PyTurboJPEG to their Home Assistant's camera manifest,
+      # so it moves only when that Home Assistant does.
+      - dependency-name: PyTurboJPEG
   - package-ecosystem: docker
     directory: "/furbo-bridge"
     schedule:
