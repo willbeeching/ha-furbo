@@ -19,9 +19,13 @@ permissions: {}
 
 jobs:
   notify:
-    # Opened issues and opened pull requests always run. An issue_comment on a
-    # pull request sets issue.pull_request and is skipped.
-    if: ${{ github.event_name != 'issue_comment' || !github.event.issue.pull_request }}
+    # Opened issues and opened pull requests run. An issue_comment on a pull
+    # request sets issue.pull_request and is skipped. Dependabot's pull
+    # requests are skipped too: GitHub withholds repository secrets from runs
+    # it triggers, so the post could only fail.
+    if: >-
+      ${{ (github.event_name != 'issue_comment' || !github.event.issue.pull_request)
+          && github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - name: Post the event to the HA watcher
