@@ -10,7 +10,8 @@ that ships to users gets an entry here.
   camera, so one that kept getting stuck restarted the bridge every minute or
   so and dropped the other cameras' video each time. It now waits 2 minutes
   before trying that camera again, doubling each time the same camera does it,
-  up to 30 minutes, while the other cameras reconnect straight away.
+  up to 30 minutes, while the other cameras reconnect straight away. A restart
+  caused by a different camera keeps the time already waited.
 
 ## 1.3.12
 

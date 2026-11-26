@@ -1267,14 +1267,17 @@ def _no_exec(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_a_restart_leaves_the_stuck_camera_alone_longer_each_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    clock = _Clock()
+    monkeypatch.setattr(fb.time, "monotonic", clock)
     _no_exec(monkeypatch)
     fb.restart_bridge("connecting to Living Room", 40.0, "LIVING")
-    assert fb.stuck_holds() == {"LIVING": fb.STUCK_HOLD_START}
+    start = fb.STUCK_HOLD_START
+    assert fb.stuck_holds() == {"LIVING": {"hold": start, "until": clock.now + start}}
     fb.restart_bridge("connecting to Living Room", 40.0, "LIVING")
-    assert fb.stuck_holds() == {"LIVING": 2 * fb.STUCK_HOLD_START}
+    assert fb.stuck_holds()["LIVING"]["hold"] == 2 * start
     for _ in range(10):
         fb.restart_bridge("connecting to Living Room", 40.0, "LIVING")
-    assert fb.stuck_holds() == {"LIVING": fb.STUCK_HOLD_MAX}
+    assert fb.stuck_holds()["LIVING"]["hold"] == fb.STUCK_HOLD_MAX
 
 
 def test_a_stuck_camera_waits_while_the_others_reconnect(
@@ -1319,6 +1322,32 @@ def test_a_stuck_camera_waits_while_the_others_reconnect(
 
 
 def test_a_garbled_hold_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
-    for raw in ("not json", "[1, 2]", '{"LIVING": "soon"}'):
+    for raw in ("not json", "[1, 2]", '{"LIVING": "soon"}', '{"LIVING": {"hold": 120}}'):
         monkeypatch.setenv(fb.STUCK_HOLD_ENV, raw)
         assert fb.stuck_holds() == {}
+
+
+def test_another_camera_s_restart_keeps_the_time_already_waited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Camera A is 90 s into a 120 s hold when camera B wedges the library.
+
+    The restart B causes must leave A with the 30 s it has left, not a new
+    120 s: the review found the wait starting over on every unrelated restart.
+    """
+    clock = _Clock()
+    monkeypatch.setattr(fb.time, "monotonic", clock)
+    _no_exec(monkeypatch)
+    args = argparse.Namespace(
+        device=None, lib=None, region="us", tutk_log=False, tcp_relay=False, timeout=10
+    )
+    fb.restart_bridge("connecting to A", 40.0, "A")
+    clock.now += 90
+    fb.restart_bridge("connecting to B", 40.0, "B")
+
+    a, b = fb.P2PWorker(args, "A"), fb.P2PWorker(args, "B")
+    assert a._connect_retry_at - clock.now == fb.STUCK_HOLD_START - 90
+    assert b._connect_retry_at - clock.now == fb.STUCK_HOLD_START
+    # And a hold that has already run out holds nothing.
+    clock.now += fb.STUCK_HOLD_START
+    assert fb.P2PWorker(args, "A")._connect_retry_at == 0.0

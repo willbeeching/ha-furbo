@@ -179,7 +179,11 @@ SDK_STUCK_GRACE = 30.0
 # took the healthy streams down with it on every cycle.
 STUCK_HOLD_START = CONNECT_BACKOFF_MAX
 STUCK_HOLD_MAX = 1800.0
-# Carries those holds across the restart: exec keeps the environment.
+# Carries those holds across the restart: exec keeps the environment. Each
+# camera's entry has its hold length, to double, and the time it ends, so a
+# restart caused by another camera does not start its wait over. The end is on
+# time.monotonic(), which on Linux is the system-wide CLOCK_MONOTONIC: it runs
+# on across exec and does not jump when the wall clock is set.
 STUCK_HOLD_ENV = "FURBO_STUCK_HOLD"
 _STUCK_HOLD_LOCK = threading.Lock()
 NIGHT_MODES = ("auto", "on", "off")
@@ -359,8 +363,8 @@ class SdkWatchdog:
             self.check()
 
 
-def stuck_holds() -> dict[str, float]:
-    """The hold, in seconds, for each camera that got the library stuck."""
+def stuck_holds() -> dict[str, dict[str, float]]:
+    """Each camera that got the library stuck: its hold and when that ends."""
     raw = os.environ.get(STUCK_HOLD_ENV, "")
     try:
         holds = json.loads(raw) if raw else {}
@@ -368,10 +372,16 @@ def stuck_holds() -> dict[str, float]:
         return {}
     if not isinstance(holds, dict):
         return {}
-    return {str(k): float(v) for k, v in holds.items() if isinstance(v, int | float)}
+    return {
+        str(camera): {"hold": float(entry["hold"]), "until": float(entry["until"])}
+        for camera, entry in holds.items()
+        if isinstance(entry, dict)
+        and isinstance(entry.get("hold"), int | float)
+        and isinstance(entry.get("until"), int | float)
+    }
 
 
-def _write_stuck_holds(holds: dict[str, float]) -> None:
+def _write_stuck_holds(holds: dict[str, dict[str, float]]) -> None:
     if holds:
         os.environ[STUCK_HOLD_ENV] = json.dumps(holds)
     else:
@@ -383,8 +393,8 @@ def hold_stuck_camera(camera: str) -> float:
     with _STUCK_HOLD_LOCK:
         holds = stuck_holds()
         previous = holds.get(camera)
-        hold = STUCK_HOLD_START if previous is None else min(previous * 2, STUCK_HOLD_MAX)
-        holds[camera] = hold
+        hold = STUCK_HOLD_START if previous is None else min(previous["hold"] * 2, STUCK_HOLD_MAX)
+        holds[camera] = {"hold": hold, "until": time.monotonic() + hold}
         _write_stuck_holds(holds)
     return hold
 
@@ -476,11 +486,11 @@ class P2PWorker:
         self._login_backoff = LOGIN_BACKOFF_START
         self._connect_retry_at = 0.0
         self._connect_backoff = CONNECT_BACKOFF_START
-        hold = stuck_holds().get(self._hold_name)
-        if hold is not None:
-            # This camera got the library stuck in the process this one
+        held = stuck_holds().get(self._hold_name)
+        if held is not None and held["until"] > time.monotonic():
+            # This camera got the library stuck in a process this one
             # replaced. Give the others time to come back before trying it.
-            self._connect_retry_at = time.monotonic() + hold
+            self._connect_retry_at = held["until"]
             self.last_error = "this camera got the P2P library stuck, so the bridge restarted"
 
     @property
