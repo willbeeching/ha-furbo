@@ -16,6 +16,9 @@ that ships to users gets an entry here.
   or the start of video runs 30 seconds past its own timeout, the bridge logs
   it and starts over in place. Before, the only fix was restarting the add-on
   by hand.
+- **Newer base image.** Built on the python:3.12-slim from 24 November, which
+  carries Debian's fix for zlib. The build pulls one fix the base does not have
+  yet, for zstd.
 
 ## 1.3.11
 

@@ -12,7 +12,7 @@
 # image containing the SDK is distributed here either. If you go on to publish a
 # pre-built image yourself, that is redistribution and you must confirm your own
 # entitlement to do so first (see furbo-bridge/DOCS.md).
-FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+FROM python:3.12-slim@sha256:191083cdf6c7bda8c76158983163ead5d5cf7b77cf3033e805bb0f5296f51b4b
 
 # TUTK P2P library, pinned to an immutable docker-wyze-bridge commit with a
 # per-architecture checksum. Update the commit and both hashes together.
@@ -37,10 +37,10 @@ ARG GO2RTC_SHA256_ARM64="d13d4d692833d9606ac0d0e25675bba58e804f3f401e4f70761c867
 # nothing. Until then the pinned digest is older than Debian's archive and the
 # gap has to be closed somewhere.
 #
-# Current entries, from the CI scan on 2026-11-08 against the base pinned
-# above (built 2026-11-05, which already carries every earlier entry):
-#   zlib1g        CVE-2026-76844, CVE-2026-85091
-ARG SECURITY_UPGRADES="zlib1g"
+# Current entries, from the CI scan on 2026-11-26 against the base pinned
+# above (built 2026-11-24, which already carries every earlier entry):
+#   libzstd1      CVE-2026-124851
+ARG SECURITY_UPGRADES="libzstd1"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --only-upgrade $SECURITY_UPGRADES \
