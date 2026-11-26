@@ -3,6 +3,15 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.13
+
+- **A camera that gets the P2P library stuck is left alone after the restart
+  that clears it.** In 1.3.12 the restarted bridge went straight back to that
+  camera, so one that kept getting stuck restarted the bridge every minute or
+  so and dropped the other cameras' video each time. It now waits 2 minutes
+  before trying that camera again, doubling each time the same camera does it,
+  up to 30 minutes, while the other cameras reconnect straight away.
+
 ## 1.3.12
 
 - **A camera that refuses to connect no longer takes the others down with it

@@ -1068,6 +1068,12 @@ def test_the_audio_reader_counts_itself(monkeypatch: pytest.MonkeyPatch) -> None
 # --- connect backoff and the TUTK watchdog (#13) ------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _no_stuck_holds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test inherits a stuck hold from the environment, or leaves one."""
+    monkeypatch.delenv(fb.STUCK_HOLD_ENV, raising=False)
+
+
 class _Clock:
     """A monotonic clock the test moves by hand."""
 
@@ -1178,8 +1184,8 @@ def test_the_watchdog_covers_connect_and_video_start(monkeypatch: pytest.MonkeyP
 
     class Recorder:
         @contextlib.contextmanager
-        def watch(self, what: str, limit: float) -> Iterator[None]:
-            watched.append((what, limit))
+        def watch(self, what: str, limit: float, camera: str | None = None) -> Iterator[None]:
+            watched.append((what, limit, camera))
             yield
 
     monkeypatch.setattr(fb, "SDK_WATCHDOG", Recorder())
@@ -1190,20 +1196,23 @@ def test_the_watchdog_covers_connect_and_video_start(monkeypatch: pytest.MonkeyP
     args = argparse.Namespace(
         device=None, lib=None, region="us", tutk_log=False, tcp_relay=False, timeout=10
     )
-    fb.P2PWorker(args)._ensure()
+    fb.P2PWorker(args, "DEV")._ensure()
     assert _ConnectingP2P.seen == [("connect", 10), ("start_av", fb.AV_START_TIMEOUT)]
     assert watched == [
-        ("connecting to Kitchen", 10 + fb.SDK_STUCK_GRACE),
-        ("opening video on Kitchen", fb.AV_START_TIMEOUT + fb.SDK_STUCK_GRACE),
+        ("connecting to Kitchen", 10 + fb.SDK_STUCK_GRACE, "DEV"),
+        ("opening video on Kitchen", fb.AV_START_TIMEOUT + fb.SDK_STUCK_GRACE, "DEV"),
     ]
 
 
 def test_the_watchdog_acts_on_a_call_that_overruns(monkeypatch: pytest.MonkeyPatch) -> None:
     clock = _Clock()
     monkeypatch.setattr(fb.time, "monotonic", clock)
-    stuck: list[tuple[str, float]] = []
-    dog = fb.SdkWatchdog(lambda what, elapsed: stuck.append((what, elapsed)), poll=3600)
-    with dog.watch("connecting to Living Room", 40), dog.watch("opening video on Kitchen", 45):
+    stuck: list[tuple[str, float, str | None]] = []
+    dog = fb.SdkWatchdog(lambda *call: stuck.append(call), poll=3600)
+    with (
+        dog.watch("connecting to Living Room", 40, "LIVING"),
+        dog.watch("opening video on Kitchen", 45, "KITCHEN"),
+    ):
         clock.now += 39
         assert dog.check() is False
         clock.now += 1
@@ -1211,14 +1220,14 @@ def test_the_watchdog_acts_on_a_call_that_overruns(monkeypatch: pytest.MonkeyPat
         # Only once: a restart is on its way.
         clock.now += 60
         assert dog.check() is False
-    assert stuck == [("connecting to Living Room", 40.0)]
+    assert stuck == [("connecting to Living Room", 40.0, "LIVING")]
 
 
 def test_the_watchdog_ignores_calls_that_returned(monkeypatch: pytest.MonkeyPatch) -> None:
     clock = _Clock()
     monkeypatch.setattr(fb.time, "monotonic", clock)
     stuck: list[str] = []
-    dog = fb.SdkWatchdog(lambda what, _elapsed: stuck.append(what), poll=3600)
+    dog = fb.SdkWatchdog(lambda what, *_: stuck.append(what), poll=3600)
     with dog.watch("connecting to Kitchen", 40):
         clock.now += 5
     clock.now += 600
@@ -1228,7 +1237,7 @@ def test_the_watchdog_ignores_calls_that_returned(monkeypatch: pytest.MonkeyPatc
 
 def test_the_watchdog_thread_fires_on_its_own() -> None:
     fired = threading.Event()
-    dog = fb.SdkWatchdog(lambda _what, _elapsed: fired.set(), poll=0.01)
+    dog = fb.SdkWatchdog(lambda *_: fired.set(), poll=0.01)
     with dog.watch("connecting to Kitchen", 0.0):
         assert fired.wait(2)
 
@@ -1245,3 +1254,71 @@ def test_a_restart_runs_the_same_command_in_this_process(
         ("closerange", 3),
         ("execv", (fb.sys.executable, ["python3", "/app/furbo_p2p.py", "serve"])),
     ]
+
+
+def _no_exec(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Let restart_bridge run without replacing the test process."""
+    execs: list[str] = []
+    monkeypatch.setattr(fb.os, "closerange", lambda *_: None)
+    monkeypatch.setattr(fb.os, "execv", lambda path, _argv: execs.append(path))
+    return execs
+
+
+def test_a_restart_leaves_the_stuck_camera_alone_longer_each_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _no_exec(monkeypatch)
+    fb.restart_bridge("connecting to Living Room", 40.0, "LIVING")
+    assert fb.stuck_holds() == {"LIVING": fb.STUCK_HOLD_START}
+    fb.restart_bridge("connecting to Living Room", 40.0, "LIVING")
+    assert fb.stuck_holds() == {"LIVING": 2 * fb.STUCK_HOLD_START}
+    for _ in range(10):
+        fb.restart_bridge("connecting to Living Room", 40.0, "LIVING")
+    assert fb.stuck_holds() == {"LIVING": fb.STUCK_HOLD_MAX}
+
+
+def test_a_stuck_camera_waits_while_the_others_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The review's case: one camera that wedges the library, one that is fine.
+
+    After the restart the healthy camera connects straight away and the stuck
+    one is not tried, so the next restart cannot come from it right away.
+    """
+    clock = _Clock()
+    monkeypatch.setattr(fb.time, "monotonic", clock)
+    monkeypatch.setattr(fb.asyncio, "run", lambda coro: coro)
+    execs = _no_exec(monkeypatch)
+    args = argparse.Namespace(
+        device=None, lib=None, region="us", tutk_log=False, tcp_relay=False, timeout=10
+    )
+    fb.restart_bridge("connecting to Living Room", 40.0, "LIVING")
+    assert execs == [fb.sys.executable]
+
+    # What the new process does: build its workers and connect them.
+    asked: list[str | None] = []
+
+    def creds_for(device: str | None) -> dict[str, Any]:
+        asked.append(device)
+        return dict(_CREDS, device_id=device or "DEV")
+
+    monkeypatch.setattr(fb.fp, "fetch_p2p_credentials", creds_for)
+    monkeypatch.setattr(fb.fp, "FurboP2P", _ConnectingP2P)
+    living, kitchen = fb.P2PWorker(args, "LIVING"), fb.P2PWorker(args, "KITCHEN")
+    with pytest.raises(fb.BridgeUnavailable, match="got the P2P library stuck"):
+        living.open_stream("1080p")
+    kitchen.open_stream("1080p")
+    assert asked == ["KITCHEN"]
+
+    # Once the hold is over the stuck camera is tried again, and a connect
+    # that works means its next wedge starts from the shortest hold.
+    clock.now += fb.STUCK_HOLD_START
+    living.open_stream("1080p")
+    assert asked == ["KITCHEN", "LIVING"]
+    assert fb.stuck_holds() == {}
+
+
+def test_a_garbled_hold_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    for raw in ("not json", "[1, 2]", '{"LIVING": "soon"}'):
+        monkeypatch.setenv(fb.STUCK_HOLD_ENV, raw)
+        assert fb.stuck_holds() == {}

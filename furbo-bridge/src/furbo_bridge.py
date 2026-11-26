@@ -173,6 +173,15 @@ AV_START_TIMEOUT = 15
 # How far past its own timeout a TUTK call may run before the bridge treats the
 # library as stuck and restarts itself. See SdkWatchdog.
 SDK_STUCK_GRACE = 30.0
+# How long a camera that got the library stuck is left alone after the restart
+# that cleared it, doubling each time the same camera does it again. Without
+# it the new process went straight back to that camera, got stuck again, and
+# took the healthy streams down with it on every cycle.
+STUCK_HOLD_START = CONNECT_BACKOFF_MAX
+STUCK_HOLD_MAX = 1800.0
+# Carries those holds across the restart: exec keeps the environment.
+STUCK_HOLD_ENV = "FURBO_STUCK_HOLD"
+_STUCK_HOLD_LOCK = threading.Lock()
 NIGHT_MODES = ("auto", "on", "off")
 BARK_LEVELS = ("off", "low", "medium", "high")
 PAN_DIRECTIONS = ("left", "right")
@@ -298,19 +307,23 @@ class SdkWatchdog:
         self._on_stuck = on_stuck
         self._poll = poll
         self._lock = threading.Lock()
-        self._calls: dict[int, tuple[str, float, float]] = {}
+        self._calls: dict[int, tuple[str, float, float, str | None]] = {}
         self._next = 0
         self._thread: threading.Thread | None = None
         self.fired = False
 
     @contextlib.contextmanager
-    def watch(self, what: str, limit: float) -> Iterator[None]:
-        """Treat the library as stuck if this block runs longer than limit."""
+    def watch(self, what: str, limit: float, camera: str | None = None) -> Iterator[None]:
+        """Treat the library as stuck if this block runs longer than limit.
+
+        camera names the worker the call is for, so the restart can leave that
+        camera alone for a while afterwards.
+        """
         started = time.monotonic()
         with self._lock:
             token = self._next
             self._next += 1
-            self._calls[token] = (what, started, started + limit)
+            self._calls[token] = (what, started, started + limit, camera)
             if self._thread is None:
                 self._thread = threading.Thread(
                     target=self._run, name="furbo-sdk-watchdog", daemon=True
@@ -329,13 +342,15 @@ class SdkWatchdog:
         now = time.monotonic()
         with self._lock:
             overdue = [
-                (now - started, what) for what, started, end in self._calls.values() if now >= end
+                (now - started, what, camera)
+                for what, started, end, camera in self._calls.values()
+                if now >= end
             ]
         if not overdue:
             return False
         self.fired = True
-        elapsed, what = max(overdue)
-        self._on_stuck(what, elapsed)
+        elapsed, what, camera = max(overdue, key=lambda call: call[0])
+        self._on_stuck(what, elapsed, camera)
         return True
 
     def _run(self) -> None:
@@ -344,7 +359,45 @@ class SdkWatchdog:
             self.check()
 
 
-def restart_bridge(what: str, elapsed: float) -> None:
+def stuck_holds() -> dict[str, float]:
+    """The hold, in seconds, for each camera that got the library stuck."""
+    raw = os.environ.get(STUCK_HOLD_ENV, "")
+    try:
+        holds = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    if not isinstance(holds, dict):
+        return {}
+    return {str(k): float(v) for k, v in holds.items() if isinstance(v, int | float)}
+
+
+def _write_stuck_holds(holds: dict[str, float]) -> None:
+    if holds:
+        os.environ[STUCK_HOLD_ENV] = json.dumps(holds)
+    else:
+        os.environ.pop(STUCK_HOLD_ENV, None)
+
+
+def hold_stuck_camera(camera: str) -> float:
+    """Record a longer hold for this camera and return it."""
+    with _STUCK_HOLD_LOCK:
+        holds = stuck_holds()
+        previous = holds.get(camera)
+        hold = STUCK_HOLD_START if previous is None else min(previous * 2, STUCK_HOLD_MAX)
+        holds[camera] = hold
+        _write_stuck_holds(holds)
+    return hold
+
+
+def forget_stuck_camera(camera: str) -> None:
+    """This camera connected, so its next wedge starts from the shortest hold."""
+    with _STUCK_HOLD_LOCK:
+        holds = stuck_holds()
+        if holds.pop(camera, None) is not None:
+            _write_stuck_holds(holds)
+
+
+def restart_bridge(what: str, elapsed: float, camera: str | None = None) -> None:
     """Replace this process with a fresh copy of itself.
 
     exec keeps the process id, so run.sh, which waits on it, carries on and
@@ -360,6 +413,9 @@ def restart_bridge(what: str, elapsed: float) -> None:
         what,
         elapsed,
     )
+    if camera is not None:
+        hold = hold_stuck_camera(camera)
+        _LOGGER.error("leaving that camera alone for %.0fs after the restart", hold)
     for handler in logging.getLogger().handlers:
         with contextlib.suppress(Exception):
             handler.flush()
@@ -420,6 +476,18 @@ class P2PWorker:
         self._login_backoff = LOGIN_BACKOFF_START
         self._connect_retry_at = 0.0
         self._connect_backoff = CONNECT_BACKOFF_START
+        hold = stuck_holds().get(self._hold_name)
+        if hold is not None:
+            # This camera got the library stuck in the process this one
+            # replaced. Give the others time to come back before trying it.
+            self._connect_retry_at = time.monotonic() + hold
+            self.last_error = "this camera got the P2P library stuck, so the bridge restarted"
+
+    @property
+    def _hold_name(self) -> str:
+        """The name a stuck hold is kept under. The configured id, because the
+        cloud's id is not known again until the camera connects."""
+        return self.device_id or "default"
 
     @property
     def key(self) -> str:
@@ -451,10 +519,10 @@ class P2PWorker:
                 p2p.proto = creds.get("proto", "v2")
                 name = creds["name"]
                 limit = self._args.timeout + SDK_STUCK_GRACE
-                with SDK_WATCHDOG.watch(f"connecting to {name}", limit):
+                with SDK_WATCHDOG.watch(f"connecting to {name}", limit, self._hold_name):
                     p2p.connect(creds, self._args.timeout)
                 limit = AV_START_TIMEOUT + SDK_STUCK_GRACE
-                with SDK_WATCHDOG.watch(f"opening video on {name}", limit):
+                with SDK_WATCHDOG.watch(f"opening video on {name}", limit, self._hold_name):
                     p2p.start_av(creds, AV_START_TIMEOUT)
                 p2p.register(creds)
             except SystemExit:
@@ -491,6 +559,7 @@ class P2PWorker:
         self._login_backoff = LOGIN_BACKOFF_START
         self._connect_retry_at = 0.0
         self._connect_backoff = CONNECT_BACKOFF_START
+        forget_stuck_camera(self._hold_name)
         self.last_full_refresh = 0.0
         _LOGGER.info("P2P session established to %s over %s", creds["name"], p2p.mode or "unknown")
         if p2p.mode == "relay":
