@@ -7,8 +7,11 @@ command-building logic is exercised without the TUTK library or a camera.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
+import contextlib
 import struct
-from typing import Any
+import threading
+from typing import Any, ClassVar
 
 import pytest
 
@@ -1060,3 +1063,185 @@ def test_the_audio_reader_counts_itself(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert busy_during_read == [True], "the audio reader did not count itself"
     assert not worker._reader_busy, "and it must let go when it finishes"
+
+
+# --- connect backoff and the TUTK watchdog (#13) ------------------------------
+
+
+class _Clock:
+    """A monotonic clock the test moves by hand."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_a_refused_connect_is_not_retried_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A camera that refuses the session is tried again later, not per request."""
+    clock = _Clock()
+    monkeypatch.setattr(fb.time, "monotonic", clock)
+    worker = _unavailable_worker(
+        monkeypatch, "IOTC_Connect_ByUIDEx failed: -90 IOTC_ER_DEVICE_REJECT_BY_WRONG_AUTH_KEY"
+    )
+    with pytest.raises(fb.BridgeUnavailable):
+        worker.refresh()
+
+    calls: list[int] = []
+
+    def counted(_device: Any) -> dict[str, Any]:
+        calls.append(1)
+        raise SystemExit("IOTC_Connect_ByUIDEx failed: -90")
+
+    monkeypatch.setattr(fb.fp, "fetch_p2p_credentials", counted)
+    with pytest.raises(fb.BridgeUnavailable, match="next attempt in 5s"):
+        worker.open_stream("1080p")
+    assert calls == []
+
+    # Once the wait is over it tries again, and waits twice as long after.
+    clock.now += fb.CONNECT_BACKOFF_START
+    with pytest.raises(fb.BridgeUnavailable):
+        worker.refresh()
+    assert calls == [1]
+    assert worker._connect_retry_at == clock.now + 2 * fb.CONNECT_BACKOFF_START
+
+
+def test_the_connect_backoff_stops_growing(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _Clock()
+    monkeypatch.setattr(fb.time, "monotonic", clock)
+    worker = _unavailable_worker(monkeypatch, "IOTC_Connect_ByUIDEx failed: -90")
+    for _ in range(12):
+        clock.now = max(clock.now, worker._connect_retry_at)
+        with pytest.raises(fb.BridgeUnavailable):
+            worker.refresh()
+    assert worker._connect_retry_at - clock.now == fb.CONNECT_BACKOFF_MAX
+
+
+def test_a_refused_login_does_not_also_start_the_connect_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _unavailable_worker(monkeypatch, "Cloud rejected the token. Run: login")
+    with pytest.raises(fb.BridgeUnavailable):
+        worker.refresh()
+    assert worker.needs_login is True
+    assert worker._connect_retry_at == 0.0
+
+
+class _ConnectingP2P(FakeP2P):
+    """Stands in for FurboP2P through the connect sequence."""
+
+    seen: ClassVar[list[tuple[str, Any]]] = []
+
+    def __init__(self, *_args: Any) -> None:
+        super().__init__()
+        self.mode = "LAN"
+
+    def initialize(self) -> None:
+        pass
+
+    def connect(self, _creds: dict[str, Any], timeout: int) -> None:
+        self.seen.append(("connect", timeout))
+
+    def start_av(self, _creds: dict[str, Any], timeout: int) -> None:
+        self.seen.append(("start_av", timeout))
+
+    def register(self, _creds: dict[str, Any]) -> None:
+        pass
+
+
+_CREDS = {"uid": "UID", "device_id": "DEV", "name": "Kitchen", "product": "FB0030"}
+
+
+def test_a_connect_that_works_resets_the_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _Clock()
+    monkeypatch.setattr(fb.time, "monotonic", clock)
+    worker = _unavailable_worker(monkeypatch, "IOTC_Connect_ByUIDEx failed: -90")
+    with pytest.raises(fb.BridgeUnavailable):
+        worker.refresh()
+    clock.now = worker._connect_retry_at
+    with pytest.raises(fb.BridgeUnavailable):
+        worker.refresh()
+    assert worker._connect_backoff > fb.CONNECT_BACKOFF_START
+
+    clock.now = worker._connect_retry_at
+    monkeypatch.setattr(fb.fp, "fetch_p2p_credentials", lambda _d: dict(_CREDS))
+    monkeypatch.setattr(fb.fp, "FurboP2P", _ConnectingP2P)
+    assert isinstance(worker._ensure(), _ConnectingP2P)
+    assert worker._connect_retry_at == 0.0
+    assert worker._connect_backoff == fb.CONNECT_BACKOFF_START
+
+
+def test_the_watchdog_covers_connect_and_video_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both blocking TUTK calls in a connect are watched, with room past their timeout."""
+    watched: list[tuple[str, float]] = []
+
+    class Recorder:
+        @contextlib.contextmanager
+        def watch(self, what: str, limit: float) -> Iterator[None]:
+            watched.append((what, limit))
+            yield
+
+    monkeypatch.setattr(fb, "SDK_WATCHDOG", Recorder())
+    monkeypatch.setattr(fb.asyncio, "run", lambda coro: coro)
+    monkeypatch.setattr(fb.fp, "fetch_p2p_credentials", lambda _d: dict(_CREDS))
+    monkeypatch.setattr(fb.fp, "FurboP2P", _ConnectingP2P)
+    _ConnectingP2P.seen = []
+    args = argparse.Namespace(
+        device=None, lib=None, region="us", tutk_log=False, tcp_relay=False, timeout=10
+    )
+    fb.P2PWorker(args)._ensure()
+    assert _ConnectingP2P.seen == [("connect", 10), ("start_av", fb.AV_START_TIMEOUT)]
+    assert watched == [
+        ("connecting to Kitchen", 10 + fb.SDK_STUCK_GRACE),
+        ("opening video on Kitchen", fb.AV_START_TIMEOUT + fb.SDK_STUCK_GRACE),
+    ]
+
+
+def test_the_watchdog_acts_on_a_call_that_overruns(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _Clock()
+    monkeypatch.setattr(fb.time, "monotonic", clock)
+    stuck: list[tuple[str, float]] = []
+    dog = fb.SdkWatchdog(lambda what, elapsed: stuck.append((what, elapsed)), poll=3600)
+    with dog.watch("connecting to Living Room", 40), dog.watch("opening video on Kitchen", 45):
+        clock.now += 39
+        assert dog.check() is False
+        clock.now += 1
+        assert dog.check() is True
+        # Only once: a restart is on its way.
+        clock.now += 60
+        assert dog.check() is False
+    assert stuck == [("connecting to Living Room", 40.0)]
+
+
+def test_the_watchdog_ignores_calls_that_returned(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _Clock()
+    monkeypatch.setattr(fb.time, "monotonic", clock)
+    stuck: list[str] = []
+    dog = fb.SdkWatchdog(lambda what, _elapsed: stuck.append(what), poll=3600)
+    with dog.watch("connecting to Kitchen", 40):
+        clock.now += 5
+    clock.now += 600
+    assert dog.check() is False
+    assert stuck == []
+
+
+def test_the_watchdog_thread_fires_on_its_own() -> None:
+    fired = threading.Event()
+    dog = fb.SdkWatchdog(lambda _what, _elapsed: fired.set(), poll=0.01)
+    with dog.watch("connecting to Kitchen", 0.0):
+        assert fired.wait(2)
+
+
+def test_a_restart_runs_the_same_command_in_this_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    monkeypatch.setattr(fb.os, "closerange", lambda lo, hi: calls.append(("closerange", lo)))
+    monkeypatch.setattr(fb.os, "execv", lambda path, argv: calls.append(("execv", (path, argv))))
+    monkeypatch.setattr(fb.sys, "orig_argv", ["python3", "/app/furbo_p2p.py", "serve"])
+    fb.restart_bridge("connecting to Living Room", 40.0)
+    assert calls == [
+        ("closerange", 3),
+        ("execv", (fb.sys.executable, ["python3", "/app/furbo_p2p.py", "serve"])),
+    ]

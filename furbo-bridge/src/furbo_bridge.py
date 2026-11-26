@@ -60,6 +60,7 @@ import os
 from pathlib import Path
 import signal
 import struct
+import sys
 import threading
 import time
 from typing import Any
@@ -160,6 +161,18 @@ STREAM_RESTART_SETTLE = 0.3
 # slower rather than faster.
 LOGIN_BACKOFF_START = 60.0
 LOGIN_BACKOFF_MAX = 900.0
+# Backoff after a camera cannot be reached or refuses the session. Every
+# request for its stream used to try again at once, and a viewer such as
+# Frigate asks several times a second, so a camera that kept refusing was
+# connected to in a tight loop (#13). The cap keeps recovery prompt once the
+# camera is back.
+CONNECT_BACKOFF_START = 5.0
+CONNECT_BACKOFF_MAX = 120.0
+# How long avClientStartEx may take to open the video channel.
+AV_START_TIMEOUT = 15
+# How far past its own timeout a TUTK call may run before the bridge treats the
+# library as stuck and restarts itself. See SdkWatchdog.
+SDK_STUCK_GRACE = 30.0
 NIGHT_MODES = ("auto", "on", "off")
 BARK_LEVELS = ("off", "low", "medium", "high")
 PAN_DIRECTIONS = ("left", "right")
@@ -269,6 +282,94 @@ def carries_parameter_sets(frame: bytes) -> bool:
     return False
 
 
+class SdkWatchdog:
+    """Restart the bridge when a TUTK call runs far past its own timeout.
+
+    Each camera has its own worker and threads, but they share one TUTK
+    library, and a call into it that never returns can take every session in
+    the process down with it. In #13 a connect to a camera that kept refusing
+    the session hung well past its 10 second timeout, and at the same moment
+    video stopped on every other camera and never came back, while the HTTP
+    API kept answering. A thread stuck in C cannot be interrupted from Python,
+    so the only way out is a new process: see restart_bridge.
+    """
+
+    def __init__(self, on_stuck: Any, poll: float = 1.0) -> None:
+        self._on_stuck = on_stuck
+        self._poll = poll
+        self._lock = threading.Lock()
+        self._calls: dict[int, tuple[str, float, float]] = {}
+        self._next = 0
+        self._thread: threading.Thread | None = None
+        self.fired = False
+
+    @contextlib.contextmanager
+    def watch(self, what: str, limit: float) -> Iterator[None]:
+        """Treat the library as stuck if this block runs longer than limit."""
+        started = time.monotonic()
+        with self._lock:
+            token = self._next
+            self._next += 1
+            self._calls[token] = (what, started, started + limit)
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._run, name="furbo-sdk-watchdog", daemon=True
+                )
+                self._thread.start()
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._calls.pop(token, None)
+
+    def check(self) -> bool:
+        """Act on the longest overdue call, once. True if it acted."""
+        if self.fired:
+            return False
+        now = time.monotonic()
+        with self._lock:
+            overdue = [
+                (now - started, what) for what, started, end in self._calls.values() if now >= end
+            ]
+        if not overdue:
+            return False
+        self.fired = True
+        elapsed, what = max(overdue)
+        self._on_stuck(what, elapsed)
+        return True
+
+    def _run(self) -> None:
+        while not self.fired:
+            time.sleep(self._poll)
+            self.check()
+
+
+def restart_bridge(what: str, elapsed: float) -> None:
+    """Replace this process with a fresh copy of itself.
+
+    exec keeps the process id, so run.sh, which waits on it, carries on and
+    go2rtc keeps running: only the bridge and its TUTK library start over.
+    Supervisor would restart a stopped add-on only with its watchdog switched
+    on, which is off unless the user turned it on. Descriptors other than
+    stdin, stdout and stderr are closed first, so the old library's sockets and
+    the HTTP port do not survive into the new process.
+    """
+    _LOGGER.error(
+        "the P2P library has been stuck %s for %.0fs, past its own timeout;"
+        " restarting the bridge to clear it",
+        what,
+        elapsed,
+    )
+    for handler in logging.getLogger().handlers:
+        with contextlib.suppress(Exception):
+            handler.flush()
+    os.closerange(3, os.sysconf("SC_OPEN_MAX"))
+    os.execv(sys.executable, sys.orig_argv)
+
+
+SDK_WATCHDOG = SdkWatchdog(restart_bridge)
+
+
 class P2PWorker:
     """Owns one camera's P2P session. Every method runs on the worker thread.
 
@@ -317,6 +418,8 @@ class P2PWorker:
         self.needs_login = False
         self._login_retry_at = 0.0
         self._login_backoff = LOGIN_BACKOFF_START
+        self._connect_retry_at = 0.0
+        self._connect_backoff = CONNECT_BACKOFF_START
 
     @property
     def key(self) -> str:
@@ -334,6 +437,9 @@ class P2PWorker:
             return self._p2p
         if self.needs_login and time.monotonic() < self._login_retry_at:
             raise BridgeUnavailable(self.last_error or "waiting for a new login")
+        wait = self._connect_retry_at - time.monotonic()
+        if wait > 0:
+            raise BridgeUnavailable(f"{self.last_error} (next attempt in {wait:.0f}s)")
         self._drop()
         try:
             creds = asyncio.run(fp.fetch_p2p_credentials(self.device_id))
@@ -343,8 +449,13 @@ class P2PWorker:
             p2p.initialize()
             try:
                 p2p.proto = creds.get("proto", "v2")
-                p2p.connect(creds, self._args.timeout)
-                p2p.start_av(creds)
+                name = creds["name"]
+                limit = self._args.timeout + SDK_STUCK_GRACE
+                with SDK_WATCHDOG.watch(f"connecting to {name}", limit):
+                    p2p.connect(creds, self._args.timeout)
+                limit = AV_START_TIMEOUT + SDK_STUCK_GRACE
+                with SDK_WATCHDOG.watch(f"opening video on {name}", limit):
+                    p2p.start_av(creds, AV_START_TIMEOUT)
                 p2p.register(creds)
             except SystemExit:
                 p2p.close()
@@ -359,6 +470,8 @@ class P2PWorker:
             self.last_error = str(exc)
             if "log in" in str(exc) or "login" in str(exc):
                 self._hold_off_login()
+            else:
+                self._hold_off_connect()
             raise BridgeUnavailable(str(exc)) from None
         self.device = {
             "id": creds["uid"],
@@ -376,6 +489,8 @@ class P2PWorker:
         self.last_error = None
         self.needs_login = False
         self._login_backoff = LOGIN_BACKOFF_START
+        self._connect_retry_at = 0.0
+        self._connect_backoff = CONNECT_BACKOFF_START
         self.last_full_refresh = 0.0
         _LOGGER.info("P2P session established to %s over %s", creds["name"], p2p.mode or "unknown")
         if p2p.mode == "relay":
@@ -457,6 +572,11 @@ class P2PWorker:
         self.needs_login = True
         self._login_retry_at = time.monotonic() + self._login_backoff
         self._login_backoff = min(self._login_backoff * 2, LOGIN_BACKOFF_MAX)
+
+    def _hold_off_connect(self) -> None:
+        """Wait before the next connect, longer each time it fails."""
+        self._connect_retry_at = time.monotonic() + self._connect_backoff
+        self._connect_backoff = min(self._connect_backoff * 2, CONNECT_BACKOFF_MAX)
 
     # -- operations ----------------------------------------------------------
 

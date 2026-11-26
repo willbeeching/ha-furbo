@@ -3,6 +3,20 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.12
+
+- **A camera that refuses to connect no longer takes the others down with it
+  (#13).** Each request for its stream used to retry the connection straight
+  away, and a viewer such as Frigate asks several times a second. On a bridge
+  with five cameras, one of those retries hung inside the P2P library and video
+  stopped on every camera. A failed connection is now retried after 5 seconds,
+  then 10, doubling up to 2 minutes, and requests in between are answered at
+  once without touching the camera or the Furbo cloud.
+- **The bridge restarts itself if the P2P library gets stuck.** If a connection
+  or the start of video runs 30 seconds past its own timeout, the bridge logs
+  it and starts over in place. Before, the only fix was restarting the add-on
+  by hand.
+
 ## 1.3.11
 
 - **Dependency updates, no behaviour change.** aiohttp 3.14.4 to 3.14.5 and
