@@ -66,7 +66,7 @@ ports also works.
 | --- | --- |
 | `email` / `password` | Furbo account credentials (used only to log in and fetch P2P credentials). |
 | `mfa_code` | The emailed verification code, needed once to complete login. Clear it afterwards. |
-| `device_id` | The Furbo cloud device id this add-on serves. **Required only if your account has more than one camera** — the add-on lists the ids in its log and refuses to guess. See the multi-camera note below. |
+| `device_id` | Leave blank to serve every camera on the account. To serve only some, set one Furbo cloud device id or a comma-separated list. `GET /api/cameras` lists the ids, and an id the account does not have stops the add-on with a list of the ones it does. See the multi-camera note below. |
 | `reset_session` | Turn on once to discard the stored session and log in again (expired session, changed password, wrong account), then turn it back off. It resets once, not once per restart, so forgetting to turn it off does not keep throwing the new session away; toggle it off and on to reset again. |
 | `quality` | `1080p`, `720p` or `360p`. This camera serves 1080p or 360p; 720p falls back to 360p. |
 | `audio` | Off by default. Turn it on to carry the camera's microphone on the live stream alongside the picture. See the note below: whether your camera's audio can be carried is decided by asking a decoder, so it either works or the stream quietly stays video-only. |
@@ -91,15 +91,6 @@ ports also works.
   prints the codec id, sample rate, bit depth, channel count and frame sizes,
   and at `log_level: debug` a base64 sample of the audio itself. Please open an
   issue with those and your camera model.
-- **One camera per add-on installation.** This packaged add-on serves a single
-  camera; Home Assistant's Add-on Store does not let you install a second copy
-  of the same add-on. If your Furbo account has several cameras, the integration
-  still shows all of them from the cloud, but only the one you set as `device_id`
-  gets live video and P2P controls through this add-on. To bridge more than one
-  camera, run additional `furbo_p2p.py serve` + go2rtc instances yourself (see
-  the Container/Core note below), each with its own `--device` and port, and add
-  their URLs to the integration per camera. Multiple cameras in one add-on is a
-  possible future enhancement.
 - **Add-ons need Home Assistant OS or Supervised.** On Home Assistant Container
   or Core, run `furbo_p2p.py serve` and go2rtc yourself and point the
   integration at them.

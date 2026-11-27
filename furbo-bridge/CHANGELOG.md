@@ -3,6 +3,14 @@
 Home Assistant shows this file when an update is available, so every version
 that ships to users gets an entry here.
 
+## 1.3.14
+
+- **Documentation only: the multi-camera notes now agree.** The add-on's docs
+  still said `device_id` was required on an account with several cameras and
+  that one add-on serves one camera. It serves every camera on the account
+  when `device_id` is blank, and takes one id or a comma-separated list to
+  serve only some. No behaviour change.
+
 ## 1.3.13
 
 - **A camera that gets the P2P library stuck is left alone after the restart
